@@ -113,6 +113,13 @@ func redact(airMap map[string]string, field, val string, on bool) string {
 	return val
 }
 
+// Redact is the exported default-deny lens for callers OUTSIDE the row renderers (the context rail,
+// the door) that must honor the SAME on-air policy — one source, no drift. A denied field blanks to
+// the redaction token; structure is kept, the value never airs.
+func Redact(airMap map[string]string, field, val string, on bool) string {
+	return redact(airMap, field, val, on)
+}
+
 // compactTS: presentation-only — the API returns canonical ISO (full precision, the data
 // contract); the cockpit compacts to HH:MM:SS for grid density. Unparseable -> first 8 chars.
 func compactTS(ts string) string {

@@ -464,7 +464,7 @@ func (m Model) viewRail(w int) string {
 	if !ok {
 		return grammar.C("mut", " (no selection — [j/k] to move)")
 	}
-	id := t.TaskID
+	id := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR) // the rail honors the on-air lens too (PII)
 	if r := []rune(id); len(r) > w-3 {
 		id = string(r[:w-3])
 	}
@@ -473,7 +473,12 @@ func (m Model) viewRail(w int) string {
 	if t.PredictedStage == "hold" {
 		ntok = "red"
 	}
-	line := func(label, val, tok string) string {
+	// line gates each unfolded dimension through the AIR lens by its field key — a denied field
+	// blanks to ▒▒▒ (default-deny), so the rail can never leak a private value on the stream.
+	line := func(label, field, val, tok string) string {
+		if m.AIR && t.AIR[field] != "ok" {
+			val, tok = "▒▒▒", "mut"
+		}
 		return " " + grammar.C("mut", fmt.Sprintf("%-6s", label)) + grammar.C(tok, val)
 	}
 	rule := grammar.C("border", " "+strings.Repeat("─", w-2))
@@ -489,17 +494,19 @@ func (m Model) viewRail(w int) string {
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("brt", "◆ "+id) + "\n")
 	b.WriteString(rule + "\n")
-	b.WriteString(line("state", orDash(shortStage2(t.Stage)), ctok) + "\n")
-	b.WriteString(line("was", orDash(shortStage2(t.PriorStage)), "mut") + "\n")
-	b.WriteString(line("next", orDash(t.PredictedStage), ntok) + "\n")
-	b.WriteString(line("crit", orDash(t.Criticality), ctok) + "\n")
-	b.WriteString(line("who", orDash(t.Owner), grammar.LaneToken(t.Owner)) + "\n")
-	b.WriteString(line("fresh", fmt.Sprintf("%.2f", t.Freshness), "pri") + "\n")
-	b.WriteString(line("rel", fmt.Sprintf("●%d", t.RelCount), "blu") + "\n")
+	b.WriteString(line("state", "stage", orDash(shortStage2(t.Stage)), ctok) + "\n")
+	b.WriteString(line("was", "prior_stage", orDash(shortStage2(t.PriorStage)), "mut") + "\n")
+	b.WriteString(line("next", "predicted_stage", orDash(t.PredictedStage), ntok) + "\n")
+	b.WriteString(line("crit", "criticality", orDash(t.Criticality), ctok) + "\n")
+	b.WriteString(line("who", "owner", orDash(t.Owner), grammar.LaneToken(t.Owner)) + "\n")
+	b.WriteString(line("fresh", "freshness", fmt.Sprintf("%.2f", t.Freshness), "pri") + "\n")
+	b.WriteString(line("rel", "rel_count", fmt.Sprintf("●%d", t.RelCount), "blu") + "\n")
 	b.WriteString(rule + "\n")
 	// authorizations granted so far (situates WHY a task is or isn't release-ready)
 	b.WriteString(" " + grammar.C("mut", "granted") + "\n")
-	if strings.TrimSpace(t.NoGo) == "" {
+	if m.AIR && t.AIR["no_go"] != "ok" {
+		b.WriteString("  " + grammar.C("mut", "▒▒▒") + "\n") // the grant set is private on-air
+	} else if strings.TrimSpace(t.NoGo) == "" {
 		b.WriteString("  " + grammar.C("mut", "(none granted yet)") + "\n")
 	} else {
 		for _, g := range splitAuth(t.NoGo) {
@@ -507,7 +514,8 @@ func (m Model) viewRail(w int) string {
 		}
 	}
 	if t.AuthorityCase != "" {
-		b.WriteString(" " + grammar.C("mut", "case ") + grammar.C("2nd", t.AuthorityCase) + "\n")
+		b.WriteString(" " + grammar.C("mut", "case ") +
+			grammar.C("2nd", grammar.Redact(t.AIR, "authority_case", t.AuthorityCase, m.AIR)) + "\n")
 	}
 	b.WriteString(rule + "\n")
 	b.WriteString(grammar.C("2nd", " relationships") + "\n")
