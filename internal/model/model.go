@@ -36,6 +36,8 @@ type Model struct {
 	Status       string // last command result / error (one line, above the hint)
 	Quitting     bool   // Exec(:quit) sets this; Update turns it into tea.Quit
 	DynScale     int    // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
+	Width        int    // terminal size (from tea.WindowSizeMsg) — the zones fill this
+	Height       int
 }
 
 // dynScales maps the seed's view_scale names to their resolution index (1=overview … 5=evidence).
@@ -151,6 +153,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.FoldTasks(v.Tasks, v.Dark), nil
 	case DynamicsMsg:
 		return m.FoldDynamics(v.Graph, v.Dark), nil
+	case tea.WindowSizeMsg:
+		m.Width, m.Height = v.Width, v.Height // the zones lay out against this
+		return m, nil
 	case tea.KeyMsg:
 		if m.Mode == ModeCommand {
 			return m.updateCommand(v)
