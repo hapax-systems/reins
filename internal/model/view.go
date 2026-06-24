@@ -139,7 +139,7 @@ func (m Model) viewVital(w int) string {
 	if dark {
 		spine = grammar.C("red", "spine:DARK")
 	}
-	ok, warn, maj, crit, blocked := 0, 0, 0, 0, []string{}
+	ok, warn, maj, crit := 0, 0, 0, 0
 	for _, t := range m.Tasks {
 		switch t.Criticality {
 		case "crit":
@@ -151,10 +151,8 @@ func (m Model) viewVital(w int) string {
 		default:
 			ok++
 		}
-		if t.PredictedStage == "hold" || t.Criticality == "crit" || t.Criticality == "major" {
-			blocked = append(blocked, t.TaskID)
-		}
 	}
+	blocked := m.blockedIndices() // the Act strip's contents — also a cross-cutting selectable
 	dot := grammar.C("mut", " · ")
 	lbl := func(c string) string { // counts are SELECTABLE in hint mode (cross-cutting: a count = a class)
 		if m.Mode == ModeHint {
@@ -176,9 +174,22 @@ func (m Model) viewVital(w int) string {
 		if len(head) > 2 {
 			head = head[:2]
 		}
+		// each Act item is jumpable: in hint mode label it [1]/[2] (pick → cursor lands on that blocker).
+		ids := make([]string, 0, len(head))
+		for i, idx := range head {
+			id := m.Tasks[idx].TaskID
+			if m.Mode == ModeHint {
+				id = grammar.SelLabel(fmt.Sprintf("%d", i+1)) + id
+			}
+			ids = append(ids, id)
+		}
+		hint := "  · [f] then 1/2 jumps to a blocker"
+		if m.Mode == ModeHint {
+			hint = "  · press 1/2 to jump"
+		}
 		r2 = grammar.C("red", fmt.Sprintf(" ‼ %d release-blocked", len(blocked))) +
 			grammar.C("mut", " (at S7, not release-authorized) · ") +
-			grammar.C("org", strings.Join(head, "  ")) + grammar.C("mut", "  · [2] tasks to inspect")
+			grammar.C("org", strings.Join(ids, "  ")) + grammar.C("mut", hint)
 	}
 	return r1 + "\n" + r2
 }

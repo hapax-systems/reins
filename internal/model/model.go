@@ -117,6 +117,18 @@ type Model struct {
 // critFromHint: the count labels in hint mode (cross-cutting selectables) → the criticality class.
 var critFromHint = map[rune]string{'O': "ok", 'W': "warn", 'M': "major", 'C': "crit"}
 
+// blockedIndices: indices into m.Tasks of the blocked items (predicted hold OR major/crit) — the
+// Act strip's contents, also a cross-cutting selectable (jump to a blocker from the exception line).
+func (m Model) blockedIndices() []int {
+	var out []int
+	for i, t := range m.Tasks {
+		if t.PredictedStage == "hold" || t.Criticality == "crit" || t.Criticality == "major" {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // completions: the navigable candidate list for the command line. Dynamic on the active SELECTION —
 // when a field/row is selected, a `paste <value>` candidate is offered first so the operator can
 // inject the selection (the seed of the {{sel}} template language; see the handoff forward-look).
@@ -540,6 +552,22 @@ func (m Model) updateHint(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.CritFilter, m.Focus, m.Mode = cf, 0, ModeNormal
 			m.Status = "filtered to '" + cf + "' tasks · [Esc] clear"
 			return m, nil
+		}
+		if r >= '1' && r <= '9' { // an ACT-strip item → jump the cursor to that blocker
+			bi := m.blockedIndices()
+			if d := int(r - '1'); d < len(bi) {
+				id := m.Tasks[bi[d]].TaskID
+				m.Filter, m.CritFilter = "", "" // clear filters so the blocker is reachable
+				for j, t := range m.visibleTasks() {
+					if t.TaskID == id {
+						m.Focus = j
+						break
+					}
+				}
+				m.Mode = ModeNormal
+				m.Status = "jumped to blocker " + id
+				return m, nil
+			}
 		}
 		off, visible := m.taskWindow()
 		if i := strings.IndexRune(hintAlphabet, r); i >= 0 && i < visible && off+i < len(m.visibleTasks()) {
