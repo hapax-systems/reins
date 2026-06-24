@@ -4,7 +4,31 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/hapax-systems/reins/internal/palette"
 )
+
+// pal is the cockpit's active palette (mode-keyed). SetPalette swaps it on a working-mode flip;
+// color is a redundant amplifier over the glyph grammar, so callers never depend on it for meaning.
+var pal = palette.For("gruvbox")
+
+// SetPalette switches the color grammar for the working mode ("gruvbox"/"solarized").
+func SetPalette(mode string) { pal = palette.For(mode) }
+
+// kindSeverity maps an event kind to a severity word for its heat color ("" = neutral/ground).
+func kindSeverity(kind string) string {
+	switch {
+	case strings.Contains(kind, "fail"):
+		return "failed"
+	case strings.Contains(kind, "succeed"), strings.Contains(kind, "merged"):
+		return "done"
+	case strings.Contains(kind, "flip"):
+		return "urgent"
+	case strings.Contains(kind, "started"), strings.Contains(kind, "transition"), strings.Contains(kind, "claim"):
+		return "review"
+	}
+	return ""
+}
 
 // Event is the unified-API READ contract for one stream row (mirrors reins_read.to_event).
 type Event struct {
@@ -79,7 +103,12 @@ func compactTS(ts string) string {
 func RenderEventRow(ev Event, airOn bool) string {
 	subj := redact(ev.AIR, "subject", pad(ev.Subject, 6), airOn)
 	summ := redact(ev.AIR, "summary", ev.Summary, airOn)
-	return fmt.Sprintf("%s %s%s %s  %s", compactTS(ev.TS), ScoreBar(ev.Score), Glyph(ev.Kind), subj, summ)
+	bar, glyph := ScoreBar(ev.Score), Glyph(ev.Kind) // single runes — colorized AFTER width math
+	if sev := kindSeverity(ev.Kind); sev != "" {
+		tok := palette.SeverityToken(sev)
+		bar, glyph = pal.Colorize(tok, bar), pal.Colorize(tok, glyph)
+	}
+	return fmt.Sprintf("%s %s%s %s  %s", compactTS(ev.TS), bar, glyph, subj, summ)
 }
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).

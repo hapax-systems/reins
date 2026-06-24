@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/api"
 	"github.com/hapax-systems/reins/internal/config"
+	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/model"
 )
 
@@ -85,6 +86,7 @@ func main() {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(2)
 	}
+	grammar.SetPalette(cfg.Palette) // color grammar follows the working mode
 	// --probe: headless acceptance — fetch both feeds, fold, print one frame, exit.
 	// Args: --probe [tasks] [--air]  (page defaults to events; --air = PII-safe lens)
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
