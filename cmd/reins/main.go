@@ -12,14 +12,23 @@ import (
 	"github.com/hapax-systems/reins/internal/model"
 )
 
-// fetchOnce: one fetch -> an EventsMsg. Unreachable/dark folds honestly (dark=true), never panics.
+// fetchOnce: one events fetch -> an EventsMsg. Unreachable/dark folds honestly, never panics.
 func fetchOnce(url string) tea.Msg {
 	evs, dark, _ := api.FetchEvents(url)
 	return model.EventsMsg{Events: evs, Dark: dark}
 }
 
-func tickCmd(url string) tea.Cmd {
+// fetchTasksOnce: one registry fetch -> a TasksMsg.
+func fetchTasksOnce(url string) tea.Msg {
+	ts, dark, _ := api.FetchTasks(url)
+	return model.TasksMsg{Tasks: ts, Dark: dark}
+}
+
+func eventsTick(url string) tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return fetchOnce(url) })
+}
+func tasksTick(url string) tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return fetchTasksOnce(url) })
 }
 
 type root struct {
@@ -28,14 +37,21 @@ type root struct {
 }
 
 func (r root) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg { return fetchOnce(r.url) }, tickCmd(r.url))
+	return tea.Batch(
+		func() tea.Msg { return fetchOnce(r.url) },
+		func() tea.Msg { return fetchTasksOnce(r.url) },
+		eventsTick(r.url), tasksTick(r.url),
+	)
 }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	nm, cmd := r.m.Update(msg)
 	r.m = nm.(model.Model)
-	if _, ok := msg.(model.EventsMsg); ok {
-		return r, tickCmd(r.url) // re-arm the poll/re-fold loop (the hot-reload kernel)
+	switch msg.(type) {
+	case model.EventsMsg:
+		return r, eventsTick(r.url) // re-arm the events poll/re-fold loop
+	case model.TasksMsg:
+		return r, tasksTick(r.url) // re-arm the registry poll/re-fold loop
 	}
 	return r, cmd // propagate the model's cmd (e.g. tea.Quit on [q])
 }
@@ -56,13 +72,19 @@ func main() {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(2)
 	}
-	// --probe: headless acceptance — fetch -> fold -> print one rendered frame -> exit.
-	// Optional second arg --air renders through the AIR (PII-safe) lens.
+	// --probe: headless acceptance — fetch both feeds, fold, print one frame, exit.
+	// Args: --probe [tasks] [--air]  (page defaults to events; --air = PII-safe lens)
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
-		evs, dark, _ := api.FetchEvents(cfg.APIURL)
-		m := model.New("REINS").Fold(evs, dark)
-		if len(os.Args) > 2 && os.Args[2] == "--air" {
-			m.AIR = true
+		evs, ed, _ := api.FetchEvents(cfg.APIURL)
+		ts, td, _ := api.FetchTasks(cfg.APIURL)
+		m := model.New("REINS").Fold(evs, ed).FoldTasks(ts, td)
+		for _, a := range os.Args[2:] {
+			switch a {
+			case "tasks":
+				m.Page = model.PageTasks
+			case "--air":
+				m.AIR = true
+			}
 		}
 		fmt.Println(m.View())
 		return

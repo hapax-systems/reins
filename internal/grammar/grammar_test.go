@@ -33,3 +33,34 @@ func TestGlyphIsStableAndMonochromeSafe(t *testing.T) {
 		t.Fatal("distinct kinds must have distinct glyphs (the glyph carries the kind)")
 	}
 }
+
+func sampleTask() Task {
+	return Task{TaskID: "event-spine-coord-event-log-20260623", Stage: "S6", NoGo: "",
+		AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}}
+}
+
+func TestRenderTaskRowLocal(t *testing.T) {
+	got := RenderTaskRow(sampleTask(), false)
+	if !strings.Contains(got, Glyph("task.closed")) || !strings.Contains(got, "event-spine") || !strings.Contains(got, "S6") {
+		t.Fatalf("task row missing fields: %q", got)
+	}
+}
+
+func TestRenderTaskRowStructuredSilence(t *testing.T) {
+	got := RenderTaskRow(sampleTask(), false) // empty no_go -> dots, not blank jitter
+	if !strings.Contains(got, "····") {
+		t.Fatalf("empty cell must be structured-silence dots: %q", got)
+	}
+}
+
+func TestRenderTaskRowAIRRedacts(t *testing.T) {
+	tk := sampleTask()
+	tk.AIR = map[string]string{"task_id": "ok", "stage": "deny", "no_go": "ok"}
+	got := RenderTaskRow(tk, true)
+	if strings.Contains(got, "S6") {
+		t.Fatalf("AIR must redact the denied stage: %q", got)
+	}
+	if !strings.Contains(got, "event-spine") {
+		t.Fatalf("AIR must keep the allowlisted task_id: %q", got)
+	}
+}

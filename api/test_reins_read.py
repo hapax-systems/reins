@@ -1,4 +1,4 @@
-from reins_read import score_event, classify_air, to_event
+from reins_read import score_event, classify_air, to_event, to_task
 
 
 def test_score_recency_and_kind():
@@ -18,3 +18,10 @@ def test_to_event_shape():
     ev = to_event(raw, allowlist=["kind", "subject"], age_s=2)
     assert ev["kind"] == "pr.merged" and ev["subject"] == "4284"
     assert ev["air"]["actor"] == "deny" and ev["air"]["subject"] == "ok"
+
+
+def test_to_task_shape_and_air():
+    t = {"task_id": "x-1", "stage": "S6", "authority_case": "CASE-1", "no_go": {"blocked": True, "ok": False}}
+    out = to_task("x-1", t, allowlist=["task_id", "stage", "no_go"])
+    assert out["task_id"] == "x-1" and out["stage"] == "S6" and out["no_go"] == "blocked"
+    assert out["air"]["task_id"] == "ok" and out["air"]["authority_case"] == "deny"

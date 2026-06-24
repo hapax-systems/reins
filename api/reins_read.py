@@ -48,6 +48,26 @@ def to_event(raw: dict, allowlist: list[str], age_s: float) -> dict:
     return {**fields, "score": score_event(raw, age_s), "air": classify_air(fields, allowlist)}
 
 
+def to_task(tid: str, t: dict, allowlist: list[str]) -> dict:
+    no_go = t.get("no_go") or {}
+    fields = {
+        "task_id": str(t.get("task_id", tid)),
+        "stage": str(t.get("stage") or ""),
+        "authority_case": str(t.get("authority_case") or ""),
+        "no_go": ",".join(k for k, v in no_go.items() if v) if isinstance(no_go, dict) else "",
+    }
+    return {**fields, "air": classify_air(fields, allowlist)}
+
+
+def _projection(council_root: str) -> dict:
+    root = os.path.expanduser(council_root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from shared.coord_event_log import default_event_log  # noqa: E402
+    from shared.coord_projection import CoordProjection  # noqa: E402
+    return CoordProjection.from_replay(default_event_log().replay(fail_open=True)).to_record()
+
+
 def _raw_tail(council_root: str, limit: int) -> list[dict]:
     root = os.path.expanduser(council_root)
     if root not in sys.path:
@@ -73,11 +93,20 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
         events = [to_event(r, allowlist, age_s=_age_s(str(r.get("timestamp", r.get("ts", ""))), now)) for r in raws]
         return {"dark": False, "events": events}
 
+    @app.get("/read/tasks")
+    def read_tasks() -> dict:
+        try:
+            proj = _projection(council_root)
+        except Exception as e:  # honest-dark
+            return {"dark": True, "error": str(e), "tasks": []}
+        tasks = [to_task(tid, t, allowlist) for tid, t in (proj.get("tasks") or {}).items()]
+        return {"dark": False, "tasks": tasks}
+
     return app
 
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     root = os.environ.get("REINS_COUNCIL_ROOT", "~/projects/hapax-spine")
-    allow = os.environ.get("REINS_AIR_ALLOWLIST", "kind,subject,score,ts").split(",")
+    allow = os.environ.get("REINS_AIR_ALLOWLIST", "kind,subject,score,ts,task_id,stage,no_go").split(",")
     uvicorn.run(build_app(root, allow), host="127.0.0.1", port=int(os.environ.get("REINS_PORT", "8799")))

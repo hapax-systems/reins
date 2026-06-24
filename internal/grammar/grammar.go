@@ -42,9 +42,10 @@ func ScoreBar(score float64) string {
 	return string(eighths[idx])
 }
 
-// air-or-redact: allowlisted field passes; denied field becomes a fixed-width redaction token.
-func air(ev Event, field, val string, on bool) string {
-	if on && ev.AIR[field] != "ok" {
+// redact: generic AIR helper. Allowlisted field (air[field]=="ok") passes; denied field
+// becomes a fixed-width redaction token (default-deny). Used by every row-kind.
+func redact(airMap map[string]string, field, val string, on bool) string {
+	if on && airMap[field] != "ok" {
 		return "▒▒▒"
 	}
 	return val
@@ -53,9 +54,40 @@ func air(ev Event, field, val string, on bool) string {
 // RenderEventRow: one row of the grammar. `airOn` toggles the AIR lens (default-deny redaction).
 // Format (formats.toml row-kind "event"): TS │ scorebar glyph │ subject(6) │ summary
 func RenderEventRow(ev Event, airOn bool) string {
-	subj := air(ev, "subject", pad(ev.Subject, 6), airOn)
-	summ := air(ev, "summary", ev.Summary, airOn)
+	subj := redact(ev.AIR, "subject", pad(ev.Subject, 6), airOn)
+	summ := redact(ev.AIR, "summary", ev.Summary, airOn)
 	return fmt.Sprintf("%-5s %s%s %s  %s", ev.TS, ScoreBar(ev.Score), Glyph(ev.Kind), subj, summ)
+}
+
+// Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
+type Task struct {
+	TaskID        string            `json:"task_id"`
+	Stage         string            `json:"stage"`
+	AuthorityCase string            `json:"authority_case"`
+	NoGo          string            `json:"no_go"`
+	AIR           map[string]string `json:"air"`
+}
+
+// RenderTaskHeader: the frozen header for the :tasks registry page.
+func RenderTaskHeader() string {
+	return fmt.Sprintf("  %-28s %-5s %s", "TASK", "STAGE", "NO-GO")
+}
+
+// dotsOr: structured-silence — an empty cell is dots at full width (the grid never jitters).
+func dotsOr(s string, n int) string {
+	if strings.TrimSpace(s) == "" {
+		return strings.Repeat("·", n)
+	}
+	return pad(s, n)
+}
+
+// RenderTaskRow: one registry row (row-kind "task"). Leading glyph carries the kind (◆=task);
+// task_id is the frozen id-gutter / cross-pane address; empties render as structured-silence dots.
+func RenderTaskRow(t Task, airOn bool) string {
+	id := redact(t.AIR, "task_id", pad(t.TaskID, 28), airOn)
+	stage := redact(t.AIR, "stage", dotsOr(t.Stage, 5), airOn)
+	nogo := redact(t.AIR, "no_go", dotsOr(t.NoGo, 4), airOn)
+	return fmt.Sprintf("%s %s %s %s", Glyph("task.closed"), id, stage, nogo)
 }
 
 func pad(s string, n int) string {

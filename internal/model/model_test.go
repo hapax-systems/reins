@@ -43,3 +43,14 @@ func TestDarkStateIsHonest(t *testing.T) {
 		t.Fatalf("dark fold must render an explicit dark state: %q", v)
 	}
 }
+
+func TestTasksPageRenders(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{
+		{TaskID: "x-1", Stage: "S6", AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}},
+	}, false)
+	m.Page = PageTasks
+	v := m.View()
+	if !strings.Contains(v, ":tasks") || !strings.Contains(v, "x-1") || !strings.Contains(v, "S6") || !strings.Contains(v, "TASK") {
+		t.Fatalf("tasks page should render the registry header + rows: %q", v)
+	}
+}
