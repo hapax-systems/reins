@@ -76,11 +76,28 @@ func (m Model) pageMeta() (string, int, bool) {
 	return "events", len(m.Events), m.EventsDark
 }
 
-// Z0 — title + identity, right-aligned identity.
+// Z0 — title + a TAB BAR (the views are visible + the active one obvious + the key to reach each)
+// + identity. A signifier (Norman): it advertises that pages exist and how to switch.
+var pageTabs = []struct {
+	key, name string
+	page      int
+}{
+	{"1", "events", PageEvents}, {"2", "tasks", PageTasks}, {"3", "dynamics", PageDynamics},
+	{"4", "help", PageHelp}, {"?", "legend", PageLegend},
+}
+
 func (m Model) viewTitle(w int) string {
-	left := grammar.C("brt", m.Title)
-	right := grammar.C("yel", "@hapax · cockpit")
-	gap := w - ansi.StringWidth(m.Title) - ansi.StringWidth("@hapax · cockpit") - 1
+	tabs := ""
+	for _, p := range pageTabs {
+		if p.page == m.Page {
+			tabs += grammar.C("brt", "‹"+p.key+" "+p.name+"›") + " "
+		} else {
+			tabs += grammar.C("mut", p.key+" "+p.name) + " "
+		}
+	}
+	left := grammar.C("brt", m.Title) + "   " + strings.TrimRight(tabs, " ")
+	right := grammar.C("yel", "@hapax")
+	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right) - 2
 	if gap < 1 {
 		gap = 1
 	}
@@ -90,7 +107,7 @@ func (m Model) viewTitle(w int) string {
 // Z1 — vital strip: row1 = mode/page + criticality-split task counts + spine; row2 = the
 // EXCEPTION-ONLY Act strip (structured-silence when calm; a red hotlist of blocked items when not).
 func (m Model) viewVital(w int) string {
-	pageName, n, dark := m.pageMeta()
+	_, _, dark := m.pageMeta()
 	mode := grammar.C("grn", "LOCAL")
 	if m.AIR {
 		mode = grammar.C("fch", "AIR ▮")
@@ -115,21 +132,24 @@ func (m Model) viewVital(w int) string {
 			blocked = append(blocked, t.TaskID)
 		}
 	}
-	counts := grammar.C("grn", fmt.Sprintf("%d✓", ok)) + " " + grammar.C("yel", fmt.Sprintf("%d▸", warn)) +
-		" " + grammar.C("org", fmt.Sprintf("%d‼", maj)) + " " + grammar.C("red", fmt.Sprintf("%d✖", crit))
-	r1 := fmt.Sprintf(" %s  %s n:%d │ tasks %s%s │ events %d │ %s",
-		mode, grammar.C("brt", ":"+pageName), n, grammar.C("brt", fmt.Sprintf("%d ", len(m.Tasks))), counts, len(m.Events), spine)
+	dot := grammar.C("mut", " · ")
+	counts := grammar.C("grn", fmt.Sprintf("%d ok", ok)) + dot + grammar.C("yel", fmt.Sprintf("%d warn", warn)) +
+		dot + grammar.C("org", fmt.Sprintf("%d major", maj)) + dot + grammar.C("red", fmt.Sprintf("%d crit", crit))
+	r1 := " " + mode + grammar.C("mut", "  │  tasks ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Tasks))) +
+		grammar.C("mut", " = ") + counts + grammar.C("mut", "  │  events ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Events))) +
+		grammar.C("mut", "  │  ") + spine
 
 	var r2 string
 	if len(blocked) == 0 {
-		r2 = grammar.C("mut", " "+strings.Repeat("·", 30)+"  all clear")
+		r2 = grammar.C("mut", " "+strings.Repeat("·", 24)+"  all clear — nothing blocked")
 	} else {
 		head := blocked
-		if len(head) > 3 {
-			head = head[:3]
+		if len(head) > 2 {
+			head = head[:2]
 		}
-		r2 = grammar.C("red", fmt.Sprintf(" ‼ ACT %d blocked", len(blocked))) +
-			grammar.C("mut", " · ") + grammar.C("org", strings.Join(head, "  "))
+		r2 = grammar.C("red", fmt.Sprintf(" ‼ %d release-blocked", len(blocked))) +
+			grammar.C("mut", " (at S7, not release-authorized) · ") +
+			grammar.C("org", strings.Join(head, "  ")) + grammar.C("mut", "  · [2] tasks to inspect")
 	}
 	return r1 + "\n" + r2
 }
@@ -153,12 +173,45 @@ func (m Model) bodyFor(w, h int) string {
 	case PageLegend:
 		b.WriteString(grammar.RenderLegend())
 	default:
-		if dark {
-			b.WriteString(darkHint())
+		return m.eventsBody(w, h)
+	}
+	return b.String()
+}
+
+// contextLine: the one-line "what am I looking at" for the active page (Norman conceptual model).
+func (m Model) contextLine() string {
+	switch m.Page {
+	case PageTasks:
+		f := "—"
+		if t, ok := m.FocusedTask(); ok {
+			f = t.TaskID
 		}
-		for _, ev := range m.Events {
-			b.WriteString(grammar.RenderEventRow(ev, m.AIR) + "\n")
-		}
+		return grammar.C("2nd", fmt.Sprintf(" task registry · %d tasks · [j/k] inspect → rail · focus: %s", len(m.Tasks), f))
+	case PageEvents:
+		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown", len(m.Events)))
+	}
+	return ""
+}
+
+// eventsBody: context line + header + the NEWEST events (tail-windowed), so the operator sees what
+// just happened rather than the oldest rows.
+func (m Model) eventsBody(w, h int) string {
+	if m.EventsDark {
+		return m.contextLine() + "\n" + darkHint()
+	}
+	visible := h - 2 // context + header
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(m.Events) > visible {
+		start = len(m.Events) - visible // tail = newest
+	}
+	var b strings.Builder
+	b.WriteString(m.contextLine() + "\n")
+	b.WriteString(grammar.RenderEventHeader() + "\n")
+	for _, ev := range m.Events[start:] {
+		b.WriteString(grammar.RenderEventRow(ev, m.AIR) + "\n")
 	}
 	return b.String()
 }
@@ -170,12 +223,13 @@ func darkHint() string {
 // taskBody windows the registry to the visible height, keeping the focused row in view, with a
 // 1-col focus gutter (▌ marks the focused row).
 func (m Model) taskBody(w, h int) string {
-	visible := h - 1 // header takes a row
+	visible := h - 2 // context line + header
 	if visible < 1 {
 		visible = 1
 	}
 	off := m.scrollOffset(visible)
 	var b strings.Builder
+	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
 	for i := off; i < off+visible && i < len(m.Tasks); i++ {
 		mark := " "
@@ -214,6 +268,18 @@ func orDash(s string) string {
 		return "·····"
 	}
 	return s
+}
+
+// splitAuth turns the comma-list of granted authorizations into short readable labels for the rail.
+func splitAuth(noGo string) []string {
+	if strings.TrimSpace(noGo) == "" {
+		return []string{grammar.C("mut", "(none yet)")}
+	}
+	var out []string
+	for _, a := range strings.Split(noGo, ",") {
+		out = append(out, strings.TrimSuffix(strings.TrimSpace(a), "_authorized"))
+	}
+	return out
 }
 
 // whichKey: the transient verb menu shown while the command line is focused — names when several
@@ -263,6 +329,19 @@ func (m Model) viewRail(w int) string {
 	b.WriteString(line("who", orDash(t.Owner), grammar.LaneToken(t.Owner)) + "\n")
 	b.WriteString(line("fresh", fmt.Sprintf("%.2f", t.Freshness), "pri") + "\n")
 	b.WriteString(line("rel", fmt.Sprintf("●%d", t.RelCount), "blu") + "\n")
+	b.WriteString(rule + "\n")
+	// authorizations granted so far (situates WHY a task is or isn't release-ready)
+	b.WriteString(" " + grammar.C("mut", "granted") + "\n")
+	if strings.TrimSpace(t.NoGo) == "" {
+		b.WriteString("  " + grammar.C("mut", "(none granted yet)") + "\n")
+	} else {
+		for _, g := range splitAuth(t.NoGo) {
+			b.WriteString("  " + grammar.C("grn", "✓ ") + grammar.C("mut", g) + "\n")
+		}
+	}
+	if t.AuthorityCase != "" {
+		b.WriteString(" " + grammar.C("mut", "case ") + grammar.C("2nd", t.AuthorityCase) + "\n")
+	}
 	b.WriteString(rule + "\n")
 	b.WriteString(grammar.C("2nd", " relationships") + "\n")
 	b.WriteString(grammar.C("mut", " (no task-edge source yet)") + "\n")

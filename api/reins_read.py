@@ -223,7 +223,7 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
 # Neutral on-air default — STRUCTURAL fields only (no free-text subject/label/summary, which can
 # carry PII on-air; the instance opts those in only after verifying). Mirrors config.Defaults() in Go.
 _DEFAULT_ALLOW = (
-    "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res,"
+    "kind,score,ts,actor,task_id,stage,no_go,id,layer,status,source,target,relation,res,"
     "prior_stage,predicted_stage,owner,freshness,criticality,rel_count"
 )
 

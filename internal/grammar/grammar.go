@@ -105,17 +105,36 @@ func compactTS(ts string) string {
 	return pad(ts, 8)
 }
 
-// RenderEventRow: one row of the grammar. `airOn` toggles the AIR lens (default-deny redaction).
-// Format (formats.toml row-kind "event"): TS │ scorebar glyph │ subject(6) │ summary
+// RenderEventHeader: the column header that SITUATES the event stream (what each column is).
+func RenderEventHeader() string {
+	return C("mut", fmt.Sprintf(" %-8s %-2s %-26s %-10s %s", "TIME", "k", "SUBJECT", "WHO", "WHAT")) // k=kind glyph
+}
+
+// shortKind strips the noisy event-type prefix for a readable "what" (launch_failed, stage_transition).
+func shortKind(k string) string {
+	for _, p := range []string{"coord_dispatch.", "sdlc.", "coord."} {
+		k = strings.TrimPrefix(k, p)
+	}
+	return k
+}
+
+// RenderEventRow: one self-explaining stream row — TIME · score-bar · kind-glyph · subject · WHO ·
+// WHAT. Subject is wide enough to read; actor is lane-colored; the "what" falls back to the kind
+// when there is no summary (so a row is never just a truncated stub). `airOn` redacts per field.
 func RenderEventRow(ev Event, airOn bool) string {
-	subj := redact(ev.AIR, "subject", pad(ev.Subject, 6), airOn)
-	summ := redact(ev.AIR, "summary", ev.Summary, airOn)
 	bar, glyph := ScoreBar(ev.Score), Glyph(ev.Kind) // single runes — colorized AFTER width math
 	if sev := kindSeverity(ev.Kind); sev != "" {
 		tok := palette.SeverityToken(sev)
 		bar, glyph = pal.Colorize(tok, bar), pal.Colorize(tok, glyph)
 	}
-	return fmt.Sprintf("%s %s%s %s  %s", compactTS(ev.TS), bar, glyph, subj, summ)
+	subj := C("pri", dotsOr(redact(ev.AIR, "subject", ev.Subject, airOn), 26))
+	who := C(LaneToken(ev.Actor), dotsOr(redact(ev.AIR, "actor", ev.Actor, airOn), 10))
+	what := ev.Summary
+	if strings.TrimSpace(what) == "" {
+		what = shortKind(ev.Kind)
+	}
+	what = C("mut", redact(ev.AIR, "summary", what, airOn))
+	return fmt.Sprintf("%s %s%s %s %s %s", compactTS(ev.TS), bar, glyph, subj, who, what)
 }
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).

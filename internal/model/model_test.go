@@ -223,7 +223,7 @@ func TestTasksPageRenders(t *testing.T) {
 	}, false)
 	m.Page = PageTasks
 	v := m.View()
-	if !strings.Contains(v, ":tasks") || !strings.Contains(v, "x-1") || !strings.Contains(v, "S6") || !strings.Contains(v, "TASK") {
-		t.Fatalf("tasks page should render the registry header + rows: %q", v)
+	if !strings.Contains(v, "task registry") || !strings.Contains(v, "x-1") || !strings.Contains(v, "S6") || !strings.Contains(v, "TASK") {
+		t.Fatalf("tasks page should render the registry context + header + rows: %q", v)
 	}
 }
