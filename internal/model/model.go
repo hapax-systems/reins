@@ -23,6 +23,20 @@ const (
 	ModeYank    = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
 )
 
+// the selection lattice rank (coarse→fine). The cursor lives at one rank; [↵]/[⌫] descend/ascend.
+const (
+	RankRow   = 2 // L2 — a registry row (the default; m.Focus is the row index)
+	RankField = 3 // L3 — a cell within the focused row
+)
+
+// Selection is the cursor-of-attention: ONE selection, many verbs act on it. The row index stays in
+// m.Focus (the established L2 index); Selection adds the rank + which field (at L3) + the type.
+type Selection struct {
+	Rank  int    // RankRow | RankField
+	Field string // when Rank==RankField: the cell (task_id/stage/owner/prior_stage/predicted_stage/criticality/authority_case)
+	Type  string // "task" (cross-cutting types — counts/nodes/… — arrive in S9)
+}
+
 // RingEntry: one grabbed object, provenance-tagged (the emacs-style kill-ring, in memory).
 type RingEntry struct {
 	Value, Field, Page string
@@ -88,6 +102,7 @@ type Model struct {
 	Focus        int    // selected row index into m.Tasks (the registry cursor; the rail tracks it)
 	Ring         []RingEntry // the yank kill-ring (most-recent first)
 	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
+	Sel          Selection // the cursor-of-attention's rank/field/type (row index stays in Focus)
 }
 
 func clamp(v, lo, hi int) int {
@@ -132,7 +147,9 @@ func scaleIndex(s string) int {
 	return 0
 }
 
-func New(title string) Model { return Model{Title: title} }
+func New(title string) Model {
+	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}}
+}
 
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
 func (m Model) Fold(evs []grammar.Event, dark bool) Model {
