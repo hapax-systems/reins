@@ -1,0 +1,13 @@
+# Go build artifacts
+/reins
+*.test
+*.out
+
+# Python
+__pycache__/
+*.pyc
+/api/.venv/
+/api/uv.lock
+
+# instance config (never commit real paths/secrets)
+/config.toml

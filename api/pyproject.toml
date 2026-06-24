@@ -1,0 +1,5 @@
+[project]
+name = "reins-read"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29"]
