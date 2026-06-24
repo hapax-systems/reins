@@ -209,7 +209,11 @@ func (m Model) contextLine() string {
 		if t, ok := m.FocusedTask(); ok {
 			f = t.TaskID
 		}
-		return grammar.C("2nd", fmt.Sprintf(" task registry · %d tasks · [j/k] inspect → rail · focus: %s", len(m.Tasks), f))
+		shown := ""
+		if strings.TrimSpace(m.Filter) != "" {
+			shown = fmt.Sprintf(" · filter %q → %d shown", m.Filter, len(m.visibleTasks()))
+		}
+		return grammar.C("2nd", fmt.Sprintf(" task registry · %d tasks%s · [/] filter · focus: %s", len(m.Tasks), shown, f))
 	case PageEvents:
 		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown", len(m.Events)))
 	}
@@ -250,38 +254,39 @@ func (m Model) taskBody(w, h int) string {
 	if visible < 1 {
 		visible = 1
 	}
+	vt := m.visibleTasks()
 	off := m.scrollOffset(visible)
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
-	for i := off; i < off+visible && i < len(m.Tasks); i++ {
+	for i := off; i < off+visible && i < len(vt); i++ {
 		if m.Mode == ModeHint { // every visible row carries its teleport label in the gutter
 			label := " "
 			if li := i - off; li < len(hintAlphabet) {
 				label = string(hintAlphabet[li])
 			}
-			b.WriteString(grammar.SelLabel(label) + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
+			b.WriteString(grammar.SelLabel(label) + grammar.RenderTaskRow(vt[i], m.AIR) + "\n")
 			continue
 		}
 		switch {
 		case i == m.Focus && m.Mode == ModeYank:
 			// yank pick: the selectable FIELDS show their pick-keys ON the row — choose by LOOKING.
-			b.WriteString(fitWidth(yankPickRow(m.Tasks[i], m.AIR), w) + "\n")
+			b.WriteString(fitWidth(yankPickRow(vt[i], m.AIR), w) + "\n")
 		case i == m.Focus && m.Sel.Rank == RankField:
 			// field cursor: the SELECTED field carries the sel swatch ON the row — steer with h/l.
-			b.WriteString(fitWidth(fieldRow(m.Tasks[i], m.Sel.Field, m.AIR), w) + "\n")
+			b.WriteString(fitWidth(fieldRow(vt[i], m.Sel.Field, m.AIR), w) + "\n")
 		case i == m.Focus:
 			// the SELECTED row — a bright full-width highlight bar (always visible)
-			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(m.Tasks[i], m.AIR), w-1) + "\n")
+			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(vt[i], m.AIR), w-1) + "\n")
 		default:
-			b.WriteString(" " + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
+			b.WriteString(" " + grammar.RenderTaskRow(vt[i], m.AIR) + "\n")
 		}
 	}
 	return b.String()
 }
 
 func (m Model) scrollOffset(visible int) int {
-	n := len(m.Tasks)
+	n := len(m.visibleTasks())
 	if n <= visible || m.Focus < visible {
 		return 0
 	}
@@ -424,7 +429,7 @@ func (m Model) viewRail(w int) string {
 	var b strings.Builder
 	// self-context = the lattice BREADCRUMB: WHAT this panel is + the part's place in the whole. The
 	// address descends as the cursor descends (row → field), so you always know where you are.
-	crumb := fmt.Sprintf("Z2▸:tasks▸row %d/%d", m.Focus+1, len(m.Tasks))
+	crumb := fmt.Sprintf("Z2▸:tasks▸row %d/%d", m.Focus+1, len(m.visibleTasks()))
 	if m.Sel.Rank == RankField {
 		crumb += "▸field " + m.Sel.Field
 	}
@@ -483,6 +488,9 @@ func (m Model) viewFloor(w int) string {
 		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
+	case m.Mode == ModeFilter:
+		r2 = grammar.C("blu", " /") + " " + m.Filter + "█" +
+			grammar.C("mut", fmt.Sprintf("   %d match — [↵] keep · [Esc] clear", len(m.visibleTasks())))
 	case m.Mode == ModeHint:
 		r2 = grammar.C("brt", " ▶ jump") + grammar.C("mut", " — type a row's letter (shown in the gutter) to teleport there · [Esc]")
 	case m.Sel.Rank == RankField:

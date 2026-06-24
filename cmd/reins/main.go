@@ -112,6 +112,8 @@ func main() {
 				m.Page, m.Sel.Rank, m.Sel.Field = model.PageTasks, model.RankField, "stage"
 			case a == "hint":
 				m.Page, m.Mode = model.PageTasks, model.ModeHint
+			case strings.HasPrefix(a, "filter:"):
+				m.Page, m.Filter = model.PageTasks, strings.TrimPrefix(a, "filter:")
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless

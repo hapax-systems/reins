@@ -127,6 +127,26 @@ func TestFieldCursorDescendSteerYank(t *testing.T) {
 	}
 }
 
+func TestFilterNarrowsSelectableSet(t *testing.T) {
+	tasks := []grammar.Task{
+		{TaskID: "reform-a", AIR: map[string]string{}}, {TaskID: "hkp-b", AIR: map[string]string{}},
+		{TaskID: "reform-c", AIR: map[string]string{}},
+	}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Page = PageTasks
+	m = step(m, "/")
+	if m.Mode != ModeFilter {
+		t.Fatal("/ should enter filter mode")
+	}
+	m.Filter = "reform"
+	if vt := m.visibleTasks(); len(vt) != 2 || vt[0].TaskID != "reform-a" {
+		t.Fatalf("filter should narrow to the 2 reform tasks: %d", len(vt))
+	}
+	if ft, ok := m.FocusedTask(); !ok || ft.TaskID != "reform-a" {
+		t.Fatalf("focus should index the FILTERED set: %v", ft)
+	}
+}
+
 func TestHintTeleport(t *testing.T) {
 	tasks := []grammar.Task{
 		{TaskID: "t0", AIR: map[string]string{}}, {TaskID: "t1", AIR: map[string]string{}},

@@ -22,6 +22,7 @@ const (
 	ModeCommand = 1 // the command line is focused (typing a verb)
 	ModeYank    = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
 	ModeHint    = 3 // hint-teleport: labels on visible rows, type one to jump (navigate by looking)
+	ModeFilter  = 4 // the filter input is focused — narrows the selectable rows by id substring
 )
 
 // hintAlphabet: home-row-first labels for hint teleport (one key per visible row; choose by sight).
@@ -107,6 +108,23 @@ type Model struct {
 	Ring         []RingEntry // the yank kill-ring (most-recent first)
 	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
 	Sel          Selection // the cursor-of-attention's rank/field/type (row index stays in Focus)
+	Filter       string // active :tasks filter (id substring); narrows the selectable set
+}
+
+// visibleTasks: the selectable row set — m.Tasks narrowed by the active Filter. The cursor, rail,
+// door, and yank all operate on THIS (the filter narrows what selection can address).
+func (m Model) visibleTasks() []grammar.Task {
+	if strings.TrimSpace(m.Filter) == "" {
+		return m.Tasks
+	}
+	q := strings.ToLower(m.Filter)
+	out := make([]grammar.Task, 0, len(m.Tasks))
+	for _, t := range m.Tasks {
+		if strings.Contains(strings.ToLower(t.TaskID), q) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func clamp(v, lo, hi int) int {
@@ -119,20 +137,21 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// focusMax is the highest valid registry focus index (0 when empty).
+// focusMax is the highest valid registry focus index (0 when empty) — over the VISIBLE (filtered) set.
 func (m Model) focusMax() int {
-	if len(m.Tasks) == 0 {
-		return 0
+	if n := len(m.visibleTasks()); n > 0 {
+		return n - 1
 	}
-	return len(m.Tasks) - 1
+	return 0
 }
 
-// FocusedTask returns the task under the registry cursor, ok=false if none.
+// FocusedTask returns the task under the registry cursor (within the visible/filtered set).
 func (m Model) FocusedTask() (grammar.Task, bool) {
-	if m.Focus < 0 || m.Focus >= len(m.Tasks) {
+	vt := m.visibleTasks()
+	if m.Focus < 0 || m.Focus >= len(vt) {
 		return grammar.Task{}, false
 	}
-	return m.Tasks[m.Focus], true
+	return vt[m.Focus], true
 }
 
 // dynScales maps the seed's view_scale names to their resolution index (1=overview … 5=evidence).
@@ -297,10 +316,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeHint {
 			return m.updateHint(v)
 		}
+		if m.Mode == ModeFilter {
+			return m.updateFilter(v)
+		}
 		if m.Sel.Rank == RankField { // a field within the row is selected — h/l steer, [y] yanks it
 			return m.updateField(v)
 		}
 		switch v.String() {
+		case "/": // filter — narrow the selectable rows by id substring (incremental)
+			if m.Page == PageTasks {
+				m.Mode, m.Focus = ModeFilter, 0
+			}
+			return m, nil
 		case "f": // hint teleport — labels bloom on visible rows; type one to jump (by looking)
 			if m.Page == PageTasks && len(m.Tasks) > 0 {
 				m.Mode = ModeHint
@@ -405,6 +432,28 @@ func (m Model) taskWindow() (off, visible int) {
 		visible = 1
 	}
 	return m.scrollOffset(visible), visible
+}
+
+// updateFilter: incremental id-substring filter on :tasks. Enter keeps the filter active (input
+// closes), Esc clears it. The cursor re-homes to 0 on each change (the visible set shifts).
+func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.Type {
+	case tea.KeyEnter:
+		m.Mode = ModeNormal // filter stays active; input closes
+	case tea.KeyEsc:
+		m.Mode, m.Filter, m.Focus = ModeNormal, "", 0 // clear the filter
+	case tea.KeyBackspace:
+		if n := len(m.Filter); n > 0 {
+			m.Filter = m.Filter[:n-1]
+		}
+		m.Focus = 0
+	case tea.KeySpace:
+		m.Filter += " "
+	case tea.KeyRunes:
+		m.Filter += string(v.Runes)
+		m.Focus = 0
+	}
+	return m, nil
 }
 
 // updateHint: type a row's label to teleport the cursor there; Esc cancels. No other state change.
