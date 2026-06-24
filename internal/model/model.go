@@ -37,9 +37,10 @@ const (
 // Selection is the cursor-of-attention: ONE selection, many verbs act on it. The row index stays in
 // m.Focus (the established L2 index); Selection adds the rank + which field (at L3) + the type.
 type Selection struct {
-	Rank  int    // RankRow | RankField
-	Field string // when Rank==RankField: the cell (task_id/stage/owner/prior_stage/predicted_stage/criticality/authority_case)
-	Type  string // "task" (cross-cutting types — counts/nodes/… — arrive in S9)
+	Rank    int    // RankRow | RankField
+	Field   string // when Rank==RankField: the cell (task_id/stage/owner/prior_stage/predicted_stage/criticality/authority_case)
+	Type    string // "task" (cross-cutting types — counts/nodes/… — arrive in S9)
+	Members []int  // granularity g2: a CLASS of sibling rows (indices into visibleTasks)
 }
 
 // RingEntry: one grabbed object, provenance-tagged (the emacs-style kill-ring, in memory).
@@ -338,7 +339,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Sel.Rank, m.Sel.Field = RankField, selFields[0]
 			}
 			return m, nil
-		case "y": // yank — grab a field off the focused row (the copy-paste killer)
+		case "V": // class-select — every visible row sharing the focused task's criticality (granularity g2)
+			if t, ok := m.FocusedTask(); ok {
+				vt := m.visibleTasks()
+				var mem []int
+				for i, x := range vt {
+					if x.Criticality == t.Criticality {
+						mem = append(mem, i)
+					}
+				}
+				m.Sel.Members = mem
+				m.Status = fmt.Sprintf("selected %d '%s' tasks · [y] yank all · [Esc] clear", len(mem), t.Criticality)
+			}
+			return m, nil
+		case "esc": // collapse the selection to the bare row cursor
+			m.Sel.Members = nil
+			return m, nil
+		case "y": // yank — class-yank if a class is selected, else grab one field
+			if len(m.Sel.Members) > 0 {
+				vt := m.visibleTasks()
+				vals := make([]string, 0, len(m.Sel.Members))
+				for _, idx := range m.Sel.Members {
+					if idx >= 0 && idx < len(vt) {
+						vals = append(vals, vt[idx].TaskID)
+					}
+				}
+				m.Ring = pushRing(m.Ring, RingEntry{Value: strings.Join(vals, "\n"), Field: "class", Page: "tasks"})
+				m.Sel.Members = nil
+				m.Status = fmt.Sprintf("yanked %d task ids → kill-ring", len(vals))
+				return m, nil
+			}
 			if _, ok := m.FocusedTask(); ok {
 				m.Mode, m.Status = ModeYank, ""
 			}

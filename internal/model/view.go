@@ -256,6 +256,10 @@ func (m Model) taskBody(w, h int) string {
 	}
 	vt := m.visibleTasks()
 	off := m.scrollOffset(visible)
+	memberSet := map[int]bool{} // class-selected rows (granularity g2) get a ▏ left-rail
+	for _, mi := range m.Sel.Members {
+		memberSet[mi] = true
+	}
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
@@ -279,7 +283,11 @@ func (m Model) taskBody(w, h int) string {
 			// the SELECTED row — a bright full-width highlight bar (always visible)
 			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(vt[i], m.AIR), w-1) + "\n")
 		default:
-			b.WriteString(" " + grammar.RenderTaskRow(vt[i], m.AIR) + "\n")
+			gut := " "
+			if memberSet[i] { // class member — left-rail marker (▏)
+				gut = grammar.C("brt", "▏")
+			}
+			b.WriteString(gut + grammar.RenderTaskRow(vt[i], m.AIR) + "\n")
 		}
 	}
 	return b.String()
