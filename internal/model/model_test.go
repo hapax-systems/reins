@@ -107,6 +107,26 @@ func TestYankGrabsFieldToRingAndCommandLine(t *testing.T) {
 	}
 }
 
+func TestFieldCursorDescendSteerYank(t *testing.T) {
+	tasks := []grammar.Task{{TaskID: "alpha-1", Stage: "S5", Owner: "cc-a",
+		AIR: map[string]string{"task_id": "ok", "stage": "ok", "owner": "ok"}}}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m = step(m, "tab") // descend into fields
+	if m.Sel.Rank != RankField || m.Sel.Field != selFields[0] {
+		t.Fatalf("tab should descend to field rank at the first field: %+v", m.Sel)
+	}
+	m = step(m, "l") // steer to the next field (stage)
+	if m.Sel.Field != "stage" {
+		t.Fatalf("l should steer to 'stage', got %q", m.Sel.Field)
+	}
+	m = step(m, "y") // yank THE selected field directly (verb on selection)
+	if m.Input != "S5" || len(m.Ring) != 1 || m.Sel.Rank != RankRow {
+		t.Fatalf("y should yank the selected field + ascend: input=%q ring=%d rank=%d", m.Input, len(m.Ring), m.Sel.Rank)
+	}
+}
+
 func TestWhichKeyMenu(t *testing.T) {
 	if mv := matchVerbs("d"); len(mv) != 1 || mv[0].name != "dynamics" {
 		t.Fatalf("'d' should match only dynamics, got %v", mv)

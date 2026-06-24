@@ -108,6 +108,8 @@ func main() {
 				m.Page, m.DoorOpen = model.PageTasks, true
 			case a == "yank":
 				m.Page, m.Mode = model.PageTasks, model.ModeYank
+			case a == "field":
+				m.Page, m.Sel.Rank, m.Sel.Field = model.PageTasks, model.RankField, "stage"
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless

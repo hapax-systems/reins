@@ -259,6 +259,9 @@ func (m Model) taskBody(w, h int) string {
 		case i == m.Focus && m.Mode == ModeYank:
 			// yank pick: the selectable FIELDS show their pick-keys ON the row — choose by LOOKING.
 			b.WriteString(fitWidth(yankPickRow(m.Tasks[i], m.AIR), w) + "\n")
+		case i == m.Focus && m.Sel.Rank == RankField:
+			// field cursor: the SELECTED field carries the sel swatch ON the row — steer with h/l.
+			b.WriteString(fitWidth(fieldRow(m.Tasks[i], m.Sel.Field, m.AIR), w) + "\n")
 		case i == m.Focus:
 			// the SELECTED row — a bright full-width highlight bar (always visible)
 			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(m.Tasks[i], m.AIR), w-1) + "\n")
@@ -308,6 +311,37 @@ func splitAuth(noGo string) []string {
 		out = append(out, strings.TrimSuffix(strings.TrimSpace(a), "_authorized"))
 	}
 	return out
+}
+
+// fieldRow: at L3 the focused row shows its field VALUES with the SELECTED field in the sel swatch,
+// others dimmed — the field cursor is visible ON the data; [h/l] steers it (navigate by looking).
+func fieldRow(t grammar.Task, cur string, air bool) string {
+	clip := func(s string, n int) string {
+		if r := []rune(s); len(r) > n {
+			return string(r[:n])
+		}
+		return s
+	}
+	fields := []struct{ field, val string }{
+		{"task_id", clip(t.TaskID, 20)}, {"stage", shortStage2(t.Stage)}, {"owner", t.Owner},
+		{"prior_stage", shortStage2(t.PriorStage)}, {"predicted_stage", t.PredictedStage},
+		{"criticality", t.Criticality}, {"authority_case", clip(t.AuthorityCase, 14)},
+	}
+	out := grammar.C("brt", "▶ ")
+	for _, f := range fields {
+		v := f.val
+		if air && t.AIR[f.field] != "ok" {
+			v = "▒▒▒"
+		} else if strings.TrimSpace(v) == "" {
+			v = "·"
+		}
+		if f.field == cur {
+			out += grammar.SelLabel(" "+v+" ") + " "
+		} else {
+			out += grammar.C("mut", v) + " "
+		}
+	}
+	return strings.TrimRight(out, " ")
 }
 
 // yankPickRow: in ModeYank the focused row becomes a labeled field-picker IN PLACE — each yankable
@@ -438,6 +472,11 @@ func (m Model) viewFloor(w int) string {
 		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
+	case m.Sel.Rank == RankField:
+		t, _ := m.FocusedTask()
+		r2 = grammar.C("brt", " ▶ field ") + grammar.SelLabel(" "+m.Sel.Field+" ") +
+			grammar.C("pri", "  = "+fieldValue(t, m.Sel.Field)) +
+			grammar.C("mut", "  · [h/l] move · [y] yank this · [Tab] back to rows")
 	case m.Mode == ModeYank:
 		r2 = grammar.C("brt", " ▶ select a FIELD") +
 			grammar.C("mut", " — type its letter (shown on the row) → command line + kill-ring · [Esc]")

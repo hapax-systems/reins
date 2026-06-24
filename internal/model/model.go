@@ -290,7 +290,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.DoorOpen {
 			return m.updateDoor(v)
 		}
+		if m.Sel.Rank == RankField { // a field within the row is selected — h/l steer, [y] yanks it
+			return m.updateField(v)
+		}
 		switch v.String() {
+		case "tab": // descend into the row's fields (navigate by looking; [Tab] again / Esc ascends)
+			if _, ok := m.FocusedTask(); ok {
+				m.Sel.Rank, m.Sel.Field = RankField, selFields[0]
+			}
+			return m, nil
 		case "y": // yank — grab a field off the focused row (the copy-paste killer)
 			if _, ok := m.FocusedTask(); ok {
 				m.Mode, m.Status = ModeYank, ""
@@ -337,6 +345,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Focus = m.focusMax()
 			return m, nil
 		}
+	}
+	return m, nil
+}
+
+// selFields: the L3 field order the field cursor walks (left→right, the lifecycle sentence).
+var selFields = []string{"task_id", "stage", "owner", "prior_stage", "predicted_stage", "criticality", "authority_case"}
+
+func (m Model) fieldIdx() int {
+	for i, f := range selFields {
+		if f == m.Sel.Field {
+			return i
+		}
+	}
+	return 0
+}
+
+func fieldValue(t grammar.Task, field string) string {
+	switch field {
+	case "task_id":
+		return t.TaskID
+	case "stage":
+		return t.Stage
+	case "owner":
+		return t.Owner
+	case "prior_stage":
+		return t.PriorStage
+	case "predicted_stage":
+		return t.PredictedStage
+	case "criticality":
+		return t.Criticality
+	case "authority_case":
+		return t.AuthorityCase
+	}
+	return ""
+}
+
+// updateField: keys at L3 (a field selected within the row). h/l steer across fields, j/k still move
+// rows (staying at field rank), [y] yanks the selected field, [Tab]/[Esc] ascend to the row.
+func (m Model) updateField(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.String() {
+	case "esc", "tab":
+		m.Sel.Rank, m.Sel.Field = RankRow, ""
+	case "l", "right":
+		m.Sel.Field = selFields[clamp(m.fieldIdx()+1, 0, len(selFields)-1)]
+	case "h", "left":
+		m.Sel.Field = selFields[clamp(m.fieldIdx()-1, 0, len(selFields)-1)]
+	case "j", "down":
+		m.Focus = clamp(m.Focus+1, 0, m.focusMax())
+	case "k", "up":
+		m.Focus = clamp(m.Focus-1, 0, m.focusMax())
+	case "y": // verb on the current selection — yank THE selected field, no extra pick (S7 preview)
+		t, ok := m.FocusedTask()
+		if !ok {
+			return m, nil
+		}
+		f := m.Sel.Field
+		if m.AIR && t.AIR[f] != "ok" {
+			m.Status = "yank: " + f + " is redacted on-air — un-yankable"
+			return m, nil
+		}
+		m.Ring = pushRing(m.Ring, RingEntry{Value: fieldValue(t, f), Field: f, Page: "tasks"})
+		m.Input, m.Mode, m.Sel.Rank = fieldValue(t, f), ModeCommand, RankRow
+		m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", f, len(m.Ring))
+	case "q", "ctrl+c":
+		return m, tea.Quit
 	}
 	return m, nil
 }
