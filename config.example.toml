@@ -1,0 +1,6 @@
+# config.example.toml — INSTANCE config (copy to ~/.config/reins/config.toml; never commit real paths)
+api_url = "http://127.0.0.1:8799"
+council_root = "~/projects/hapax-spine"
+ledger_path = "~/.cache/hapax/coord/ledger.db"
+palette = "gruvbox"           # gruvbox (R&D) | solarized (Research)
+air_allowlist = ["kind", "subject", "score", "ts"]   # default-deny: everything else redacts on AIR
