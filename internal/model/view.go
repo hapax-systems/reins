@@ -397,21 +397,25 @@ func yankPickRow(t grammar.Task, air bool) string {
 }
 
 
-// whichKey: the transient verb menu shown while the command line is focused — names when several
-// match, the full gloss when one does. Verbs become recognizable, not memorized.
-func whichKey(input string) string {
-	mv := matchVerbs(input)
-	switch {
-	case len(mv) == 1:
-		return grammar.C("mut", "   "+mv[0].name+" — "+mv[0].gloss)
-	case len(mv) > 1:
-		names := make([]string, len(mv))
-		for i, v := range mv {
-			names[i] = v.name
-		}
-		return grammar.C("mut", "   ‹"+strings.Join(names, " ")+"›")
+// completionStrip: fish-style autocomplete — the candidate list is REVEALED explicitly and is
+// NAVIGABLE ([Tab]/[↓] next, [⇧Tab]/[↑] prev), the current candidate carried in the sel swatch;
+// [Enter] accepts it. Dynamic on the active selection (a `paste <value>` candidate leads when a
+// field is selected). The full multi-row grid + sub-menus are the next step (see handoff §9).
+func (m Model) completionStrip() string {
+	comps := m.completions()
+	if len(comps) == 0 {
+		return ""
 	}
-	return ""
+	cur := m.CompIdx % len(comps)
+	out := grammar.C("mut", "  ")
+	for i, c := range comps {
+		if i == cur {
+			out += grammar.SelLabel(" "+c+" ") + " "
+		} else {
+			out += grammar.C("mut", c) + " "
+		}
+	}
+	return out
 }
 
 // Z2b — context rail: the focused registry item unfolded into its seven dimensions, plus the
@@ -510,7 +514,7 @@ func (m Model) viewFloor(w int) string {
 		r2 = grammar.C("brt", " ▶ select a FIELD") +
 			grammar.C("mut", " — type its letter (shown on the row) → command line + kill-ring · [Esc]")
 	case m.Mode == ModeCommand:
-		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + whichKey(m.Input)
+		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + m.completionStrip()
 	case m.Status != "":
 		r2 = " " + grammar.C("mut", m.Status)
 	default:

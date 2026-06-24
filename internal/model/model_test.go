@@ -165,6 +165,28 @@ func TestHintTeleport(t *testing.T) {
 	}
 }
 
+func TestNavigableCompletion(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{{TaskID: "x", AIR: map[string]string{}}}, false)
+	m.Page = PageTasks
+	m = step(m, ":") // enter the command line
+	if m.Mode != ModeCommand {
+		t.Fatal(": should open the command line")
+	}
+	if comps := m.completions(); len(comps) < 2 {
+		t.Fatalf("expected a navigable candidate list: %v", comps)
+	}
+	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab}) // navigate down the list
+	m = nm.(Model)
+	if m.CompIdx != 1 {
+		t.Fatalf("Tab should advance the highlighted candidate to 1, got %d", m.CompIdx)
+	}
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // accept the highlighted candidate
+	m = nm.(Model)
+	if m.Mode != ModeNormal {
+		t.Fatal("Enter should accept the highlighted candidate + leave the command line")
+	}
+}
+
 func TestWhichKeyMenu(t *testing.T) {
 	if mv := matchVerbs("d"); len(mv) != 1 || mv[0].name != "dynamics" {
 		t.Fatalf("'d' should match only dynamics, got %v", mv)

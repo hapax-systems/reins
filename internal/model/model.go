@@ -110,6 +110,36 @@ type Model struct {
 	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
 	Sel          Selection // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	Filter       string // active :tasks filter (id substring); narrows the selectable set
+	CompIdx      int    // fish-style completion: the highlighted candidate in the navigable list
+}
+
+// completions: the navigable candidate list for the command line. Dynamic on the active SELECTION —
+// when a field/row is selected, a `paste <value>` candidate is offered first so the operator can
+// inject the selection (the seed of the {{sel}} template language; see the handoff forward-look).
+func (m Model) completions() []string {
+	var out []string
+	if t, ok := m.FocusedTask(); ok && m.Sel.Rank == RankField && m.Sel.Field != "" {
+		out = append(out, "paste "+fieldValue(t, m.Sel.Field)) // inject the selected field's value
+	}
+	for _, v := range matchVerbs(m.Input) {
+		out = append(out, v.name)
+	}
+	return out
+}
+
+// acceptCompletion: run the highlighted candidate. A bare verb runs (Exec); a "paste <value>"
+// dynamic candidate INJECTS the value into the command line (the {{sel}} template seed).
+func (m Model) acceptCompletion() Model {
+	comps := m.completions()
+	if len(comps) == 0 {
+		return m.Exec(m.Input)
+	}
+	c := comps[m.CompIdx%len(comps)]
+	if rest, isPaste := strings.CutPrefix(c, "paste "); isPaste {
+		m.Input, m.CompIdx = rest, 0
+		return m
+	}
+	return m.Exec(c)
 }
 
 // visibleTasks: the selectable row set — m.Tasks narrowed by the active Filter. The cursor, rail,
@@ -379,7 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case ":": // enter the command line (the command-as-effect surface)
-			m.Mode, m.Input, m.Status = ModeCommand, "", ""
+			m.Mode, m.Input, m.Status, m.CompIdx = ModeCommand, "", "", 0
 			return m, nil
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -584,30 +614,36 @@ func (m Model) updateYank(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 // Esc cancels, Backspace edits, Space/runes append; quit folds straight to tea.Quit.
 func (m Model) updateCommand(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.Type {
-	case tea.KeyEnter:
-		m = m.Exec(m.Input)
+	case tea.KeyEnter: // run the highlighted candidate (fish-style: Tab navigates, Enter accepts)
+		m = m.acceptCompletion()
 		if m.Quitting {
 			return m, tea.Quit
 		}
 		return m, nil
 	case tea.KeyEsc:
-		m.Mode, m.Input = ModeNormal, ""
+		m.Mode, m.Input, m.CompIdx = ModeNormal, "", 0
 		return m, nil
 	case tea.KeyBackspace:
 		if n := len(m.Input); n > 0 {
 			m.Input = m.Input[:n-1]
 		}
+		m.CompIdx = 0 // input changed → re-rank candidates from the top
 		return m, nil
-	case tea.KeyTab: // complete to the single matching verb (recognition over recall)
-		if mv := matchVerbs(m.Input); len(mv) == 1 {
-			m.Input = mv[0].name + " "
+	case tea.KeyTab, tea.KeyDown: // NAVIGATE the completion list (revealed explicitly below the prompt)
+		if c := m.completions(); len(c) > 0 {
+			m.CompIdx = (m.CompIdx + 1) % len(c)
+		}
+		return m, nil
+	case tea.KeyShiftTab, tea.KeyUp:
+		if c := m.completions(); len(c) > 0 {
+			m.CompIdx = (m.CompIdx - 1 + len(c)) % len(c)
 		}
 		return m, nil
 	case tea.KeySpace:
-		m.Input += " "
+		m.Input, m.CompIdx = m.Input+" ", 0
 		return m, nil
 	case tea.KeyRunes:
-		m.Input += string(v.Runes)
+		m.Input, m.CompIdx = m.Input+string(v.Runes), 0
 		return m, nil
 	}
 	return m, nil
