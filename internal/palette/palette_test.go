@@ -46,6 +46,20 @@ func TestLaneAndSeverityChannelsDisjoint(t *testing.T) {
 	}
 }
 
+func TestSelectionChannelIsDisjoint(t *testing.T) {
+	// the SELECTION swatch (grammar.SelLabel) must ride SHAPE/CONTRAST on ground tones (border+brt),
+	// never a meaning hue — or selection competes with criticality/freshness/ownership in the scan.
+	hue := map[string]bool{}
+	for _, x := range append(severityColorTokens(), laneColorTokens()...) {
+		hue[x] = true
+	}
+	for _, sel := range []string{"border", "brt"} { // the tokens SelLabel uses
+		if hue[sel] {
+			t.Fatalf("selection channel token %q collides with a meaning hue", sel)
+		}
+	}
+}
+
 func TestColorizeIsNonDestructive(t *testing.T) {
 	p := For("gruvbox")
 	// color must never destroy the text (monochrome-safe: the glyph survives a strip)

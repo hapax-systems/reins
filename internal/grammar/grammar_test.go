@@ -118,6 +118,14 @@ func TestRenderWhoisDoor(t *testing.T) {
 	}
 }
 
+func TestSelLabelKeepsTextMonochromeSafe(t *testing.T) {
+	// the selection swatch must never destroy its text (a label must survive a grayscale strip).
+	out := SelLabel("[i]")
+	if !strings.Contains(out, "[i]") {
+		t.Fatalf("SelLabel must keep its text: %q", out)
+	}
+}
+
 func TestLegendCoversAllGlyphMaps(t *testing.T) {
 	// drift guard: every glyph the renderers use must have a legend entry + a gloss.
 	leg := RenderLegend()
