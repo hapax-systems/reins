@@ -23,8 +23,8 @@ func (m Model) View() string {
 		w, h = 120, 40
 	}
 	railW := railWidth
-	if w < 100 {
-		railW = 0 // collapse the rail on narrow terminals
+	if w < 100 || m.Page == PageDynamics {
+		railW = 0 // collapse the rail on narrow terminals, and on :dynamics (the graph wants full width)
 	}
 	mainW := w
 	if railW > 0 {
@@ -143,7 +143,7 @@ func (m Model) bodyFor(w, h int) string {
 		if dark {
 			b.WriteString(darkHint())
 		} else {
-			b.WriteString(grammar.RenderDynamics(m.Dynamics.AtResolution(m.DynScale), m.AIR))
+			b.WriteString(grammar.RenderColumnRail(m.Dynamics, m.DynScale, m.AIR, w)) // INC-6 2D column-rail
 		}
 	case PageHelp:
 		b.WriteString(grammar.RenderHelp())
