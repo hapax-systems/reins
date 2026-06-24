@@ -1,4 +1,4 @@
-from reins_read import score_event, classify_air, to_event, to_task, to_node, to_edge
+from reins_read import score_event, classify_air, to_event, to_task, to_node, to_edge, instance_config
 
 
 def test_score_recency_and_kind():
@@ -40,3 +40,22 @@ def test_to_edge_shape_and_air():
     out = to_edge(e, allowlist=["source", "target", "relation"])
     assert out["source"] == "dmn" and out["target"] == "drd" and out["relation"] == "defines"
     assert out["air"]["relation"] == "ok" and out["air"]["status"] == "deny"
+
+
+def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
+    monkeypatch.setenv("REINS_CONFIG", "/no/such/reins.toml")  # force the no-file path
+    for k in ("REINS_COUNCIL_ROOT", "REINS_AIR_ALLOWLIST", "REINS_PORT"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = instance_config()
+    assert cfg["council_root"] == ""  # NO baked operator path
+    assert cfg["port"] == 8799
+    assert "kind" in cfg["allowlist"] and "subject" not in cfg["allowlist"]  # conservative on-air default
+
+
+def test_instance_config_env_overrides(monkeypatch):
+    monkeypatch.setenv("REINS_CONFIG", "/no/such/reins.toml")
+    monkeypatch.setenv("REINS_COUNCIL_ROOT", "/env/root")
+    monkeypatch.setenv("REINS_AIR_ALLOWLIST", "kind,subject")
+    cfg = instance_config()
+    assert cfg["council_root"] == "/env/root"
+    assert cfg["allowlist"] == ["kind", "subject"]

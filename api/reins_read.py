@@ -152,9 +152,46 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
     return app
 
 
+# Neutral on-air default — STRUCTURAL fields only (no free-text subject/label/summary, which can
+# carry PII on-air; the instance opts those in only after verifying). Mirrors config.Defaults() in Go.
+_DEFAULT_ALLOW = "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res"
+
+
+def instance_config() -> dict:
+    """Resolve instance config with precedence env > $REINS_CONFIG toml > neutral defaults — the SAME
+    config.toml the cockpit reads, so the substrate root + on-air allowlist have ONE source of truth.
+    No baked operator path: absent config, council_root is empty and the API honest-darks (never a
+    fabricated path)."""
+    import tomllib
+
+    toml_cfg: dict = {}
+    path = os.environ.get("REINS_CONFIG") or os.path.expanduser("~/.config/reins/config.toml")
+    try:
+        with open(path, "rb") as fh:
+            toml_cfg = tomllib.load(fh)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        toml_cfg = {}
+
+    council_root = os.environ.get("REINS_COUNCIL_ROOT") or str(toml_cfg.get("council_root", ""))
+
+    allow_env = os.environ.get("REINS_AIR_ALLOWLIST")
+    if allow_env:
+        allowlist = allow_env.split(",")
+    elif toml_cfg.get("air_allowlist"):
+        allowlist = list(toml_cfg["air_allowlist"])
+    else:
+        allowlist = _DEFAULT_ALLOW.split(",")
+
+    port = os.environ.get("REINS_PORT")
+    if not port:
+        api_url = str(toml_cfg.get("api_url", ""))
+        port = api_url.rsplit(":", 1)[-1] if ":" in api_url else "8799"
+
+    return {"council_root": council_root, "allowlist": allowlist, "port": int(port)}
+
+
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    root = os.environ.get("REINS_COUNCIL_ROOT", "~/projects/hapax-spine")
-    _default_allow = "kind,subject,score,ts,task_id,stage,no_go,id,label,layer,status,source,target,relation,res"
-    allow = os.environ.get("REINS_AIR_ALLOWLIST", _default_allow).split(",")
-    uvicorn.run(build_app(root, allow), host="127.0.0.1", port=int(os.environ.get("REINS_PORT", "8799")))
+
+    cfg = instance_config()
+    uvicorn.run(build_app(cfg["council_root"], cfg["allowlist"]), host="127.0.0.1", port=cfg["port"])

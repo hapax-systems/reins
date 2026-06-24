@@ -1,7 +1,11 @@
 # Go build artifacts
 /reins
+/bin/
 *.test
 *.out
+
+# per-machine Makefile overrides (instance, not engine)
+reins.local.mk
 
 # Python
 __pycache__/

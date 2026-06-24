@@ -232,7 +232,7 @@ func (m Model) View() string {
 	b.WriteString(status + "\n")
 	b.WriteString(strings.Repeat("─", 64) + "\n")
 	if dark {
-		b.WriteString("  (spine dark — no fabricated data)\n")
+		b.WriteString("  (spine dark — no fabricated data; is the READ API up?  `make up`)\n")
 	}
 	// the active page (re-targeted body, never a tab swap)
 	switch m.Page {

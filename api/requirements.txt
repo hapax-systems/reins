@@ -1,0 +1,5 @@
+# READ API runtime deps. NOTE: this process also imports the live substrate (shared.coord_*),
+# so it must run in a python that can import the substrate too — on an integrated box, that is the
+# substrate's own venv (which already carries fastapi+uvicorn). Standalone use: pip install these.
+fastapi>=0.110
+uvicorn>=0.29
