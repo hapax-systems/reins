@@ -425,21 +425,33 @@ func yankPickRow(t grammar.Task, air bool) string {
 // NAVIGABLE ([Tab]/[↓] next, [⇧Tab]/[↑] prev), the current candidate carried in the sel swatch;
 // [Enter] accepts it. Dynamic on the active selection (a `paste <value>` candidate leads when a
 // field is selected). The full multi-row grid + sub-menus are the next step (see handoff §9).
+// completionStrip — the fish-style navigable candidate line (the 2nd floor row in command mode).
+// Candidates are revealed EXPLICITLY (chips), the highlighted one rides the sel swatch, a SUB-MENU
+// node is marked `▸` (its accept descends), and the highlighted candidate's Detail trails as the
+// description column. The input string carries the descent path, so this stays stateless.
 func (m Model) completionStrip() string {
-	comps := m.completions()
-	if len(comps) == 0 {
-		return ""
+	cands := m.completionTree()
+	if len(cands) == 0 {
+		return grammar.C("mut", "   (no match — keep typing or [Esc] cancel)")
 	}
-	cur := m.CompIdx % len(comps)
-	out := grammar.C("mut", "  ")
-	for i, c := range comps {
+	cur := m.CompIdx % len(cands)
+	var b strings.Builder
+	b.WriteString(grammar.C("mut", "  "))
+	for i, c := range cands {
+		label := c.Label
+		if len(c.Sub) > 0 {
+			label += "▸" // signifier: accepting this DESCENDS into a sub-menu
+		}
 		if i == cur {
-			out += grammar.SelLabel(" "+c+" ") + " "
+			b.WriteString(grammar.SelLabel(" "+label+" ") + " ")
 		} else {
-			out += grammar.C("mut", c) + " "
+			b.WriteString(grammar.C("mut", label) + " ")
 		}
 	}
-	return out
+	if d := cands[cur].Detail; d != "" {
+		b.WriteString(grammar.C("2nd", "  — "+d))
+	}
+	return b.String()
 }
 
 // Z2b — context rail: the focused registry item unfolded into its seven dimensions, plus the
@@ -504,7 +516,14 @@ func (m Model) viewRail(w int) string {
 }
 
 // Z3 — command/status floor: row1 = bezel + keys + lens; row2 = the command-as-effect line.
+// In command mode the floor is given over to the completion experience: row1 = the prompt + input
+// (with the navigation legend), row2 = the navigable candidate strip.
 func (m Model) viewFloor(w int) string {
+	if m.Mode == ModeCommand {
+		prompt := grammar.C("blu", " :") + " " + m.Input + grammar.C("brt", "█") +
+			grammar.C("mut", "   [Tab/↓]next · [→]fill · [↵]run · [Esc]cancel")
+		return prompt + "\n" + m.completionStrip()
+	}
 	lens := grammar.C("pri", "LOCAL")
 	if m.AIR {
 		lens = grammar.C("fch", "AIR ░allowlist░")
@@ -537,8 +556,6 @@ func (m Model) viewFloor(w int) string {
 	case m.Mode == ModeYank:
 		r2 = grammar.C("brt", " ▶ select a FIELD") +
 			grammar.C("mut", " — type its letter (shown on the row) → command line + kill-ring · [Esc]")
-	case m.Mode == ModeCommand:
-		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + m.completionStrip()
 	case m.Status != "":
 		r2 = " " + grammar.C("mut", m.Status)
 	default:

@@ -132,30 +132,16 @@ func (m Model) blockedIndices() []int {
 // completions: the navigable candidate list for the command line. Dynamic on the active SELECTION —
 // when a field/row is selected, a `paste <value>` candidate is offered first so the operator can
 // inject the selection (the seed of the {{sel}} template language; see the handoff forward-look).
+// completions returns the highlighted-level candidate LABELS — the stable string seam the older
+// tests pin. The real engine (sub-menus, Detail column, dynamic-on-selection) lives in complete.go;
+// this is its flat projection.
 func (m Model) completions() []string {
-	var out []string
-	if t, ok := m.FocusedTask(); ok && m.Sel.Rank == RankField && m.Sel.Field != "" {
-		out = append(out, "paste "+fieldValue(t, m.Sel.Field)) // inject the selected field's value
-	}
-	for _, v := range matchVerbs(m.Input) {
-		out = append(out, v.name)
+	cs := m.completionTree()
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Label
 	}
 	return out
-}
-
-// acceptCompletion: run the highlighted candidate. A bare verb runs (Exec); a "paste <value>"
-// dynamic candidate INJECTS the value into the command line (the {{sel}} template seed).
-func (m Model) acceptCompletion() Model {
-	comps := m.completions()
-	if len(comps) == 0 {
-		return m.Exec(m.Input)
-	}
-	c := comps[m.CompIdx%len(comps)]
-	if rest, isPaste := strings.CutPrefix(c, "paste "); isPaste {
-		m.Input, m.CompIdx = rest, 0
-		return m
-	}
-	return m.Exec(c)
 }
 
 // visibleTasks: the selectable row set — m.Tasks narrowed by the active Filter (id substring) AND
@@ -252,16 +238,39 @@ func (m Model) FoldDynamics(g grammar.Graph, dark bool) Model {
 
 // verbDef + verbs: the command vocabulary, surfaced as a which-key menu at the point of action
 // (recognition over recall — never make the operator memorize the verbs).
-type verbDef struct{ name, gloss string }
+type verbDef struct {
+	name, gloss string
+	args        []Candidate // sub-menu: this verb's argument candidates (nil = a leaf verb, no args)
+}
 
 var verbs = []verbDef{
-	{"events", "live coord event stream"},
-	{"tasks", "the task registry"},
-	{"dynamics", "the system-dynamics map  (+ overview|domain|…|evidence)"},
-	{"legend", "decode the grammar — every glyph/color/cell"},
-	{"help", "the help page"},
-	{"air", "the on-air PII lens  (on|off)"},
-	{"quit", "leave"},
+	{"events", "live coord event stream", nil},
+	{"tasks", "the task registry", nil},
+	{"dynamics", "the system-dynamics map", []Candidate{
+		{Label: "overview", Detail: "the whole map at a glance"},
+		{Label: "domain", Detail: "the domain layer"},
+		{Label: "artifact", Detail: "the artifact layer"},
+		{Label: "runtime", Detail: "the runtime layer"},
+		{Label: "evidence", Detail: "the evidence layer"},
+		{Label: "all", Detail: "every layer, unscaled"},
+	}},
+	{"legend", "decode the grammar — every glyph/color/cell", nil},
+	{"help", "the help page", nil},
+	{"air", "the on-air PII lens", []Candidate{
+		{Label: "on", Detail: "redact non-allowlisted cells (broadcast-safe)"},
+		{Label: "off", Detail: "show everything (LOCAL only)"},
+	}},
+	{"quit", "leave", nil},
+}
+
+// lookupVerb finds a verb by exact name.
+func lookupVerb(name string) (verbDef, bool) {
+	for _, v := range verbs {
+		if v.name == name {
+			return v, true
+		}
+	}
+	return verbDef{}, false
 }
 
 // matchVerbs returns the verbs whose name starts with the first token of the input.
@@ -685,6 +694,8 @@ func (m Model) updateCommand(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.CompIdx = (m.CompIdx - 1 + len(c)) % len(c)
 		}
 		return m, nil
+	case tea.KeyRight: // fish-style accept INTO the line (descend a sub-menu OR fill), never run
+		return m.fillCompletion(), nil
 	case tea.KeySpace:
 		m.Input, m.CompIdx = m.Input+" ", 0
 		return m, nil
