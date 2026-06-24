@@ -228,6 +228,31 @@ func RenderDynamics(g Graph, airOn bool) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// RenderHelp: the static discoverability page — every page, verb, and key on one screen.
+// Discoverability is a cockpit principle; the cockpit documents itself.
+func RenderHelp() string {
+	return strings.Join([]string{
+		"REINS — one cockpit for the whole delivery lifecycle.",
+		"",
+		"PAGES",
+		"  :events            live coord event stream (scored, glyph grammar)",
+		"  :tasks             the task registry (live projection)",
+		"  :dynamics [scale]  the system-dynamics map as layered ASCII",
+		"                     scale = overview|domain|artifact|runtime|evidence|1..5|all",
+		"  :help              this page",
+		"",
+		"COMMAND   ([:] opens the command line — Enter runs, Esc cancels)",
+		"  :air on|off        the PII-safe on-air lens (default-deny redaction)",
+		"  :quit              leave",
+		"",
+		"KEYS",
+		"  [:] command   [1] events  [2] tasks  [3] dynamics  [4] help",
+		"  [a] AIR lens  [q] quit",
+		"",
+		"On AIR, every non-allowlisted cell renders ▒▒▒ — safe for the livestream.",
+	}, "\n")
+}
+
 func pad(s string, n int) string {
 	if len(s) >= n {
 		return s[:n]

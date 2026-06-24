@@ -13,6 +13,7 @@ const (
 	PageEvents   = 0
 	PageTasks    = 1
 	PageDynamics = 2
+	PageHelp     = 3
 )
 
 const (
@@ -110,7 +111,7 @@ func (m Model) Exec(line string) Model {
 		}
 		m.Status = fmt.Sprintf("air %v", m.AIR)
 	case "help", "h", "?":
-		m.Status = "verbs: events tasks air[on|off] help quit"
+		m.Page, m.Status = PageHelp, ":help"
 	case "quit", "q":
 		m.Quitting, m.Status = true, "bye"
 	default:
@@ -172,6 +173,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "3": // :dynamics system-dynamics-map page
 			m.Page = PageDynamics
 			return m, nil
+		case "4": // :help discoverability page
+			m.Page = PageHelp
+			return m, nil
 		}
 	}
 	return m, nil
@@ -217,6 +221,8 @@ func (m Model) View() string {
 		pageName, n, dark = "tasks", len(m.Tasks), m.TasksDark
 	case PageDynamics:
 		pageName, n, dark = "dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark
+	case PageHelp:
+		pageName, n, dark = "help", 0, false
 	}
 	// vital frame: status bar (trouble-appears: dark shows here)
 	status := fmt.Sprintf("%s  %s  :%s  n:%d", m.Title, mode, pageName, n)
@@ -239,6 +245,8 @@ func (m Model) View() string {
 		if !dark {
 			b.WriteString(grammar.RenderDynamics(m.Dynamics.AtResolution(m.DynScale), m.AIR) + "\n")
 		}
+	case PageHelp:
+		b.WriteString(grammar.RenderHelp() + "\n")
 	default:
 		for _, ev := range m.Events {
 			b.WriteString(grammar.RenderEventRow(ev, m.AIR) + "\n")
@@ -252,6 +260,6 @@ func (m Model) View() string {
 	case m.Status != "":
 		b.WriteString("  " + m.Status + "\n")
 	}
-	b.WriteString("[:]cmd [1]events [2]tasks [3]dyn  [a]AIR  [q]quit")
+	b.WriteString("[:]cmd [1]events [2]tasks [3]dyn [4]help  [a]AIR  [q]quit")
 	return b.String()
 }

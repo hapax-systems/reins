@@ -73,6 +73,17 @@ func TestExecUnknownIsInertButReported(t *testing.T) {
 	}
 }
 
+func TestExecHelpOpensHelpPage(t *testing.T) {
+	m := New("REINS").Exec("help")
+	if m.Page != PageHelp {
+		t.Fatal("exec :help must open the help page")
+	}
+	v := m.View()
+	if !strings.Contains(v, ":help") || !strings.Contains(v, ":dynamics") || !strings.Contains(v, "[a] AIR") {
+		t.Fatalf("help page must list pages + keys: %q", v)
+	}
+}
+
 func TestExecQuitFlags(t *testing.T) {
 	if !New("REINS").Exec("quit").Quitting {
 		t.Fatal("exec :quit must set the Quitting flag (Update turns it into tea.Quit)")
