@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	PageEvents = 0
-	PageTasks  = 1
+	PageEvents   = 0
+	PageTasks    = 1
+	PageDynamics = 2
 )
 
 const (
@@ -19,17 +20,19 @@ const (
 )
 
 type Model struct {
-	Title      string
-	Page       int
-	Events     []grammar.Event
-	Tasks      []grammar.Task
-	EventsDark bool
-	TasksDark  bool
-	AIR        bool // the AIR lens
-	Mode       int  // ModeNormal | ModeCommand
-	Input      string
-	Status     string // last command result / error (one line, above the hint)
-	Quitting   bool   // Exec(:quit) sets this; Update turns it into tea.Quit
+	Title        string
+	Page         int
+	Events       []grammar.Event
+	Tasks        []grammar.Task
+	Dynamics     grammar.Graph
+	EventsDark   bool
+	TasksDark    bool
+	DynamicsDark bool
+	AIR          bool // the AIR lens
+	Mode         int  // ModeNormal | ModeCommand
+	Input        string
+	Status       string // last command result / error (one line, above the hint)
+	Quitting     bool   // Exec(:quit) sets this; Update turns it into tea.Quit
 }
 
 func New(title string) Model { return Model{Title: title} }
@@ -45,6 +48,13 @@ func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 func (m Model) FoldTasks(ts []grammar.Task, dark bool) Model {
 	m.Tasks = ts
 	m.TasksDark = dark
+	return m
+}
+
+// FoldDynamics: the pure projection for the :dynamics system-dynamics-map page.
+func (m Model) FoldDynamics(g grammar.Graph, dark bool) Model {
+	m.Dynamics = g
+	m.DynamicsDark = dark
 	return m
 }
 
@@ -64,6 +74,8 @@ func (m Model) Exec(line string) Model {
 		m.Page, m.Status = PageEvents, ":events"
 	case "tasks", "t":
 		m.Page, m.Status = PageTasks, ":tasks"
+	case "dynamics", "d":
+		m.Page, m.Status = PageDynamics, ":dynamics"
 	case "air":
 		switch arg0(args) {
 		case "on":
@@ -102,6 +114,10 @@ type TasksMsg struct {
 	Tasks []grammar.Task
 	Dark  bool
 }
+type DynamicsMsg struct {
+	Graph grammar.Graph
+	Dark  bool
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
@@ -109,6 +125,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.Fold(v.Events, v.Dark), nil
 	case TasksMsg:
 		return m.FoldTasks(v.Tasks, v.Dark), nil
+	case DynamicsMsg:
+		return m.FoldDynamics(v.Graph, v.Dark), nil
 	case tea.KeyMsg:
 		if m.Mode == ModeCommand {
 			return m.updateCommand(v)
@@ -127,6 +145,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "2": // :tasks registry page
 			m.Page = PageTasks
+			return m, nil
+		case "3": // :dynamics system-dynamics-map page
+			m.Page = PageDynamics
 			return m, nil
 		}
 	}
@@ -168,8 +189,11 @@ func (m Model) View() string {
 		mode = "AIR ▮"
 	}
 	pageName, n, dark := "events", len(m.Events), m.EventsDark
-	if m.Page == PageTasks {
+	switch m.Page {
+	case PageTasks:
 		pageName, n, dark = "tasks", len(m.Tasks), m.TasksDark
+	case PageDynamics:
+		pageName, n, dark = "dynamics", len(m.Dynamics.Nodes), m.DynamicsDark
 	}
 	// vital frame: status bar (trouble-appears: dark shows here)
 	status := fmt.Sprintf("%s  %s  :%s  n:%d", m.Title, mode, pageName, n)
@@ -182,12 +206,17 @@ func (m Model) View() string {
 		b.WriteString("  (spine dark — no fabricated data)\n")
 	}
 	// the active page (re-targeted body, never a tab swap)
-	if m.Page == PageTasks {
+	switch m.Page {
+	case PageTasks:
 		b.WriteString(grammar.RenderTaskHeader() + "\n")
 		for _, t := range m.Tasks {
 			b.WriteString(grammar.RenderTaskRow(t, m.AIR) + "\n")
 		}
-	} else {
+	case PageDynamics:
+		if !dark {
+			b.WriteString(grammar.RenderDynamics(m.Dynamics, m.AIR) + "\n")
+		}
+	default:
 		for _, ev := range m.Events {
 			b.WriteString(grammar.RenderEventRow(ev, m.AIR) + "\n")
 		}
@@ -200,6 +229,6 @@ func (m Model) View() string {
 	case m.Status != "":
 		b.WriteString("  " + m.Status + "\n")
 	}
-	b.WriteString("[:]cmd [1]events [2]tasks  [a]AIR  [q]quit")
+	b.WriteString("[:]cmd [1]events [2]tasks [3]dyn  [a]AIR  [q]quit")
 	return b.String()
 }

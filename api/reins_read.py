@@ -63,6 +63,33 @@ def to_task(tid: str, t: dict, allowlist: list[str]) -> dict:
     return {**fields, "air": classify_air(fields, allowlist)}
 
 
+def to_node(n: dict, allowlist: list[str]) -> dict:
+    fields = {
+        "id": str(n.get("id", "")), "label": str(n.get("label", "")),
+        "kind": str(n.get("kind", "")), "layer": str(n.get("layer", "")),
+        "status": str(n.get("status", "")), "res": str(n.get("resolution", "")),
+    }
+    return {**fields, "air": classify_air(fields, allowlist)}
+
+
+def to_edge(e: dict, allowlist: list[str]) -> dict:
+    fields = {
+        "source": str(e.get("source", "")), "target": str(e.get("target", "")),
+        "relation": str(e.get("relation", "")), "status": str(e.get("status", "")),
+    }
+    return {**fields, "air": classify_air(fields, allowlist)}
+
+
+def _seed(council_root: str) -> dict:
+    """The curated system-dynamics map (council-root-relative; instance-config pattern).
+    This is the source :dynamics renders — it obsoletes the standalone :8765 cytoscape viewer."""
+    import json
+    root = os.path.expanduser(council_root)
+    path = os.path.join(root, "docs", "architecture", "system-dynamics-map.seed.json")
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def _projection(council_root: str) -> dict:
     root = os.path.expanduser(council_root)
     if root not in sys.path:
@@ -106,11 +133,28 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
         tasks = [to_task(tid, t, allowlist) for tid, t in (proj.get("tasks") or {}).items()]
         return {"dark": False, "tasks": tasks}
 
+    @app.get("/read/dynamics")
+    def read_dynamics() -> dict:
+        try:
+            seed = _seed(council_root)
+        except Exception as e:  # honest-dark
+            return {"dark": True, "error": str(e), "layers": [], "nodes": [], "edges": []}
+        layers = [{"id": str(L.get("id", "")), "label": str(L.get("label", ""))} for L in (seed.get("layers") or [])]
+        return {
+            "dark": False,
+            "map_id": str(seed.get("map_id", "")),
+            "thesis": str(seed.get("thesis", "")),
+            "layers": layers,
+            "nodes": [to_node(n, allowlist) for n in (seed.get("nodes") or [])],
+            "edges": [to_edge(e, allowlist) for e in (seed.get("edges") or [])],
+        }
+
     return app
 
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
     root = os.environ.get("REINS_COUNCIL_ROOT", "~/projects/hapax-spine")
-    allow = os.environ.get("REINS_AIR_ALLOWLIST", "kind,subject,score,ts,task_id,stage,no_go").split(",")
+    _default_allow = "kind,subject,score,ts,task_id,stage,no_go,id,label,layer,status,source,target,relation,res"
+    allow = os.environ.get("REINS_AIR_ALLOWLIST", _default_allow).split(",")
     uvicorn.run(build_app(root, allow), host="127.0.0.1", port=int(os.environ.get("REINS_PORT", "8799")))

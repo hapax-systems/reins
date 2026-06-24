@@ -11,6 +11,40 @@ func sample() Event {
 		AIR: map[string]string{"subject": "ok", "actor": "deny", "summary": "deny"}}
 }
 
+func dynGraph() Graph {
+	return Graph{
+		Layers: []Layer{{ID: "semantic-backbone", Label: "Semantic Backbone"}},
+		Nodes: []Node{{ID: "rdf-owl-kg", Label: "RDF/OWL KG", Layer: "semantic-backbone", Status: "asserted",
+			AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}}},
+		Edges: []Edge{{Source: "rdf-owl-kg", Target: "shacl", Relation: "validated_by", Status: "asserted",
+			AIR: map[string]string{"target": "ok", "relation": "ok", "status": "ok"}}},
+	}
+}
+
+func TestRenderDynamicsHasLayerNodeEdge(t *testing.T) {
+	v := RenderDynamics(dynGraph(), false)
+	for _, want := range []string{"SEMANTIC BACKBONE", "rdf-owl-kg", statusGlyph("asserted", nil, false), "shacl", "validated_by"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("dynamics render missing %q:\n%s", want, v)
+		}
+	}
+}
+
+func TestRenderDynamicsAIRRedactsLabelAndStatusGlyph(t *testing.T) {
+	g := Graph{
+		Layers: []Layer{{ID: "L", Label: "L"}},
+		Nodes: []Node{{ID: "n1", Label: "Secret Label", Layer: "L", Status: "asserted",
+			AIR: map[string]string{"id": "ok", "label": "deny", "status": "deny"}}},
+	}
+	v := RenderDynamics(g, true)
+	if strings.Contains(v, "Secret Label") {
+		t.Fatalf("AIR leaked a denied node label: %q", v)
+	}
+	if !strings.Contains(v, "▒") {
+		t.Fatalf("AIR must redact the denied status glyph: %q", v)
+	}
+}
+
 func TestCompactTS(t *testing.T) {
 	cases := map[string]string{
 		"2026-06-24T01:53:07Z":        "01:53:07",

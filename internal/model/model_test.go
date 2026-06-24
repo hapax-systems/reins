@@ -88,6 +88,22 @@ func TestCommandModeViewEchoesBuffer(t *testing.T) {
 	}
 }
 
+func TestDynamicsPageRendersViaExec(t *testing.T) {
+	g := grammar.Graph{
+		Layers: []grammar.Layer{{ID: "L", Label: "Backbone"}},
+		Nodes: []grammar.Node{{ID: "rdf-owl-kg", Label: "KG", Layer: "L", Status: "asserted",
+			AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}}},
+	}
+	m := New("REINS").FoldDynamics(g, false).Exec("dynamics")
+	if m.Page != PageDynamics {
+		t.Fatal("exec :dynamics must switch to the dynamics page")
+	}
+	v := m.View()
+	if !strings.Contains(v, ":dynamics") || !strings.Contains(v, "BACKBONE") || !strings.Contains(v, "rdf-owl-kg") {
+		t.Fatalf("dynamics page should render the map bands + nodes: %q", v)
+	}
+}
+
 func TestTasksPageRenders(t *testing.T) {
 	m := New("REINS").FoldTasks([]grammar.Task{
 		{TaskID: "x-1", Stage: "S6", AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}},

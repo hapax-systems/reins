@@ -25,11 +25,20 @@ func fetchTasksOnce(url string) tea.Msg {
 	return model.TasksMsg{Tasks: ts, Dark: dark}
 }
 
+// fetchDynamicsOnce: one system-dynamics-map fetch -> a DynamicsMsg.
+func fetchDynamicsOnce(url string) tea.Msg {
+	g, dark, _ := api.FetchDynamics(url)
+	return model.DynamicsMsg{Graph: g, Dark: dark}
+}
+
 func eventsTick(url string) tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return fetchOnce(url) })
 }
 func tasksTick(url string) tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return fetchTasksOnce(url) })
+}
+func dynamicsTick(url string) tea.Cmd { // the map is near-static -> a slow refresh suffices
+	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return fetchDynamicsOnce(url) })
 }
 
 type root struct {
@@ -41,7 +50,8 @@ func (r root) Init() tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg { return fetchOnce(r.url) },
 		func() tea.Msg { return fetchTasksOnce(r.url) },
-		eventsTick(r.url), tasksTick(r.url),
+		func() tea.Msg { return fetchDynamicsOnce(r.url) },
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url),
 	)
 }
 
@@ -53,6 +63,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, eventsTick(r.url) // re-arm the events poll/re-fold loop
 	case model.TasksMsg:
 		return r, tasksTick(r.url) // re-arm the registry poll/re-fold loop
+	case model.DynamicsMsg:
+		return r, dynamicsTick(r.url) // re-arm the map poll/re-fold loop
 	}
 	return r, cmd // propagate the model's cmd (e.g. tea.Quit on [q])
 }
@@ -78,11 +90,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
 		evs, ed, _ := api.FetchEvents(cfg.APIURL)
 		ts, td, _ := api.FetchTasks(cfg.APIURL)
-		m := model.New("REINS").Fold(evs, ed).FoldTasks(ts, td)
+		dg, dd, _ := api.FetchDynamics(cfg.APIURL)
+		m := model.New("REINS").Fold(evs, ed).FoldTasks(ts, td).FoldDynamics(dg, dd)
 		for _, a := range os.Args[2:] {
 			switch {
 			case a == "tasks":
 				m.Page = model.PageTasks
+			case a == "dynamics":
+				m.Page = model.PageDynamics
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless

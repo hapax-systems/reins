@@ -112,6 +112,96 @@ func RenderTaskRow(t Task, airOn bool) string {
 	return fmt.Sprintf("%s %s %s %s", Glyph("task.closed"), id, stage, nogo)
 }
 
+// --- :dynamics — the system-dynamics map (obsoletes the standalone :8765 cytoscape viewer) ---
+
+// Layer / Node / Edge mirror reins_read's to_node/to_edge + the seed's layer list.
+type Layer struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+type Node struct {
+	ID     string            `json:"id"`
+	Label  string            `json:"label"`
+	Kind   string            `json:"kind"`
+	Layer  string            `json:"layer"`
+	Status string            `json:"status"`
+	Res    string            `json:"res"`
+	AIR    map[string]string `json:"air"`
+}
+type Edge struct {
+	Source   string            `json:"source"`
+	Target   string            `json:"target"`
+	Relation string            `json:"relation"`
+	Status   string            `json:"status"`
+	AIR      map[string]string `json:"air"`
+}
+type Graph struct {
+	MapID  string  `json:"map_id"`
+	Thesis string  `json:"thesis"`
+	Layers []Layer `json:"layers"`
+	Nodes  []Node  `json:"nodes"`
+	Edges  []Edge  `json:"edges"`
+}
+
+// statusGlyph: provenance as a confidence ladder — filled = solid, open = tentative (the seed's
+// status_kinds). The glyph IS the status field, so it is redacted when status is denied on air.
+var statusGlyphs = map[string]string{
+	"asserted": "●", "observed": "◉", "inferred": "◐",
+	"simulated": "◍", "rendered": "◌", "candidate": "○",
+}
+
+func statusGlyph(status string, air map[string]string, airOn bool) string {
+	if airOn && air["status"] != "ok" {
+		return "▒"
+	}
+	if g, ok := statusGlyphs[status]; ok {
+		return g
+	}
+	return "·"
+}
+
+// RenderDynamics: the system-dynamics map as layered ASCII adjacency. Bands = layers (in seed
+// order); each node shows its provenance glyph + id + label, with outgoing edges as an indented
+// adjacency tree (├→ / └→ target (relation)). Deterministic — seed order preserved, no sort.
+// The research-recommended stage-aware column-rail 2D layout is the planned aesthetic iteration;
+// this is the honest, complete v1 (every node + every edge, obsoleting the :8765 viewer).
+func RenderDynamics(g Graph, airOn bool) string {
+	if len(g.Nodes) == 0 {
+		return "  (no map)"
+	}
+	out := map[string][]Edge{} // outgoing edges indexed by source id
+	for _, e := range g.Edges {
+		out[e.Source] = append(out[e.Source], e)
+	}
+	var b strings.Builder
+	for _, L := range g.Layers {
+		dashes := 54 - len(L.Label)
+		if dashes < 1 {
+			dashes = 1
+		}
+		b.WriteString("── " + strings.ToUpper(L.Label) + " " + strings.Repeat("─", dashes) + "\n")
+		for _, n := range g.Nodes {
+			if n.Layer != L.ID {
+				continue
+			}
+			id := redact(n.AIR, "id", pad(n.ID, 22), airOn)
+			label := redact(n.AIR, "label", n.Label, airOn)
+			b.WriteString(fmt.Sprintf("%s %s  %s\n", statusGlyph(n.Status, n.AIR, airOn), id, label))
+			es := out[n.ID]
+			for i, e := range es {
+				conn := "├→"
+				if i == len(es)-1 {
+					conn = "└→"
+				}
+				tgt := redact(e.AIR, "target", pad(e.Target, 20), airOn)
+				rel := redact(e.AIR, "relation", e.Relation, airOn)
+				b.WriteString(fmt.Sprintf("   %s %s (%s)\n", conn, tgt, rel))
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func pad(s string, n int) string {
 	if len(s) >= n {
 		return s[:n]

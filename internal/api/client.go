@@ -50,3 +50,24 @@ func FetchTasks(url string) ([]grammar.Task, bool, error) {
 	}
 	return r.Tasks, r.Dark, nil
 }
+
+type dynamicsResp struct {
+	Dark   bool `json:"dark"`
+	Error  string `json:"error"`
+	grammar.Graph
+}
+
+// FetchDynamics GETs the system-dynamics map. Returns (graph, dark, err).
+func FetchDynamics(url string) (grammar.Graph, bool, error) {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(url + "/read/dynamics")
+	if err != nil {
+		return grammar.Graph{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var r dynamicsResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return grammar.Graph{}, true, err
+	}
+	return r.Graph, r.Dark, nil
+}

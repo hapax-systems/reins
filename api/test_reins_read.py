@@ -1,4 +1,4 @@
-from reins_read import score_event, classify_air, to_event, to_task
+from reins_read import score_event, classify_air, to_event, to_task, to_node, to_edge
 
 
 def test_score_recency_and_kind():
@@ -25,3 +25,18 @@ def test_to_task_shape_and_air():
     out = to_task("x-1", t, allowlist=["task_id", "stage", "no_go"])
     assert out["task_id"] == "x-1" and out["stage"] == "S6" and out["no_go"] == "blocked"
     assert out["air"]["task_id"] == "ok" and out["air"]["authority_case"] == "deny"
+
+
+def test_to_node_shape_and_air():
+    n = {"id": "rdf-owl-kg", "label": "RDF / OWL KG", "kind": "backbone",
+         "layer": "semantic-backbone", "status": "asserted", "resolution": 1}
+    out = to_node(n, allowlist=["id", "label", "layer", "status"])
+    assert out["id"] == "rdf-owl-kg" and out["layer"] == "semantic-backbone" and out["status"] == "asserted"
+    assert out["air"]["id"] == "ok" and out["air"]["kind"] == "deny"  # kind not allowlisted -> deny
+
+
+def test_to_edge_shape_and_air():
+    e = {"source": "dmn", "target": "drd", "relation": "defines", "status": "asserted", "confidence": 1.0}
+    out = to_edge(e, allowlist=["source", "target", "relation"])
+    assert out["source"] == "dmn" and out["target"] == "drd" and out["relation"] == "defines"
+    assert out["air"]["relation"] == "ok" and out["air"]["status"] == "deny"
