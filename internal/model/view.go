@@ -39,7 +39,7 @@ func (m Model) View() string {
 	rows = append(rows, fitWidth(m.viewTitle(w), w))
 	rows = append(rows, fitBlock(m.viewVital(w), w, 2)...)
 	rows = append(rows, m.rule(mainW, railW, "┬"))
-	main := fitBlock(m.bodyFor(mainW), mainW, midH)
+	main := fitBlock(m.bodyFor(mainW, midH), mainW, midH)
 	if railW > 0 {
 		rail := fitBlock(m.viewRail(railW), railW, midH)
 		div := grammar.C("border", "│")
@@ -133,15 +133,12 @@ func (m Model) viewVital(w int) string {
 }
 
 // Z2a — the main pane body: the active page, rendered by the cell grammar.
-func (m Model) bodyFor(w int) string {
+func (m Model) bodyFor(w, h int) string {
 	_, _, dark := m.pageMeta()
 	var b strings.Builder
 	switch m.Page {
 	case PageTasks:
-		b.WriteString(grammar.RenderTaskHeader() + "\n")
-		for _, t := range m.Tasks {
-			b.WriteString(grammar.RenderTaskRow(t, m.AIR) + "\n")
-		}
+		return m.taskBody(w, h)
 	case PageDynamics:
 		if dark {
 			b.WriteString(darkHint())
@@ -165,15 +162,92 @@ func darkHint() string {
 	return grammar.C("mut", "(spine dark — no fabricated data; is the READ API up?  `make up`)\n")
 }
 
-// Z2b — context rail (placeholder; INC-4 fills it with the focused item's 7-dim + relationships).
+// taskBody windows the registry to the visible height, keeping the focused row in view, with a
+// 1-col focus gutter (▌ marks the focused row).
+func (m Model) taskBody(w, h int) string {
+	visible := h - 1 // header takes a row
+	if visible < 1 {
+		visible = 1
+	}
+	off := m.scrollOffset(visible)
+	var b strings.Builder
+	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
+	for i := off; i < off+visible && i < len(m.Tasks); i++ {
+		mark := " "
+		if i == m.Focus {
+			mark = grammar.C("brt", "▌")
+		}
+		b.WriteString(mark + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
+	}
+	return b.String()
+}
+
+func (m Model) scrollOffset(visible int) int {
+	n := len(m.Tasks)
+	if n <= visible || m.Focus < visible {
+		return 0
+	}
+	off := m.Focus - visible + 1 // focus sits at the last visible row
+	if mx := n - visible; off > mx {
+		off = mx
+	}
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
+func shortStage2(s string) string {
+	if i := strings.IndexByte(s, '_'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "·····"
+	}
+	return s
+}
+
+// Z2b — context rail: the focused registry item unfolded into its seven dimensions, plus the
+// relationship web and mini :dynamics (structured-silence until their data sources land).
 func (m Model) viewRail(w int) string {
-	pageName, _, _ := m.pageMeta()
-	return grammar.C("2nd", " context") + "\n" +
-		grammar.C("mut", " (INC-4: focused item") + "\n" +
-		grammar.C("mut", "  · 7 dimensions") + "\n" +
-		grammar.C("mut", "  · relationship web") + "\n" +
-		grammar.C("mut", "  · mini :dynamics)") + "\n\n " +
-		grammar.C("blu", "page ")+grammar.C("pri", pageName)
+	t, ok := m.FocusedTask()
+	if !ok {
+		return grammar.C("mut", " (no selection — [j/k] to move)")
+	}
+	id := t.TaskID
+	if r := []rune(id); len(r) > w-3 {
+		id = string(r[:w-3])
+	}
+	ctok := grammar.SeverityToken(t.Criticality)
+	ntok := "grn"
+	if t.PredictedStage == "hold" {
+		ntok = "red"
+	}
+	line := func(label, val, tok string) string {
+		return " " + grammar.C("mut", fmt.Sprintf("%-6s", label)) + grammar.C(tok, val)
+	}
+	rule := grammar.C("border", " "+strings.Repeat("─", w-2))
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "◆ "+id) + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(line("state", orDash(shortStage2(t.Stage)), ctok) + "\n")
+	b.WriteString(line("was", orDash(shortStage2(t.PriorStage)), "mut") + "\n")
+	b.WriteString(line("next", orDash(t.PredictedStage), ntok) + "\n")
+	b.WriteString(line("crit", orDash(t.Criticality), ctok) + "\n")
+	b.WriteString(line("who", orDash(t.Owner), grammar.LaneToken(t.Owner)) + "\n")
+	b.WriteString(line("fresh", fmt.Sprintf("%.2f", t.Freshness), "pri") + "\n")
+	b.WriteString(line("rel", fmt.Sprintf("●%d", t.RelCount), "blu") + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(grammar.C("2nd", " relationships") + "\n")
+	b.WriteString(grammar.C("mut", " (no task-edge source yet)") + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(grammar.C("2nd", " :dynamics neighborhood") + "\n")
+	b.WriteString(grammar.C("mut", " (INC-6 mini-map)") + "\n")
+	return b.String()
 }
 
 // Z3 — command/status floor: row1 = bezel + keys + lens; row2 = the command-as-effect line.
@@ -182,7 +256,16 @@ func (m Model) viewFloor(w int) string {
 	if m.AIR {
 		lens = grammar.C("fch", "AIR ░allowlist░")
 	}
-	r1 := " " + grammar.C("yel", "[:]") + "cmd " + grammar.C("yel", "[1-4]") + "pages " +
+	focus := grammar.C("mut", "—")
+	if t, ok := m.FocusedTask(); ok {
+		fid := t.TaskID
+		if r := []rune(fid); len(r) > 24 {
+			fid = string(r[:24])
+		}
+		focus = grammar.C("brt", fid)
+	}
+	r1 := " " + grammar.C("mut", "focus ") + focus + grammar.C("mut", " │ ") +
+		grammar.C("yel", "[j/k]") + "move " + grammar.C("yel", "[:]") + "cmd " +
 		grammar.C("yel", "[a]") + "AIR " + grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {

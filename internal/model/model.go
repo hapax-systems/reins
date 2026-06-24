@@ -38,6 +38,33 @@ type Model struct {
 	DynScale     int    // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
 	Width        int    // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height       int
+	Focus        int    // selected row index into m.Tasks (the registry cursor; the rail tracks it)
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// focusMax is the highest valid registry focus index (0 when empty).
+func (m Model) focusMax() int {
+	if len(m.Tasks) == 0 {
+		return 0
+	}
+	return len(m.Tasks) - 1
+}
+
+// FocusedTask returns the task under the registry cursor, ok=false if none.
+func (m Model) FocusedTask() (grammar.Task, bool) {
+	if m.Focus < 0 || m.Focus >= len(m.Tasks) {
+		return grammar.Task{}, false
+	}
+	return m.Tasks[m.Focus], true
 }
 
 // dynScales maps the seed's view_scale names to their resolution index (1=overview … 5=evidence).
@@ -180,6 +207,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "4": // :help discoverability page
 			m.Page = PageHelp
+			return m, nil
+		case "j", "down": // move the registry focus cursor (the rail tracks it)
+			m.Focus = clamp(m.Focus+1, 0, m.focusMax())
+			return m, nil
+		case "k", "up":
+			m.Focus = clamp(m.Focus-1, 0, m.focusMax())
+			return m, nil
+		case "g": // top
+			m.Focus = 0
+			return m, nil
+		case "G": // bottom
+			m.Focus = m.focusMax()
 			return m, nil
 		}
 	}

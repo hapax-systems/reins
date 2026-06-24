@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
@@ -20,6 +21,44 @@ func TestViewFillsExactFrame(t *testing.T) {
 			t.Fatalf("line %d exceeds 120 cols: %d", i, ansi.StringWidth(ln))
 		}
 	}
+}
+
+func TestFocusNavigationAndRail(t *testing.T) {
+	tasks := []grammar.Task{
+		{TaskID: "alpha-1", Stage: "S5_DESIGN", PriorStage: "S4_PLAN", PredictedStage: "S6", Owner: "cc-a", Criticality: "warn",
+			AIR: map[string]string{"task_id": "ok", "stage": "ok", "prior_stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok", "freshness": "ok"}},
+		{TaskID: "beta-2", Stage: "S7_RELEASE", PredictedStage: "hold", Owner: "cc-b", Criticality: "crit",
+			AIR: map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok", "freshness": "ok"}},
+	}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	// j moves focus down; k clamps at 0; G to bottom
+	m = step(m, "j")
+	if m.Focus != 1 {
+		t.Fatalf("j should move focus to 1, got %d", m.Focus)
+	}
+	m = step(step(m, "k"), "k") // clamp at 0
+	if m.Focus != 0 {
+		t.Fatalf("k should clamp focus at 0, got %d", m.Focus)
+	}
+	m = step(m, "G")
+	if m.Focus != 1 {
+		t.Fatalf("G should jump to last (1), got %d", m.Focus)
+	}
+	// the rail unfolds the focused task's dims (beta-2 at focus 1: hold, crit, cc-b)
+	v := m.View()
+	for _, want := range []string{"beta-2", "hold", "crit", "cc-b"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("rail should unfold focused task dim %q:\n%s", want, v)
+		}
+	}
+}
+
+func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func step(m Model, k string) Model {
+	nm, _ := m.Update(key(k))
+	return nm.(Model)
 }
 
 func TestViewNarrowDegradesNoPanic(t *testing.T) {
