@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -79,11 +80,13 @@ func main() {
 		ts, td, _ := api.FetchTasks(cfg.APIURL)
 		m := model.New("REINS").Fold(evs, ed).FoldTasks(ts, td)
 		for _, a := range os.Args[2:] {
-			switch a {
-			case "tasks":
+			switch {
+			case a == "tasks":
 				m.Page = model.PageTasks
-			case "--air":
+			case a == "--air":
 				m.AIR = true
+			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless
+				m = m.Exec(strings.TrimPrefix(a, "cmd:"))
 			}
 		}
 		fmt.Println(m.View())

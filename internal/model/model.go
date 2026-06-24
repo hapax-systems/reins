@@ -13,6 +13,11 @@ const (
 	PageTasks  = 1
 )
 
+const (
+	ModeNormal  = 0 // hotkeys + page navigation
+	ModeCommand = 1 // the command line is focused (typing a verb)
+)
+
 type Model struct {
 	Title      string
 	Page       int
@@ -21,6 +26,10 @@ type Model struct {
 	EventsDark bool
 	TasksDark  bool
 	AIR        bool // the AIR lens
+	Mode       int  // ModeNormal | ModeCommand
+	Input      string
+	Status     string // last command result / error (one line, above the hint)
+	Quitting   bool   // Exec(:quit) sets this; Update turns it into tea.Quit
 }
 
 func New(title string) Model { return Model{Title: title} }
@@ -37,6 +46,49 @@ func (m Model) FoldTasks(ts []grammar.Task, dark bool) Model {
 	m.Tasks = ts
 	m.TasksDark = dark
 	return m
+}
+
+// Exec: the command-as-effect core — a typed command line folds into one pure model transition.
+// Today the verbs are local read-effects (page / AIR / quit); write-verbs will later route through
+// the unified-API COMMAND surface, but the grammar (every command is ONE pure fold) is fixed here.
+func (m Model) Exec(line string) Model {
+	m.Input = ""
+	m.Mode = ModeNormal
+	f := strings.Fields(strings.TrimSpace(line))
+	if len(f) == 0 {
+		return m
+	}
+	verb, args := f[0], f[1:]
+	switch verb {
+	case "events", "e":
+		m.Page, m.Status = PageEvents, ":events"
+	case "tasks", "t":
+		m.Page, m.Status = PageTasks, ":tasks"
+	case "air":
+		switch arg0(args) {
+		case "on":
+			m.AIR = true
+		case "off":
+			m.AIR = false
+		default:
+			m.AIR = !m.AIR
+		}
+		m.Status = fmt.Sprintf("air %v", m.AIR)
+	case "help", "h", "?":
+		m.Status = "verbs: events tasks air[on|off] help quit"
+	case "quit", "q":
+		m.Quitting, m.Status = true, "bye"
+	default:
+		m.Status = "unknown command: " + verb
+	}
+	return m
+}
+
+func arg0(a []string) string {
+	if len(a) > 0 {
+		return a[0]
+	}
+	return ""
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -58,7 +110,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TasksMsg:
 		return m.FoldTasks(v.Tasks, v.Dark), nil
 	case tea.KeyMsg:
+		if m.Mode == ModeCommand {
+			return m.updateCommand(v)
+		}
 		switch v.String() {
+		case ":": // enter the command line (the command-as-effect surface)
+			m.Mode, m.Input, m.Status = ModeCommand, "", ""
+			return m, nil
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "a": // toggle the AIR lens
@@ -71,6 +129,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Page = PageTasks
 			return m, nil
 		}
+	}
+	return m, nil
+}
+
+// updateCommand: key handling while the command line is focused. Enter executes (Exec),
+// Esc cancels, Backspace edits, Space/runes append; quit folds straight to tea.Quit.
+func (m Model) updateCommand(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.Type {
+	case tea.KeyEnter:
+		m = m.Exec(m.Input)
+		if m.Quitting {
+			return m, tea.Quit
+		}
+		return m, nil
+	case tea.KeyEsc:
+		m.Mode, m.Input = ModeNormal, ""
+		return m, nil
+	case tea.KeyBackspace:
+		if n := len(m.Input); n > 0 {
+			m.Input = m.Input[:n-1]
+		}
+		return m, nil
+	case tea.KeySpace:
+		m.Input += " "
+		return m, nil
+	case tea.KeyRunes:
+		m.Input += string(v.Runes)
+		return m, nil
 	}
 	return m, nil
 }
@@ -107,6 +193,13 @@ func (m Model) View() string {
 		}
 	}
 	b.WriteString(strings.Repeat("─", 64) + "\n")
-	b.WriteString("[1]events [2]tasks  [a]AIR  [q]quit")
+	// the command-as-effect surface: focused = echo the buffer; else the last status (if any)
+	switch {
+	case m.Mode == ModeCommand:
+		b.WriteString(": " + m.Input + "█\n")
+	case m.Status != "":
+		b.WriteString("  " + m.Status + "\n")
+	}
+	b.WriteString("[:]cmd [1]events [2]tasks  [a]AIR  [q]quit")
 	return b.String()
 }

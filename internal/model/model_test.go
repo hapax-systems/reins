@@ -44,6 +44,50 @@ func TestDarkStateIsHonest(t *testing.T) {
 	}
 }
 
+func TestExecSwitchesPageAndAIR(t *testing.T) {
+	m := New("REINS")
+	if m.Exec("tasks").Page != PageTasks {
+		t.Fatal("exec :tasks must switch to the registry page")
+	}
+	if m.Exec("events").Page != PageEvents {
+		t.Fatal("exec :events must switch to the events page")
+	}
+	if !m.Exec("air on").AIR {
+		t.Fatal("exec :air on must enable the AIR lens")
+	}
+	on := m
+	on.AIR = true
+	if on.Exec("air off").AIR {
+		t.Fatal("exec :air off must disable the AIR lens")
+	}
+	if !m.Exec("air").AIR {
+		t.Fatal("bare :air must toggle (false -> true)")
+	}
+}
+
+func TestExecUnknownIsInertButReported(t *testing.T) {
+	m := New("REINS")
+	out := m.Exec("frobnicate xyz")
+	if out.Page != m.Page || !strings.Contains(out.Status, "unknown") {
+		t.Fatalf("unknown verb must not mutate state + must report: page=%d status=%q", out.Page, out.Status)
+	}
+}
+
+func TestExecQuitFlags(t *testing.T) {
+	if !New("REINS").Exec("quit").Quitting {
+		t.Fatal("exec :quit must set the Quitting flag (Update turns it into tea.Quit)")
+	}
+}
+
+func TestCommandModeViewEchoesBuffer(t *testing.T) {
+	m := New("REINS")
+	m.Mode = ModeCommand
+	m.Input = "air on"
+	if !strings.Contains(m.View(), ": air on") {
+		t.Fatalf("command mode must echo the command buffer: %q", m.View())
+	}
+}
+
 func TestTasksPageRenders(t *testing.T) {
 	m := New("REINS").FoldTasks([]grammar.Task{
 		{TaskID: "x-1", Stage: "S6", AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}},
