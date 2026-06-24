@@ -414,10 +414,13 @@ func (m Model) viewRail(w int) string {
 	}
 	rule := grammar.C("border", " "+strings.Repeat("─", w-2))
 	var b strings.Builder
-	// self-context: WHAT this panel is + that it is the cursor row's unfold + WHERE it sits in the
-	// whole (the part shows its place in the whole; ▶ links to the list's selection bar).
-	b.WriteString(" " + grammar.C("brt", "▶ FOCUS") +
-		grammar.C("mut", fmt.Sprintf("  row %d/%d in :tasks", m.Focus+1, len(m.Tasks))) + "\n")
+	// self-context = the lattice BREADCRUMB: WHAT this panel is + the part's place in the whole. The
+	// address descends as the cursor descends (row → field), so you always know where you are.
+	crumb := fmt.Sprintf("Z2▸:tasks▸row %d/%d", m.Focus+1, len(m.Tasks))
+	if m.Sel.Rank == RankField {
+		crumb += "▸field " + m.Sel.Field
+	}
+	b.WriteString(" " + grammar.C("brt", "▶ ") + grammar.C("2nd", crumb) + "\n")
 	b.WriteString(" " + grammar.C("mut", "the selected row, unfolded ↓") + "\n")
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("brt", "◆ "+id) + "\n")
