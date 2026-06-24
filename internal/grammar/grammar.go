@@ -396,6 +396,26 @@ var provGloss = map[string]string{
 	"simulated": "modeled", "rendered": "a generated view", "candidate": "proposed / tentative",
 }
 
+// DynamicsHeader situates the :dynamics graph for a viewer who cannot interact (the livestream
+// audience): the map THESIS (macro reading before the micro) + an always-present inline provenance
+// key so the node confidence-ladder decodes without focusing anything.
+func DynamicsHeader(g Graph, w int) string {
+	var b strings.Builder
+	if g.Thesis != "" {
+		th := g.Thesis
+		if r := []rune(th); len(r) > w-3 {
+			th = string(r[:w-4]) + "…"
+		}
+		b.WriteString(" " + C("2nd", th) + "\n")
+	}
+	key := " " + C("mut", "nodes  ")
+	for _, k := range provOrder {
+		key += C(palette.ProvToken(k), statusGlyphs[k]) + C("mut", " "+k+"   ")
+	}
+	b.WriteString(key + "\n")
+	return b.String()
+}
+
 // RenderLegend decodes every mark in the grammar — glyph + plain-language gloss + a LIVE palette
 // swatch — by iterating the SAME maps the renderers use, so it can never drift. The cure for
 // unsituated novelty: a [?]/:legend keystroke answers "what am I looking at" from any page.

@@ -145,7 +145,8 @@ func (m Model) bodyFor(w, h int) string {
 		if dark {
 			b.WriteString(darkHint())
 		} else {
-			b.WriteString(grammar.RenderColumnRail(m.Dynamics, m.DynScale, m.AIR, w)) // INC-6 2D column-rail
+			b.WriteString(grammar.DynamicsHeader(m.Dynamics, w)) // thesis + inline provenance key (situate)
+			b.WriteString(grammar.RenderColumnRail(m.Dynamics, m.DynScale, m.AIR, w))
 		}
 	case PageHelp:
 		b.WriteString(grammar.RenderHelp())
