@@ -328,35 +328,19 @@ func yankPickRow(t grammar.Task, air bool) string {
 	}
 	out := grammar.C("brt", "▶ yank ")
 	for _, f := range fields {
-		v, ktok := f.val, "yel"
-		if air && t.AIR[f.field] != "ok" {
-			v, ktok = "▒▒▒", "mut"
-		} else if strings.TrimSpace(v) == "" {
+		v := f.val
+		if air && t.AIR[f.field] != "ok" { // denied on-air: dim, redacted, NO selection swatch
+			out += grammar.C("mut", "["+f.key+"]▒▒▒") + " "
+			continue
+		}
+		if strings.TrimSpace(v) == "" {
 			v = "·"
 		}
-		out += grammar.C(ktok, "["+f.key+"]") + grammar.C("pri", v) + " "
+		out += grammar.SelLabel("["+f.key+"]") + grammar.C("pri", v) + " " // sel swatch (reserved channel)
 	}
 	return strings.TrimRight(out, " ")
 }
 
-// yankMenu: the field pick-list shown in ModeYank — keys + labels, AIR-denied fields dimmed (a
-// signifier that they are un-yankable on-air).
-func yankMenu(t grammar.Task, air bool) string {
-	fields := []struct{ key, label, field string }{
-		{"i", "id", "task_id"}, {"s", "stage", "stage"}, {"o", "owner", "owner"},
-		{"w", "was", "prior_stage"}, {"n", "next", "predicted_stage"},
-		{"c", "crit", "criticality"}, {"a", "auth", "authority_case"},
-	}
-	out := ""
-	for _, f := range fields {
-		tok := "yel"
-		if air && t.AIR[f.field] != "ok" {
-			tok = "mut" // denied on-air → dimmed, un-yankable
-		}
-		out += grammar.C(tok, "["+f.key+"]"+f.label) + " "
-	}
-	return strings.TrimRight(out, " ")
-}
 
 // whichKey: the transient verb menu shown while the command line is focused — names when several
 // match, the full gloss when one does. Verbs become recognizable, not memorized.
@@ -455,9 +439,8 @@ func (m Model) viewFloor(w int) string {
 	var r2 string
 	switch {
 	case m.Mode == ModeYank:
-		t, _ := m.FocusedTask()
-		r2 = grammar.C("brt", " yank") + grammar.C("mut", " a field of the selected task → command line + kill-ring · pick: ") +
-			yankMenu(t, m.AIR) + grammar.C("mut", " · [Esc]")
+		r2 = grammar.C("brt", " ▶ select a FIELD") +
+			grammar.C("mut", " — type its letter (shown on the row) → command line + kill-ring · [Esc]")
 	case m.Mode == ModeCommand:
 		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + whichKey(m.Input)
 	case m.Status != "":

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hapax-systems/reins/internal/palette"
 )
 
@@ -20,6 +21,16 @@ func C(token, text string) string { return pal.Colorize(token, text) }
 
 // Hex resolves a palette token to its raw hex (for callers that need a background, not just fg).
 func Hex(token string) string { return pal.Hex(token) }
+
+// SelLabel renders a SELECTION swatch — the reserved selection channel. It rides SHAPE/CONTRAST
+// (a bright glyph on a neutral grey block), never a hue, so it cannot collide with the data's
+// criticality-hue / freshness-brightness / ownership-family, and stays legible in grayscale + on-air.
+func SelLabel(text string) string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(pal.Hex("border"))).
+		Foreground(lipgloss.Color(pal.Hex("brt"))).
+		Bold(true).Render(text)
+}
 
 // SeverityToken / LaneToken re-exported so callers color by meaning without importing palette.
 func SeverityToken(sev string) string { return palette.SeverityToken(sev) }
