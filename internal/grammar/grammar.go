@@ -2,6 +2,7 @@ package grammar
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -141,6 +142,31 @@ type Graph struct {
 	Layers []Layer `json:"layers"`
 	Nodes  []Node  `json:"nodes"`
 	Edges  []Edge  `json:"edges"`
+}
+
+// AtResolution returns the sub-graph at view-scale maxRes (the seed's view_scales: 1=overview …
+// 5=evidence); maxRes<=0 means "all". Nodes with res>maxRes drop; edges to dropped nodes drop with
+// them. Pure transform — the cell-grammar's "resolution" / zoom principle, using the map's own model.
+func (g Graph) AtResolution(maxRes int) Graph {
+	if maxRes <= 0 {
+		return g
+	}
+	keep := make(map[string]bool, len(g.Nodes))
+	var nodes []Node
+	for _, n := range g.Nodes {
+		r, _ := strconv.Atoi(n.Res)
+		if r == 0 || r <= maxRes { // unknown res (0) is always kept
+			nodes = append(nodes, n)
+			keep[n.ID] = true
+		}
+	}
+	var edges []Edge
+	for _, e := range g.Edges {
+		if keep[e.Source] && keep[e.Target] {
+			edges = append(edges, e)
+		}
+	}
+	return Graph{MapID: g.MapID, Thesis: g.Thesis, Layers: g.Layers, Nodes: nodes, Edges: edges}
 }
 
 // statusGlyph: provenance as a confidence ladder — filled = solid, open = tentative (the seed's

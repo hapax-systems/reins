@@ -30,6 +30,31 @@ func TestRenderDynamicsHasLayerNodeEdge(t *testing.T) {
 	}
 }
 
+func TestGraphAtResolutionFiltersNodesAndDanglingEdges(t *testing.T) {
+	g := Graph{
+		Layers: []Layer{{ID: "L", Label: "L"}},
+		Nodes: []Node{
+			{ID: "a", Layer: "L", Res: "1"}, // overview
+			{ID: "b", Layer: "L", Res: "3"}, // artifact
+			{ID: "c", Layer: "L", Res: ""},  // unknown -> always kept
+		},
+		Edges: []Edge{
+			{Source: "a", Target: "c"}, // both kept at res<=1
+			{Source: "a", Target: "b"}, // b drops at res<=1 -> edge drops
+		},
+	}
+	at1 := g.AtResolution(1)
+	if len(at1.Nodes) != 2 { // a (res1) + c (unknown)
+		t.Fatalf("AtResolution(1) should keep res<=1 + unknown: got %d", len(at1.Nodes))
+	}
+	if len(at1.Edges) != 1 { // a->c kept; a->b dropped (b filtered)
+		t.Fatalf("AtResolution must drop edges to filtered nodes: got %d", len(at1.Edges))
+	}
+	if len(g.AtResolution(0).Nodes) != 3 {
+		t.Fatal("AtResolution(0) means all")
+	}
+}
+
 func TestRenderDynamicsAIRRedactsLabelAndStatusGlyph(t *testing.T) {
 	g := Graph{
 		Layers: []Layer{{ID: "L", Label: "L"}},

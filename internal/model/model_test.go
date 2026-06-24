@@ -104,6 +104,29 @@ func TestDynamicsPageRendersViaExec(t *testing.T) {
 	}
 }
 
+func TestExecDynamicsScaleFiltersResolution(t *testing.T) {
+	g := grammar.Graph{
+		Layers: []grammar.Layer{{ID: "L", Label: "Backbone"}},
+		Nodes: []grammar.Node{
+			{ID: "hi-res", Label: "deep", Layer: "L", Status: "asserted", Res: "5",
+				AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+			{ID: "overview-node", Label: "top", Layer: "L", Status: "asserted", Res: "1",
+				AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+		},
+	}
+	m := New("REINS").FoldDynamics(g, false).Exec("dynamics overview")
+	if m.Page != PageDynamics || m.DynScale != 1 {
+		t.Fatalf("exec :dynamics overview must set page+scale=1: page=%d scale=%d", m.Page, m.DynScale)
+	}
+	v := m.View()
+	if strings.Contains(v, "hi-res") {
+		t.Fatalf("overview scale must hide res-5 nodes: %q", v)
+	}
+	if !strings.Contains(v, "overview-node") {
+		t.Fatalf("overview scale must keep res-1 nodes: %q", v)
+	}
+}
+
 func TestTasksPageRenders(t *testing.T) {
 	m := New("REINS").FoldTasks([]grammar.Task{
 		{TaskID: "x-1", Stage: "S6", AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}},

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,6 +34,23 @@ type Model struct {
 	Input        string
 	Status       string // last command result / error (one line, above the hint)
 	Quitting     bool   // Exec(:quit) sets this; Update turns it into tea.Quit
+	DynScale     int    // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
+}
+
+// dynScales maps the seed's view_scale names to their resolution index (1=overview … 5=evidence).
+var dynScales = map[string]int{
+	"overview": 1, "domain": 2, "artifact": 3, "runtime": 4, "evidence": 5, "all": 0,
+}
+
+// scaleIndex resolves a scale name or a bare "1".."5" to a resolution index (0 = all/unknown).
+func scaleIndex(s string) int {
+	if n, ok := dynScales[s]; ok {
+		return n
+	}
+	if n, err := strconv.Atoi(s); err == nil && n >= 0 && n <= 5 {
+		return n
+	}
+	return 0
 }
 
 func New(title string) Model { return Model{Title: title} }
@@ -75,7 +93,12 @@ func (m Model) Exec(line string) Model {
 	case "tasks", "t":
 		m.Page, m.Status = PageTasks, ":tasks"
 	case "dynamics", "d":
-		m.Page, m.Status = PageDynamics, ":dynamics"
+		m.Page = PageDynamics
+		if s := arg0(args); s != "" { // :dynamics <scale> — overview|domain|artifact|runtime|evidence|1..5|all
+			m.DynScale, m.Status = scaleIndex(s), ":dynamics @"+s
+		} else {
+			m.Status = ":dynamics"
+		}
 	case "air":
 		switch arg0(args) {
 		case "on":
@@ -193,7 +216,7 @@ func (m Model) View() string {
 	case PageTasks:
 		pageName, n, dark = "tasks", len(m.Tasks), m.TasksDark
 	case PageDynamics:
-		pageName, n, dark = "dynamics", len(m.Dynamics.Nodes), m.DynamicsDark
+		pageName, n, dark = "dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark
 	}
 	// vital frame: status bar (trouble-appears: dark shows here)
 	status := fmt.Sprintf("%s  %s  :%s  n:%d", m.Title, mode, pageName, n)
@@ -214,7 +237,7 @@ func (m Model) View() string {
 		}
 	case PageDynamics:
 		if !dark {
-			b.WriteString(grammar.RenderDynamics(m.Dynamics, m.AIR) + "\n")
+			b.WriteString(grammar.RenderDynamics(m.Dynamics.AtResolution(m.DynScale), m.AIR) + "\n")
 		}
 	default:
 		for _, ev := range m.Events {
