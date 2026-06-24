@@ -154,8 +154,8 @@ type Task struct {
 
 // RenderTaskHeader: the seven-dimension column header.
 func RenderTaskHeader() string {
-	return C("mut", fmt.Sprintf(" %-1s %-3s %-22s %-4s %-4s %-5s %-8s %-4s %s",
-		"s", "rel", "TASK", "STG", "◀was", "→next", "who", "crit", "fr"))
+	return C("mut", fmt.Sprintf(" %-1s %-3s %-22s %-4s %-5s %-5s %-8s %-4s %s",
+		"s", "rel", "TASK", "STG", "was◀", "→next", "who", "crit", "fr"))
 }
 
 // dotsOr: structured-silence — an empty cell is dots at full width (the grid never jitters).
@@ -231,7 +231,13 @@ func RenderTaskRow(t Task, airOn bool) string {
 	}
 	id := C(idTok, dotsOr(redact(t.AIR, "task_id", t.TaskID, airOn), 22))
 	stg := C(ctok, dotsOr(redact(t.AIR, "stage", shortStage(t.Stage), airOn), 4))
-	was := C("mut", dotsOr(redact(t.AIR, "prior_stage", shortStage(t.PriorStage), airOn), 4))
+	// the ◀ travels WITH the prior-stage value (self-distinguishing from the current stage even if
+	// the column header is cropped — the freeze-frame role-expressiveness rule).
+	wasV := shortStage(t.PriorStage)
+	if strings.TrimSpace(wasV) != "" {
+		wasV += "◀"
+	}
+	was := C("mut", dotsOr(redact(t.AIR, "prior_stage", wasV, airOn), 5))
 
 	nxtRaw, ntok := t.PredictedStage, "grn" // now→next predicted chip
 	switch t.PredictedStage {
