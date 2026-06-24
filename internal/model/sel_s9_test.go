@@ -41,8 +41,8 @@ func TestActItemJumpsToBlocker(t *testing.T) {
 	if len(bi) != 2 || bi[0] != 1 || bi[1] != 2 {
 		t.Fatalf("blockedIndices = %v, want [1 2]", bi)
 	}
-	m = step(m, "f")           // hint overlay (Act items labeled 1/2)
-	m = step(m, "2")           // jump to the 2nd blocker (hot/crit, index 2)
+	m = step(m, "f") // hint overlay (Act items labeled 1/2)
+	m = step(m, "2") // jump to the 2nd blocker (hot/crit, index 2)
 	if m.Mode != ModeNormal {
 		t.Fatal("jump should return to normal mode")
 	}

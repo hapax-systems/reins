@@ -108,6 +108,8 @@ func main() {
 				m.Page, m.DoorOpen = model.PageTasks, true
 			case a == "yank":
 				m.Page, m.Mode = model.PageTasks, model.ModeYank
+			case a == "eyank": // events page in yank-pick mode (field letters on the focused event)
+				m.Page, m.Mode = model.PageEvents, model.ModeYank
 			case a == "field":
 				m.Page, m.Sel.Rank, m.Sel.Field = model.PageTasks, model.RankField, "stage"
 			case a == "hint":

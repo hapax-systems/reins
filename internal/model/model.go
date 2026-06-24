@@ -89,6 +89,33 @@ func (m Model) yankField(key string) (field, val string, ok bool) {
 	return "", "", false
 }
 
+// isPrivateEventField: the event fields that carry potentially-private content (AIR-gated, exactly
+// the set RenderEventRow redacts). ts/kind are structural metadata — always shown, always yankable.
+func isPrivateEventField(field string) bool {
+	return field == "subject" || field == "actor" || field == "summary"
+}
+
+// yankEventField: the :events analogue of yankField — pick-keys for the focused event's fields.
+func (m Model) yankEventField(key string) (field, val string, ok bool) {
+	ev, has := m.FocusedEvent()
+	if !has {
+		return "", "", false
+	}
+	switch key {
+	case "t":
+		return "ts", ev.TS, true
+	case "k":
+		return "kind", ev.Kind, true
+	case "s":
+		return "subject", ev.Subject, true
+	case "a":
+		return "actor", ev.Actor, true
+	case "m":
+		return "summary", ev.Summary, true
+	}
+	return "", "", false
+}
+
 type Model struct {
 	Title        string
 	Page         int
@@ -106,15 +133,16 @@ type Model struct {
 	DynScale     int    // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
 	Width        int    // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height       int
-	Focus        int    // selected row index into m.Tasks (the registry cursor; the rail tracks it)
+	Focus        int         // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
+	EFocus       int         // selected row index into m.Events (the :events cursor) — selection is page-aware
 	Ring         []RingEntry // the yank kill-ring (most-recent first)
-	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
-	Sel          Selection // the cursor-of-attention's rank/field/type (row index stays in Focus)
-	Filter       string // active :tasks filter (id substring); narrows the selectable set
-	CritFilter   string // active criticality-class filter (ok|warn|major|crit) — a selected count
-	CompIdx      int    // fish-style completion: the highlighted candidate in the navigable list
-	Flash        string // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
-	FlashSeq     int    // monotonic flash id — a stale tick only clears the flash it was armed for
+	DoorOpen     bool        // the /whois full-screen drill-in is open for the focused task
+	Sel          Selection   // the cursor-of-attention's rank/field/type (row index stays in Focus)
+	Filter       string      // active :tasks filter (id substring); narrows the selectable set
+	CritFilter   string      // active criticality-class filter (ok|warn|major|crit) — a selected count
+	CompIdx      int         // fish-style completion: the highlighted candidate in the navigable list
+	Flash        string      // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
+	FlashSeq     int         // monotonic flash id — a stale tick only clears the flash it was armed for
 }
 
 // FlashClearMsg clears a flash after its lifetime, but only if it's still the current one (seq match).
@@ -211,6 +239,53 @@ func (m Model) FocusedTask() (grammar.Task, bool) {
 	return vt[m.Focus], true
 }
 
+// FocusedEvent: the event under the :events cursor (the events analogue of FocusedTask).
+func (m Model) FocusedEvent() (grammar.Event, bool) {
+	if m.EFocus < 0 || m.EFocus >= len(m.Events) {
+		return grammar.Event{}, false
+	}
+	return m.Events[m.EFocus], true
+}
+
+// pageRows: how many selectable rows the CURRENT page has (selection is page-aware — :tasks rows,
+// :events rows; other pages have none). The cursor + its verbs operate on THIS.
+func (m Model) pageRows() int {
+	switch m.Page {
+	case PageTasks:
+		return len(m.visibleTasks())
+	case PageEvents:
+		return len(m.Events)
+	}
+	return 0
+}
+
+// hasRows reports whether the current page has any selectable rows.
+func (m Model) hasRows() bool { return m.pageRows() > 0 }
+
+// curFocus: the focus index for the current page (Focus for :tasks, EFocus for :events).
+func (m Model) curFocus() int {
+	if m.Page == PageEvents {
+		return m.EFocus
+	}
+	return m.Focus
+}
+
+// focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
+// so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
+func (m Model) focusTo(i int) Model {
+	max := m.pageRows() - 1
+	if max < 0 {
+		max = 0
+	}
+	i = clamp(i, 0, max)
+	if m.Page == PageEvents {
+		m.EFocus = i
+	} else {
+		m.Focus = i
+	}
+	return m
+}
+
 // dynScales maps the seed's view_scale names to their resolution index (1=overview … 5=evidence).
 var dynScales = map[string]int{
 	"overview": 1, "domain": 2, "artifact": 3, "runtime": 4, "evidence": 5, "all": 0,
@@ -233,8 +308,18 @@ func New(title string) Model {
 
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
 func (m Model) Fold(evs []grammar.Event, dark bool) Model {
+	// follow the tail: if the cursor was on (or past) the newest row, keep it pinned to newest as the
+	// stream grows — so the :events cursor defaults to (and tracks) the latest event, matching the
+	// newest-at-bottom window. If the operator scrolled up, hold their position (clamped into range).
+	follow := m.EFocus >= len(m.Events)-1
 	m.Events = evs
 	m.EventsDark = dark
+	if follow || m.EFocus >= len(m.Events) {
+		m.EFocus = len(m.Events) - 1
+	}
+	if m.EFocus < 0 {
+		m.EFocus = 0
+	}
 	return m
 }
 
@@ -427,11 +512,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "tab": // descend into the row's fields (navigate by looking; [Tab] again / Esc ascends)
-			if _, ok := m.FocusedTask(); ok {
-				m.Sel.Rank, m.Sel.Field = RankField, selFields[0]
+			if m.Page == PageTasks {
+				if _, ok := m.FocusedTask(); ok {
+					m.Sel.Rank, m.Sel.Field = RankField, selFields[0]
+				}
 			}
 			return m, nil
 		case "V": // class-select — every visible row sharing the focused task's criticality (granularity g2)
+			if m.Page != PageTasks {
+				return m, nil
+			}
 			if t, ok := m.FocusedTask(); ok {
 				vt := m.visibleTasks()
 				var mem []int
@@ -447,7 +537,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc": // collapse the selection to the bare row cursor + clear class/count filters
 			m.Sel.Members, m.CritFilter = nil, ""
 			return m, nil
-		case "y": // yank — class-yank if a class is selected, else grab one field
+		case "y": // yank — page-aware: a task class/field on :tasks, an event field on :events
+			if m.Page == PageEvents {
+				if _, ok := m.FocusedEvent(); ok {
+					m.Mode, m.Status = ModeYank, "" // the focused EVENT row becomes a field-picker
+				}
+				return m, nil
+			}
+			if m.Page != PageTasks {
+				return m, nil // no selectable rows on this page
+			}
 			if len(m.Sel.Members) > 0 {
 				vt := m.visibleTasks()
 				vals := make([]string, 0, len(m.Sel.Members))
@@ -465,9 +564,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Mode, m.Status = ModeYank, ""
 			}
 			return m, nil
-		case "enter": // /whois — drill into the focused task (full-screen door)
-			if _, ok := m.FocusedTask(); ok {
-				m.DoorOpen = true
+		case "enter": // /whois — drill into the focused task (full-screen door; :tasks only)
+			if m.Page == PageTasks {
+				if _, ok := m.FocusedTask(); ok {
+					m.DoorOpen = true
+				}
 			}
 			return m, nil
 		case ":": // enter the command line (the command-as-effect surface)
@@ -493,18 +594,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?": // :legend — decode the grammar (always situate)
 			m.Page = PageLegend
 			return m, nil
-		case "j", "down": // move the registry focus cursor (the rail tracks it)
-			m.Focus = clamp(m.Focus+1, 0, m.focusMax())
-			return m, nil
+		case "j", "down": // move the current page's focus cursor (tasks→rail tracks it; events→row)
+			return m.focusTo(m.curFocus() + 1), nil
 		case "k", "up":
-			m.Focus = clamp(m.Focus-1, 0, m.focusMax())
-			return m, nil
+			return m.focusTo(m.curFocus() - 1), nil
 		case "g": // top
-			m.Focus = 0
-			return m, nil
+			return m.focusTo(0), nil
 		case "G": // bottom
-			m.Focus = m.focusMax()
-			return m, nil
+			return m.focusTo(m.pageRows() - 1), nil
 		}
 	}
 	return m, nil
@@ -690,6 +787,21 @@ func (m Model) updateYank(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if v.Type == tea.KeyEsc {
 		m.Mode = ModeNormal
 		return m, nil
+	}
+	if m.Page == PageEvents { // events have their own field set (the pick row is page-aware)
+		field, val, ok := m.yankEventField(v.String())
+		if !ok {
+			return m, nil
+		}
+		ev, _ := m.FocusedEvent()
+		if m.AIR && isPrivateEventField(field) && ev.AIR[field] != "ok" {
+			m.Mode, m.Status = ModeNormal, "yank: "+field+" is redacted on-air — un-yankable"
+			return m, nil
+		}
+		m.Ring = pushRing(m.Ring, RingEntry{Value: val, Field: field, Page: "events"})
+		m.Input, m.Mode = val, ModeCommand
+		m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", field, len(m.Ring))
+		return m.flash(fmt.Sprintf("✓ yanked %s → ring %d", field, len(m.Ring)))
 	}
 	field, val, ok := m.yankField(v.String())
 	if !ok {

@@ -96,12 +96,12 @@ func TestFilterNavigateAndFill(t *testing.T) {
 	if m.Mode != ModeFilter {
 		t.Fatal("/ should open the filter")
 	}
-	m = step(m, "a")          // narrows to ant, ace
-	m = tab(m)                // highlight the 2nd id
+	m = step(m, "a") // narrows to ant, ace
+	m = tab(m)       // highlight the 2nd id
 	if m.CompIdx != 1 {
 		t.Fatalf("Tab should advance the filter candidate, got %d", m.CompIdx)
 	}
-	m = rght(m)               // [→] fills the filter with the highlighted id
+	m = rght(m) // [→] fills the filter with the highlighted id
 	if m.Filter != "ace" || len(m.visibleTasks()) != 1 {
 		t.Fatalf("[→] should fill the filter to 'ace' (filter=%q n=%d)", m.Filter, len(m.visibleTasks()))
 	}

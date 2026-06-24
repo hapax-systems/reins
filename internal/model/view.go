@@ -242,13 +242,21 @@ func (m Model) contextLine() string {
 		}
 		return grammar.C("2nd", fmt.Sprintf(" task registry · %d tasks%s · [/] filter · focus: %s", len(m.Tasks), shown, f))
 	case PageEvents:
-		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown", len(m.Events)))
+		f := "—"
+		if ev, ok := m.FocusedEvent(); ok {
+			f = grammar.Redact(ev.AIR, "subject", ev.Subject, m.AIR)
+			if r := []rune(f); len(r) > 28 {
+				f = string(r[:28])
+			}
+		}
+		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown · [j/k] select · [y]ank · focus: %s", len(m.Events), f))
 	}
 	return ""
 }
 
-// eventsBody: context line + header + the NEWEST events (tail-windowed), so the operator sees what
-// just happened rather than the oldest rows.
+// eventsBody: context line + header + a windowed slice of events that keeps the focused row in view
+// (default = the newest tail). The events page is a first-class SELECTABLE surface — a focus cursor
+// (▌), [j/k] to move, [y] to yank an event field — symmetric with :tasks.
 func (m Model) eventsBody(w, h int) string {
 	if m.EventsDark {
 		return m.contextLine() + "\n" + darkHint()
@@ -259,15 +267,63 @@ func (m Model) eventsBody(w, h int) string {
 	}
 	start := 0
 	if len(m.Events) > visible {
-		start = len(m.Events) - visible // tail = newest
+		start = len(m.Events) - visible // tail = newest by default
+		// keep the focused row in view if it scrolled out of the tail window
+		if m.EFocus < start {
+			start = m.EFocus
+		}
+		if m.EFocus >= start+visible {
+			start = m.EFocus - visible + 1
+		}
 	}
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
-	b.WriteString(grammar.RenderEventHeader() + "\n")
-	for _, ev := range m.Events[start:] {
-		b.WriteString(grammar.RenderEventRow(ev, m.AIR) + "\n")
+	b.WriteString("  " + grammar.RenderEventHeader() + "\n") // 2-col gutter aligns under the cursor
+	for i := start; i < start+visible && i < len(m.Events); i++ {
+		switch {
+		case i == m.EFocus && m.Mode == ModeYank:
+			b.WriteString(fitWidth(eventPickRow(m.Events[i], m.AIR), w) + "\n")
+		case i == m.EFocus:
+			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderEventRow(m.Events[i], m.AIR), w-1) + "\n")
+		default:
+			b.WriteString("  " + grammar.RenderEventRow(m.Events[i], m.AIR) + "\n")
+		}
 	}
 	return b.String()
+}
+
+// eventPickRow: the :events analogue of yankPickRow — in ModeYank the focused event becomes a labeled
+// field-picker IN PLACE. AIR-denied content fields (subject/actor/summary) redact + drop their key;
+// ts/kind are structural (always pickable).
+func eventPickRow(ev grammar.Event, air bool) string {
+	clip := func(s string, n int) string {
+		if r := []rune(s); len(r) > n {
+			return string(r[:n])
+		}
+		return s
+	}
+	what := ev.Summary
+	if strings.TrimSpace(what) == "" {
+		what = ev.Kind
+	}
+	fields := []struct{ key, field, val string }{
+		{"t", "ts", ev.TS}, {"k", "kind", clip(ev.Kind, 16)},
+		{"s", "subject", clip(ev.Subject, 24)}, {"a", "actor", clip(ev.Actor, 12)},
+		{"m", "summary", clip(what, 28)},
+	}
+	out := grammar.C("brt", "▶ yank ")
+	for _, f := range fields {
+		v := f.val
+		if air && isPrivateEventField(f.field) && ev.AIR[f.field] != "ok" { // denied: redact, no key
+			out += grammar.C("mut", "["+f.key+"]▒▒▒") + " "
+			continue
+		}
+		if strings.TrimSpace(v) == "" {
+			v = "·"
+		}
+		out += grammar.SelLabel("["+f.key+"]") + grammar.C("pri", v) + " "
+	}
+	return strings.TrimRight(out, " ")
 }
 
 func darkHint() string {
@@ -423,7 +479,6 @@ func yankPickRow(t grammar.Task, air bool) string {
 	return strings.TrimRight(out, " ")
 }
 
-
 // completionStrip: fish-style autocomplete — the candidate list is REVEALED explicitly and is
 // NAVIGABLE ([Tab]/[↓] next, [⇧Tab]/[↑] prev), the current candidate carried in the sel swatch;
 // [Enter] accepts it. Dynamic on the active selection (a `paste <value>` candidate leads when a
@@ -457,9 +512,58 @@ func (m Model) completionStrip() string {
 	return b.String()
 }
 
-// Z2b — context rail: the focused registry item unfolded into its seven dimensions, plus the
-// relationship web and mini :dynamics (structured-silence until their data sources land).
+// Z2b — context rail: the focused row unfolded. Page-aware — a task's seven dimensions on :tasks, a
+// coord event's anatomy on :events — so the rail always describes what the cursor is actually on.
 func (m Model) viewRail(w int) string {
+	switch m.Page {
+	case PageEvents:
+		return m.eventRail(w)
+	case PageTasks:
+		return m.taskRail(w)
+	default:
+		return grammar.C("mut", " (this page has no row selection)")
+	}
+}
+
+// eventRail: the focused coord event, unfolded + AIR-gated — the :events analogue of taskRail.
+func (m Model) eventRail(w int) string {
+	ev, ok := m.FocusedEvent()
+	if !ok {
+		return grammar.C("mut", " (no events — spine quiet)")
+	}
+	rule := grammar.C("border", " "+strings.Repeat("─", w-2))
+	line := func(label, field, val, tok string) string {
+		if m.AIR && isPrivateEventField(field) && ev.AIR[field] != "ok" {
+			val, tok = "▒▒▒", "mut"
+		}
+		if strings.TrimSpace(val) == "" {
+			val, tok = "·", "mut"
+		}
+		return " " + grammar.C("mut", fmt.Sprintf("%-6s", label)) + grammar.C(tok, val)
+	}
+	subj := grammar.Redact(ev.AIR, "subject", ev.Subject, m.AIR)
+	if r := []rune(subj); len(r) > w-4 {
+		subj = string(r[:w-4])
+	}
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "▶ ") + grammar.C("2nd", fmt.Sprintf("Z2▸:events▸row %d/%d", m.EFocus+1, len(m.Events))) + "\n")
+	b.WriteString(" " + grammar.C("mut", "the selected event, unfolded ↓") + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "◆ "+subj) + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(line("when", "ts", ev.TS, "pri") + "\n")
+	b.WriteString(line("kind", "kind", ev.Kind, "blu") + "\n")
+	b.WriteString(line("who", "actor", ev.Actor, grammar.LaneToken(ev.Actor)) + "\n")
+	b.WriteString(line("what", "summary", ev.Summary, "2nd") + "\n")
+	b.WriteString(line("score", "score", fmt.Sprintf("%.2f", ev.Score), "pri") + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("mut", "[y]ank a field · [j/k] move") + "\n")
+	return b.String()
+}
+
+// taskRail — the focused registry task unfolded into its seven dimensions, plus the relationship web
+// and mini :dynamics (structured-silence until their data sources land).
+func (m Model) taskRail(w int) string {
 	t, ok := m.FocusedTask()
 	if !ok {
 		return grammar.C("mut", " (no selection — [j/k] to move)")
@@ -545,12 +649,23 @@ func (m Model) viewFloor(w int) string {
 		lens = grammar.C("fch", "AIR ░allowlist░")
 	}
 	focus := grammar.C("mut", "—")
-	if t, ok := m.FocusedTask(); ok {
-		fid := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR) // the focus line honors AIR too
-		if r := []rune(fid); len(r) > 24 {
-			fid = string(r[:24])
+	switch m.Page { // the focus line reflects the CURRENT page's cursor, not always a task
+	case PageEvents:
+		if ev, ok := m.FocusedEvent(); ok {
+			s := grammar.Redact(ev.AIR, "subject", ev.Subject, m.AIR)
+			if r := []rune(s); len(r) > 24 {
+				s = string(r[:24])
+			}
+			focus = grammar.C("brt", s)
 		}
-		focus = grammar.C("brt", fid)
+	default:
+		if t, ok := m.FocusedTask(); ok {
+			fid := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR) // the focus line honors AIR too
+			if r := []rune(fid); len(r) > 24 {
+				fid = string(r[:24])
+			}
+			focus = grammar.C("brt", fid)
+		}
 	}
 	r1 := " " + grammar.C("mut", "focus ") + focus + grammar.C("mut", " │ ") +
 		grammar.C("yel", "[j/k]") + "select " + grammar.C("yel", "[↵]") + "inspect " +

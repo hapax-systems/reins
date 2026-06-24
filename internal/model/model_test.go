@@ -220,7 +220,7 @@ func TestViewNarrowDegradesNoPanic(t *testing.T) {
 
 func evs() []grammar.Event {
 	return []grammar.Event{
-		{TS: "14:22", Kind: "pr.merged", Subject: "4284", Summary: "merged", Score: 0.7,
+		{TS: "14:22", Kind: "task.updated", Subject: "4284", Summary: "merged", Score: 0.7,
 			AIR: map[string]string{"subject": "ok", "summary": "deny"}},
 	}
 }

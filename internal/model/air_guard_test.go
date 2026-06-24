@@ -42,9 +42,11 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 	base.Width, base.Height, base.AIR, base.Focus = 140, 44, true, 0
 
 	surfaces := map[string]Model{
-		"tasks+rail": func() Model { m := base; m.Page = PageTasks; return m }(),
-		"whois-door": func() Model { m := base; m.Page = PageTasks; m.DoorOpen = true; return m }(),
-		"events":     func() Model { m := base; m.Page = PageEvents; return m }(),
+		"tasks+rail":  func() Model { m := base; m.Page = PageTasks; return m }(),
+		"tasks-yank":  func() Model { m := base; m.Page = PageTasks; m.Mode = ModeYank; return m }(),
+		"whois-door":  func() Model { m := base; m.Page = PageTasks; m.DoorOpen = true; return m }(),
+		"events+rail": func() Model { m := base; m.Page = PageEvents; return m }(),
+		"events-yank": func() Model { m := base; m.Page = PageEvents; m.Mode = ModeYank; return m }(),
 	}
 	for name, m := range surfaces {
 		frame := ansi.Strip(m.View())

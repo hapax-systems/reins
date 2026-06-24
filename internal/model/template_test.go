@@ -21,14 +21,14 @@ func TestTemplateResolvesSelection(t *testing.T) {
 	m := selModel()
 	m.Sel.Rank, m.Sel.Field = RankField, "stage"
 	cases := map[string]string{
-		"{{sel}}":       "S5",     // selected field's value
-		"{{sel.id}}":    "task-9", // focused row id
-		"{{focus}}":     "task-9",
-		"{{sel.field}}": "stage", // the field NAME
-		"{{sel.crit}}":  "crit",
-		"{{sel.owner}}": "alpha", // arbitrary field (LOCAL — not redacted)
+		"{{sel}}":        "S5",     // selected field's value
+		"{{sel.id}}":     "task-9", // focused row id
+		"{{focus}}":      "task-9",
+		"{{sel.field}}":  "stage", // the field NAME
+		"{{sel.crit}}":   "crit",
+		"{{sel.owner}}":  "alpha", // arbitrary field (LOCAL — not redacted)
 		"a {{sel.id}} b": "a task-9 b",
-		"{{nope}}":      "{{nope}}", // unknown token stays literal
+		"{{nope}}":       "{{nope}}", // unknown token stays literal
 	}
 	for in, want := range cases {
 		if got := m.resolveTemplate(in); got != want {
