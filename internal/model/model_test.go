@@ -4,8 +4,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
+
+func TestViewFillsExactFrame(t *testing.T) {
+	m := New("REINS").Fold(evs(), false)
+	m.Width, m.Height = 120, 40
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 40 {
+		t.Fatalf("120x40 must render exactly 40 lines, got %d", len(lines))
+	}
+	for i, ln := range lines {
+		if ansi.StringWidth(ln) > 120 {
+			t.Fatalf("line %d exceeds 120 cols: %d", i, ansi.StringWidth(ln))
+		}
+	}
+}
+
+func TestViewNarrowDegradesNoPanic(t *testing.T) {
+	m := New("REINS").Fold(evs(), false)
+	m.Width, m.Height = 80, 24 // rail collapses
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("80x24 must render exactly 24 lines, got %d", len(lines))
+	}
+}
 
 func evs() []grammar.Event {
 	return []grammar.Event{

@@ -15,6 +15,13 @@ var pal = palette.For("gruvbox")
 // SetPalette switches the color grammar for the working mode ("gruvbox"/"solarized").
 func SetPalette(mode string) { pal = palette.For(mode) }
 
+// C colorizes text with a palette token (the cockpit's one coloring entry point for zones/widgets).
+func C(token, text string) string { return pal.Colorize(token, text) }
+
+// SeverityToken / LaneToken re-exported so callers color by meaning without importing palette.
+func SeverityToken(sev string) string { return palette.SeverityToken(sev) }
+func LaneToken(owner string) string   { return palette.LaneToken(owner) }
+
 // kindSeverity maps an event kind to a severity word for its heat color ("" = neutral/ground).
 func kindSeverity(kind string) string {
 	switch {
