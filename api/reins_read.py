@@ -1,7 +1,7 @@
 """Thin READ service: folds the live coord ledger (via the council spine) into scored,
 air-classified events. Engine code; the council root + ledger come from config (instance)."""
 from __future__ import annotations
-import os, sys, time
+import math, os, re, sys, time
 from typing import Any
 from fastapi import FastAPI
 
@@ -52,13 +52,79 @@ def to_event(raw: dict, allowlist: list[str], age_s: float) -> dict:
     return {**fields, "score": score_event(raw, age_s), "air": classify_air(fields, allowlist)}
 
 
-def to_task(tid: str, t: dict, allowlist: list[str]) -> dict:
+def _stage_num(stage: str) -> int:
+    m = re.match(r"S(\d+)", stage or "")
+    return int(m.group(1)) if m else -1
+
+
+def _predicted_stage(stage: str, no_go: dict) -> str:
+    """Expected next state from the SDLC ladder — held if a release stage isn't release-authorized,
+    shipped at terminal, else S(n+1). Derived, never fabricated."""
+    n = _stage_num(stage)
+    if n < 0:
+        return ""
+    if isinstance(no_go, dict) and n >= 7 and no_go.get("release_authorized") is False:
+        return "hold"
+    return "ship" if n >= 11 else f"S{n + 1}"
+
+
+def _criticality(stage: str, no_go: dict) -> str:
+    if not isinstance(no_go, dict):
+        return "ok"
+    n = _stage_num(stage)
+    blk = sum(
+        1
+        for k in ("implementation_authorized", "source_mutation_authorized", "docs_mutation_authorized")
+        if no_go.get(k) is False
+    )
+    if n >= 7 and no_go.get("release_authorized") is False:
+        blk += 1
+    return ("ok", "warn", "major", "crit")[min(blk, 3)]
+
+
+def _freshness(last_ts: str, now: float) -> float:
+    return round(math.exp(-_age_s(last_ts, now) / 21600.0), 3)  # tau = 6h
+
+
+def _task_history(council_root: str) -> dict:
+    """One replay pass -> per-task {prior_stage (last transition's from_stage), last_ts, last_actor}."""
+    root = os.path.expanduser(council_root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from shared.coord_event_log import default_event_log  # noqa: E402
+
+    hist: dict = {}
+    for e in default_event_log().replay(fail_open=True).events:
+        r = e.to_record()
+        tid = r.get("subject")
+        if not tid:
+            continue
+        h = hist.setdefault(tid, {"prior_stage": "", "last_ts": "", "last_actor": ""})
+        ts = str(r.get("timestamp", ""))
+        if ts >= h["last_ts"]:  # ISO strings sort chronologically
+            h["last_ts"], h["last_actor"] = ts, str(r.get("actor", ""))
+        if r.get("event_type") == "sdlc.stage_transition":
+            fs = (r.get("payload") or {}).get("from_stage")
+            if fs:
+                h["prior_stage"] = str(fs)
+    return hist
+
+
+def to_task(tid: str, t: dict, allowlist: list[str], hist: dict | None = None, now: float | None = None) -> dict:
     no_go = t.get("no_go") or {}
+    stage = str(t.get("stage") or "")
+    h = (hist or {}).get(tid, {})
     fields = {
         "task_id": str(t.get("task_id", tid)),
-        "stage": str(t.get("stage") or ""),
+        "stage": stage,
         "authority_case": str(t.get("authority_case") or ""),
         "no_go": ",".join(k for k, v in no_go.items() if v) if isinstance(no_go, dict) else "",
+        "prior_stage": str(h.get("prior_stage", "")),       # D6 was (from event log)
+        "predicted_stage": _predicted_stage(stage, no_go),  # D7 next (ladder + no_go)
+        "owner": str(h.get("last_actor", "")),              # who (last actor)
+        "freshness": _freshness(h.get("last_ts", ""), now) if now else 0.0,
+        "criticality": _criticality(stage, no_go),          # D4
+        "rel_count": 0,  # D2 — no task-edge source yet; structured-silence (honest, not fabricated)
     }
     return {**fields, "air": classify_air(fields, allowlist)}
 
@@ -128,9 +194,11 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
     def read_tasks() -> dict:
         try:
             proj = _projection(council_root)
+            hist = _task_history(council_root)
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "tasks": []}
-        tasks = [to_task(tid, t, allowlist) for tid, t in (proj.get("tasks") or {}).items()]
+        now = time.time()
+        tasks = [to_task(tid, t, allowlist, hist, now) for tid, t in (proj.get("tasks") or {}).items()]
         return {"dark": False, "tasks": tasks}
 
     @app.get("/read/dynamics")
@@ -154,7 +222,10 @@ def build_app(council_root: str, allowlist: list[str]) -> FastAPI:
 
 # Neutral on-air default — STRUCTURAL fields only (no free-text subject/label/summary, which can
 # carry PII on-air; the instance opts those in only after verifying). Mirrors config.Defaults() in Go.
-_DEFAULT_ALLOW = "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res"
+_DEFAULT_ALLOW = (
+    "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res,"
+    "prior_stage,predicted_stage,owner,freshness,criticality,rel_count"
+)
 
 
 def instance_config() -> dict:

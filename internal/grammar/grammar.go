@@ -120,16 +120,23 @@ func RenderEventRow(ev Event, airOn bool) string {
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
 type Task struct {
-	TaskID        string            `json:"task_id"`
-	Stage         string            `json:"stage"`
-	AuthorityCase string            `json:"authority_case"`
-	NoGo          string            `json:"no_go"`
-	AIR           map[string]string `json:"air"`
+	TaskID         string            `json:"task_id"`
+	Stage          string            `json:"stage"`
+	AuthorityCase  string            `json:"authority_case"`
+	NoGo           string            `json:"no_go"`
+	PriorStage     string            `json:"prior_stage"`     // D6 — the stage transitioned FROM
+	PredictedStage string            `json:"predicted_stage"` // D7 — the expected next stage
+	Owner          string            `json:"owner"`           // who — last actor / lane
+	Freshness      float64           `json:"freshness"`       // exp(-age/τ)
+	Criticality    string            `json:"criticality"`     // D4 — ok|warn|major|crit
+	RelCount       int               `json:"rel_count"`       // D2 — live relationship ties
+	AIR            map[string]string `json:"air"`
 }
 
-// RenderTaskHeader: the frozen header for the :tasks registry page.
+// RenderTaskHeader: the seven-dimension column header.
 func RenderTaskHeader() string {
-	return fmt.Sprintf("  %-28s %-5s %s", "TASK", "STAGE", "NO-GO")
+	return C("mut", fmt.Sprintf(" %-1s %-3s %-22s %-4s %-4s %-5s %-8s %-4s %s",
+		"s", "rel", "TASK", "STG", "◀was", "→next", "who", "crit", "fr"))
 }
 
 // dotsOr: structured-silence — an empty cell is dots at full width (the grid never jitters).
@@ -140,13 +147,96 @@ func dotsOr(s string, n int) string {
 	return pad(s, n)
 }
 
-// RenderTaskRow: one registry row (row-kind "task"). Leading glyph carries the kind (◆=task);
-// task_id is the frozen id-gutter / cross-pane address; empties render as structured-silence dots.
+// shortStage strips the SDLC stage suffix: "S7_RELEASE" -> "S7".
+func shortStage(s string) string {
+	if i := strings.IndexByte(s, '_'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// critGlyph: the state glyph carries criticality monochrome-safe (✖ crit · ‼ major · ▸ warn · ✓ ok).
+var critGlyph = map[string]string{"crit": "✖", "major": "‼", "warn": "▸", "ok": "✓"}
+
+// critBar: criticality as a fixed-width fill bar (magnitude via fill only, per the grammar rule).
+func critBar(crit string) string {
+	n := map[string]int{"ok": 1, "warn": 2, "major": 3, "crit": 4}[crit]
+	if n == 0 {
+		n = 1
+	}
+	return strings.Repeat("█", n) + strings.Repeat("░", 4-n)
+}
+
+// freshGlyph: freshness (0..1) -> an eighth-block + brightness token (recent=bright, stale=muted).
+func freshGlyph(f float64) (string, string) {
+	bars := []rune("▁▂▃▄▅▆▇█")
+	i := int(f * 8)
+	if i > 7 {
+		i = 7
+	} else if i < 0 {
+		i = 0
+	}
+	switch {
+	case f > 0.6:
+		return string(bars[i]), "grn"
+	case f > 0.2:
+		return string(bars[i]), "pri"
+	}
+	return string(bars[i]), "mut"
+}
+
+// RenderTaskRow: the SEVEN-DIMENSION cell strip — state · relations · id · stage · ◀was · now→next ·
+// who · criticality · freshness. Each cell colored by meaning; empties are structured-silence dots;
+// denied (on-air) cells redact in place. The literal answer to "every item is flat".
 func RenderTaskRow(t Task, airOn bool) string {
-	id := redact(t.AIR, "task_id", pad(t.TaskID, 28), airOn)
-	stage := redact(t.AIR, "stage", dotsOr(t.Stage, 5), airOn)
-	nogo := redact(t.AIR, "no_go", dotsOr(t.NoGo, 4), airOn)
-	return fmt.Sprintf("%s %s %s %s", Glyph("task.closed"), id, stage, nogo)
+	crit := t.Criticality
+	if crit == "" {
+		crit = "ok"
+	}
+	ctok := SeverityToken(crit)
+
+	g := critGlyph[crit]
+	if g == "" {
+		g = "·"
+	}
+	st := C(ctok, g)
+
+	rel := C("mut", "·  ")
+	if t.RelCount > 0 {
+		rel = C("blu", pad(fmt.Sprintf("●%d", t.RelCount), 3))
+	}
+
+	idTok := "pri"
+	if crit == "crit" {
+		idTok = "brt"
+	}
+	id := C(idTok, dotsOr(redact(t.AIR, "task_id", t.TaskID, airOn), 22))
+	stg := C(ctok, dotsOr(redact(t.AIR, "stage", shortStage(t.Stage), airOn), 4))
+	was := C("mut", dotsOr(redact(t.AIR, "prior_stage", shortStage(t.PriorStage), airOn), 4))
+
+	nxtRaw, ntok := t.PredictedStage, "grn" // now→next predicted chip
+	switch t.PredictedStage {
+	case "hold":
+		nxtRaw, ntok = "→hold", "red"
+	case "ship":
+		nxtRaw = "·ship"
+	case "":
+		ntok = "mut"
+	default:
+		nxtRaw = "→" + t.PredictedStage
+	}
+	nxt := C(ntok, dotsOr(redact(t.AIR, "predicted_stage", nxtRaw, airOn), 5))
+	who := C(LaneToken(t.Owner), dotsOr(redact(t.AIR, "owner", t.Owner, airOn), 8))
+
+	bar := critBar(crit)
+	if airOn && t.AIR["criticality"] != "ok" {
+		bar = "▒▒▒▒"
+	}
+	fg, ftok := freshGlyph(t.Freshness)
+	if airOn && t.AIR["freshness"] != "ok" {
+		fg, ftok = "▒", "mut"
+	}
+	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s", st, rel, id, stg, was, nxt, who, C(ctok, bar), C(ftok, fg))
 }
 
 // --- :dynamics — the system-dynamics map (obsoletes the standalone :8765 cytoscape viewer) ---
@@ -289,9 +379,11 @@ func RenderHelp() string {
 	}, "\n")
 }
 
+// pad clips/pads to exactly n RUNES (not bytes — multibyte glyphs like →/◀/✖ must not split).
 func pad(s string, n int) string {
-	if len(s) >= n {
-		return s[:n]
+	r := []rune(s)
+	if len(r) >= n {
+		return string(r[:n])
 	}
-	return s + strings.Repeat(" ", n-len(s))
+	return s + strings.Repeat(" ", n-len(r))
 }

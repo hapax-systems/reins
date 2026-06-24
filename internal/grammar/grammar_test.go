@@ -114,8 +114,20 @@ func sampleTask() Task {
 
 func TestRenderTaskRowLocal(t *testing.T) {
 	got := RenderTaskRow(sampleTask(), false)
-	if !strings.Contains(got, Glyph("task.closed")) || !strings.Contains(got, "event-spine") || !strings.Contains(got, "S6") {
-		t.Fatalf("task row missing fields: %q", got)
+	if !strings.Contains(got, critGlyph["ok"]) || !strings.Contains(got, "event-spine") || !strings.Contains(got, "S6") {
+		t.Fatalf("task row missing state glyph / id / stage: %q", got)
+	}
+}
+
+func TestRenderTaskRowSevenDims(t *testing.T) {
+	tk := Task{TaskID: "x-1", Stage: "S5_DESIGN", PriorStage: "S4_PLAN", PredictedStage: "hold",
+		Owner: "cc-seg", Freshness: 0.9, Criticality: "crit",
+		AIR: map[string]string{"task_id": "ok", "stage": "ok", "prior_stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok", "freshness": "ok"}}
+	got := RenderTaskRow(tk, false)
+	for _, want := range []string{critGlyph["crit"], "x-1", "S5", "S4", "hold", "cc-seg", critBar("crit")} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("7-dim row missing %q:\n%q", want, got)
+		}
 	}
 }
 
