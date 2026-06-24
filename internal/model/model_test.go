@@ -55,6 +55,31 @@ func TestFocusNavigationAndRail(t *testing.T) {
 	}
 }
 
+func TestWhoisDoorOpensAndCloses(t *testing.T) {
+	tasks := []grammar.Task{{TaskID: "door-1", Stage: "S7_RELEASE", PredictedStage: "hold", Criticality: "warn",
+		AIR: map[string]string{"task_id": "ok", "stage": "ok"}}}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m = step(m, "enter")
+	if !m.DoorOpen {
+		t.Fatal("[enter] should open the /whois door")
+	}
+	if !strings.Contains(m.View(), "door-1") {
+		t.Fatalf("door should render the task id:\n%s", m.View())
+	}
+	// a verb-dock key is a governed STUB — closes + reports, never mutates
+	m = step(m, "a")
+	if m.DoorOpen || !strings.Contains(m.Status, "governed COMMAND surface") {
+		t.Fatalf("arm must close + report the governed route: open=%v status=%q", m.DoorOpen, m.Status)
+	}
+	// reopen + Esc closes cleanly
+	m = step(step(m, "enter"), "esc")
+	if m.DoorOpen {
+		t.Fatal("[esc] should close the door")
+	}
+}
+
 func TestYankGrabsFieldToRingAndCommandLine(t *testing.T) {
 	tasks := []grammar.Task{{TaskID: "alpha-1", Stage: "S5", Owner: "cc-a",
 		AIR: map[string]string{"task_id": "ok", "owner": "deny"}}}

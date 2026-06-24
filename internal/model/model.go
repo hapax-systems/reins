@@ -87,6 +87,7 @@ type Model struct {
 	Height       int
 	Focus        int    // selected row index into m.Tasks (the registry cursor; the rail tracks it)
 	Ring         []RingEntry // the yank kill-ring (most-recent first)
+	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
 }
 
 func clamp(v, lo, hi int) int {
@@ -269,10 +270,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeYank {
 			return m.updateYank(v)
 		}
+		if m.DoorOpen {
+			return m.updateDoor(v)
+		}
 		switch v.String() {
 		case "y": // yank — grab a field off the focused row (the copy-paste killer)
 			if _, ok := m.FocusedTask(); ok {
 				m.Mode, m.Status = ModeYank, ""
+			}
+			return m, nil
+		case "enter": // /whois — drill into the focused task (full-screen door)
+			if _, ok := m.FocusedTask(); ok {
+				m.DoorOpen = true
 			}
 			return m, nil
 		case ":": // enter the command line (the command-as-effect surface)
@@ -311,6 +320,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Focus = m.focusMax()
 			return m, nil
 		}
+	}
+	return m, nil
+}
+
+// updateDoor: keys while the /whois door is open. [Esc]/[Enter] close (clean return). The verb-dock
+// keys are GOVERNED STUBS — they report what they WOULD emit through the governed COMMAND surface but
+// never mutate the live system (the cockpit never mints authority; real routing is a follow-up).
+func (m Model) updateDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.DoorOpen = false
+	switch v.String() {
+	case "esc", "enter", "q":
+		// just close
+	case "a":
+		m.Status = "arm: would emit sdlc.authorization_flip(release_authorized=true) via the governed COMMAND surface — NOT wired (cockpit never mints authority)"
+	case "r":
+		m.Status = "rework: would emit sdlc.stage_transition(→rework) via the governed COMMAND surface — NOT wired"
+	case "f":
+		m.Status = "refute: would record review.fail via the governed COMMAND surface — NOT wired"
+	case "c":
+		m.Status = "close: would emit task.closed via the governed COMMAND surface — NOT wired"
+	default:
+		m.DoorOpen = true // unknown key — stay in the door
 	}
 	return m, nil
 }

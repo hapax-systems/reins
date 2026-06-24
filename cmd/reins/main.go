@@ -104,6 +104,8 @@ func main() {
 				m.Page = model.PageHelp
 			case a == "legend":
 				m.Page = model.PageLegend
+			case a == "door":
+				m.Page, m.DoorOpen = model.PageTasks, true
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless

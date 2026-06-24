@@ -101,6 +101,23 @@ func TestRenderEventRowAIRRedactsDenied(t *testing.T) {
 	}
 }
 
+func TestRenderWhoisDoor(t *testing.T) {
+	tk := Task{TaskID: "door-x", Stage: "S7_RELEASE", PriorStage: "S6_IMPL", PredictedStage: "hold",
+		Owner: "cc-a", Criticality: "warn", NoGo: "docs_mutation_authorized,implementation_authorized",
+		AuthorityCase: "CASE-1", AIR: map[string]string{"task_id": "ok", "stage": "ok"}}
+	v := RenderWhoisDoor(tk, false, 100, 30)
+	for _, want := range []string{"door-x", "S7", "LADDER", "arm", "rework"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("door missing %q:\n%s", want, v)
+		}
+	}
+	// AIR redacts the denied authority case but keeps the structure (the ladder, the labels)
+	air := RenderWhoisDoor(tk, true, 100, 30)
+	if strings.Contains(air, "CASE-1") || !strings.Contains(air, "LADDER") {
+		t.Fatalf("AIR door must redact the authority value but keep structure:\n%s", air)
+	}
+}
+
 func TestLegendCoversAllGlyphMaps(t *testing.T) {
 	// drift guard: every glyph the renderers use must have a legend entry + a gloss.
 	leg := RenderLegend()

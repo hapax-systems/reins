@@ -22,6 +22,12 @@ func (m Model) View() string {
 	if w < 40 || h < 12 { // no WindowSizeMsg yet (e.g. --probe) -> a sane default frame
 		w, h = 120, 40
 	}
+	// the /whois door is a full-screen present-at-hand drill-in (replaces the body, clean return).
+	if m.DoorOpen {
+		if t, ok := m.FocusedTask(); ok {
+			return grammar.RenderWhoisDoor(t, m.AIR, w, h)
+		}
+	}
 	railW := railWidth
 	if w < 100 || m.Page == PageDynamics || m.Page == PageLegend || m.Page == PageHelp {
 		railW = 0 // collapse the rail on narrow terminals + full-width reference pages
@@ -385,9 +391,10 @@ func (m Model) viewFloor(w int) string {
 		focus = grammar.C("brt", fid)
 	}
 	r1 := " " + grammar.C("mut", "focus ") + focus + grammar.C("mut", " │ ") +
-		grammar.C("yel", "[j/k]") + "move " + grammar.C("yel", "[y]") + "ank " +
-		grammar.C("yel", "[:]") + "cmd " + grammar.C("yel", "[?]") + "legend " +
-		grammar.C("yel", "[a]") + "AIR " + grammar.C("yel", "[q]") + "quit │ " + lens
+		grammar.C("yel", "[j/k]") + "move " + grammar.C("yel", "[↵]") + "whois " +
+		grammar.C("yel", "[y]") + "ank " + grammar.C("yel", "[:]") + "cmd " +
+		grammar.C("yel", "[?]") + "legend " + grammar.C("yel", "[a]") + "AIR " +
+		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
 	case m.Mode == ModeYank:
