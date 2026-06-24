@@ -201,7 +201,7 @@ func RenderTaskRow(t Task, airOn bool) string {
 	}
 	st := C(ctok, g)
 
-	rel := C("mut", "·  ")
+	rel := C("mut", pad("●0", 3)) // relations always ●N (·  was an overload of structured-silence)
 	if t.RelCount > 0 {
 		rel = C("blu", pad(fmt.Sprintf("●%d", t.RelCount), 3))
 	}

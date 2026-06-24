@@ -55,6 +55,22 @@ func TestFocusNavigationAndRail(t *testing.T) {
 	}
 }
 
+func TestWhichKeyMenu(t *testing.T) {
+	if mv := matchVerbs("d"); len(mv) != 1 || mv[0].name != "dynamics" {
+		t.Fatalf("'d' should match only dynamics, got %v", mv)
+	}
+	if len(matchVerbs("")) != len(verbs) {
+		t.Fatal("empty input should match all verbs")
+	}
+	m := New("REINS")
+	m.Width, m.Height = 120, 40
+	m.Mode = ModeCommand
+	m.Input = "ta" // prefix of tasks
+	if !strings.Contains(m.View(), "tasks") {
+		t.Fatalf("which-key should surface 'tasks' for input 'ta':\n%s", m.View())
+	}
+}
+
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 func step(m Model, k string) Model {
 	nm, _ := m.Update(key(k))

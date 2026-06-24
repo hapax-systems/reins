@@ -107,6 +107,35 @@ func (m Model) FoldDynamics(g grammar.Graph, dark bool) Model {
 	return m
 }
 
+// verbDef + verbs: the command vocabulary, surfaced as a which-key menu at the point of action
+// (recognition over recall — never make the operator memorize the verbs).
+type verbDef struct{ name, gloss string }
+
+var verbs = []verbDef{
+	{"events", "live coord event stream"},
+	{"tasks", "the task registry"},
+	{"dynamics", "the system-dynamics map  (+ overview|domain|…|evidence)"},
+	{"legend", "decode the grammar — every glyph/color/cell"},
+	{"help", "the help page"},
+	{"air", "the on-air PII lens  (on|off)"},
+	{"quit", "leave"},
+}
+
+// matchVerbs returns the verbs whose name starts with the first token of the input.
+func matchVerbs(input string) []verbDef {
+	prefix := ""
+	if f := strings.Fields(input); len(f) > 0 {
+		prefix = f[0]
+	}
+	var out []verbDef
+	for _, v := range verbs {
+		if strings.HasPrefix(v.name, prefix) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Exec: the command-as-effect core — a typed command line folds into one pure model transition.
 // Today the verbs are local read-effects (page / AIR / quit); write-verbs will later route through
 // the unified-API COMMAND surface, but the grammar (every command is ONE pure fold) is fixed here.
@@ -247,6 +276,11 @@ func (m Model) updateCommand(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyBackspace:
 		if n := len(m.Input); n > 0 {
 			m.Input = m.Input[:n-1]
+		}
+		return m, nil
+	case tea.KeyTab: // complete to the single matching verb (recognition over recall)
+		if mv := matchVerbs(m.Input); len(mv) == 1 {
+			m.Input = mv[0].name + " "
 		}
 		return m, nil
 	case tea.KeySpace:

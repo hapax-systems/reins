@@ -215,6 +215,23 @@ func orDash(s string) string {
 	return s
 }
 
+// whichKey: the transient verb menu shown while the command line is focused — names when several
+// match, the full gloss when one does. Verbs become recognizable, not memorized.
+func whichKey(input string) string {
+	mv := matchVerbs(input)
+	switch {
+	case len(mv) == 1:
+		return grammar.C("mut", "   "+mv[0].name+" — "+mv[0].gloss)
+	case len(mv) > 1:
+		names := make([]string, len(mv))
+		for i, v := range mv {
+			names[i] = v.name
+		}
+		return grammar.C("mut", "   ‹"+strings.Join(names, " ")+"›")
+	}
+	return ""
+}
+
 // Z2b — context rail: the focused registry item unfolded into its seven dimensions, plus the
 // relationship web and mini :dynamics (structured-silence until their data sources land).
 func (m Model) viewRail(w int) string {
@@ -275,11 +292,11 @@ func (m Model) viewFloor(w int) string {
 	var r2 string
 	switch {
 	case m.Mode == ModeCommand:
-		r2 = grammar.C("blu", ":") + " " + m.Input + "█"
+		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + whichKey(m.Input)
 	case m.Status != "":
 		r2 = " " + grammar.C("mut", m.Status)
 	default:
-		r2 = grammar.C("blu", ":") + grammar.C("mut", " type a command — [:] to focus")
+		r2 = grammar.C("blu", ":") + grammar.C("mut", " type a command — [:] to focus, [Tab] completes")
 	}
 	return r1 + "\n" + r2
 }
