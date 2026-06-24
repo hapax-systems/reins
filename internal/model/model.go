@@ -256,6 +256,7 @@ var verbs = []verbDef{
 	}},
 	{"legend", "decode the grammar — every glyph/color/cell", nil},
 	{"help", "the help page", nil},
+	{"note", "stage a note — refs like {{sel.id}} expand (AIR-safe)", nil},
 	{"air", "the on-air PII lens", []Candidate{
 		{Label: "on", Detail: "redact non-allowlisted cells (broadcast-safe)"},
 		{Label: "off", Detail: "show everything (LOCAL only)"},
@@ -294,6 +295,7 @@ func matchVerbs(input string) []verbDef {
 func (m Model) Exec(line string) Model {
 	m.Input = ""
 	m.Mode = ModeNormal
+	line = m.resolveTemplate(line) // expand {{sel}}/{{ring.N}} refs (AIR-safe) before parsing
 	f := strings.Fields(strings.TrimSpace(line))
 	if len(f) == 0 {
 		return m
@@ -321,6 +323,12 @@ func (m Model) Exec(line string) Model {
 			m.AIR = !m.AIR
 		}
 		m.Status = fmt.Sprintf("air %v", m.AIR)
+	case "note", "n": // a free-text sink — the {{…}} refs already expanded above (the template seed)
+		if len(args) == 0 {
+			m.Status = "note: reference the selection, e.g. note {{sel.id}} at {{sel.stage}}"
+		} else {
+			m.Status = "note ▸ " + strings.Join(args, " ")
+		}
 	case "help", "h":
 		m.Page, m.Status = PageHelp, ":help"
 	case "legend", "?":

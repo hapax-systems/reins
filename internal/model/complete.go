@@ -40,6 +40,11 @@ func (m Model) completionTree() []Candidate {
 //   - completing an ARG (verb + trailing space, or a partial 2nd token): that verb's arg sub-menu,
 //     prefix-matched; each arg's Value is the full "verb arg" line (so accept RUNS it).
 func (m Model) commandCandidates() []Candidate {
+	// mid-reference: an open `{{…` token → offer the selection-template refs (with live previews).
+	if prefix, open := openTemplatePrefix(m.Input); open {
+		return m.templateCandidates(prefix)
+	}
+
 	var out []Candidate
 	// dynamic-on-selection: inject the selected field's live value (leads the list).
 	if t, ok := m.FocusedTask(); ok && m.Sel.Rank == RankField && m.Sel.Field != "" {
@@ -131,6 +136,9 @@ func (m Model) acceptCompletion() Model {
 		return m.Exec(m.Input)
 	}
 	switch {
+	case strings.HasPrefix(c.Label, "{{"): // a template ref → fill the open fragment, keep composing
+		m.Input, m.CompIdx = fillOpenTemplate(m.Input, c.Value), 0
+		return m
 	case strings.HasPrefix(c.Label, pastePrefix):
 		m.Input, m.CompIdx = c.Value, 0
 		return m
@@ -150,6 +158,8 @@ func (m Model) fillCompletion() Model {
 		return m
 	}
 	switch {
+	case strings.HasPrefix(c.Label, "{{"):
+		m.Input = fillOpenTemplate(m.Input, c.Value)
 	case strings.HasPrefix(c.Label, pastePrefix):
 		m.Input = c.Value
 	case len(c.Sub) > 0:
