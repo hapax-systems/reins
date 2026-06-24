@@ -534,17 +534,28 @@ func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.Mode = ModeNormal // filter stays active; input closes
 	case tea.KeyEsc:
-		m.Mode, m.Filter, m.Focus = ModeNormal, "", 0 // clear the filter
+		m.Mode, m.Filter, m.Focus, m.CompIdx = ModeNormal, "", 0, 0 // clear the filter
+	case tea.KeyTab, tea.KeyDown: // navigate the candidate ids (same engine as the command line)
+		if c := m.completions(); len(c) > 0 {
+			m.CompIdx = (m.CompIdx + 1) % len(c)
+		}
+	case tea.KeyShiftTab, tea.KeyUp:
+		if c := m.completions(); len(c) > 0 {
+			m.CompIdx = (m.CompIdx - 1 + len(c)) % len(c)
+		}
+	case tea.KeyRight: // fill the filter with the highlighted id (fish-style accept-into-line)
+		if c, ok := m.curCandidate(); ok {
+			m.Filter, m.Focus, m.CompIdx = c.Value, 0, 0
+		}
 	case tea.KeyBackspace:
 		if n := len(m.Filter); n > 0 {
 			m.Filter = m.Filter[:n-1]
 		}
-		m.Focus = 0
+		m.Focus, m.CompIdx = 0, 0
 	case tea.KeySpace:
-		m.Filter += " "
+		m.Filter, m.CompIdx = m.Filter+" ", 0
 	case tea.KeyRunes:
-		m.Filter += string(v.Runes)
-		m.Focus = 0
+		m.Filter, m.Focus, m.CompIdx = m.Filter+string(v.Runes), 0, 0
 	}
 	return m, nil
 }

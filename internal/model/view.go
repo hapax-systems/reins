@@ -524,6 +524,11 @@ func (m Model) viewFloor(w int) string {
 			grammar.C("mut", "   [Tab/↓]next · [→]fill · [↵]run · [Esc]cancel")
 		return prompt + "\n" + m.completionStrip()
 	}
+	if m.Mode == ModeFilter { // same fish-style candidate strip as the command line
+		prompt := grammar.C("blu", " /") + " " + m.Filter + grammar.C("brt", "█") +
+			grammar.C("mut", fmt.Sprintf("   %d match · [Tab/↓]ids · [→]fill · [↵]keep · [Esc]clear", len(m.visibleTasks())))
+		return prompt + "\n" + m.completionStrip()
+	}
 	lens := grammar.C("pri", "LOCAL")
 	if m.AIR {
 		lens = grammar.C("fch", "AIR ░allowlist░")
@@ -543,9 +548,6 @@ func (m Model) viewFloor(w int) string {
 		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
-	case m.Mode == ModeFilter:
-		r2 = grammar.C("blu", " /") + " " + m.Filter + "█" +
-			grammar.C("mut", fmt.Sprintf("   %d match — [↵] keep · [Esc] clear", len(m.visibleTasks())))
 	case m.Mode == ModeHint:
 		r2 = grammar.C("brt", " ▶ jump/select") + grammar.C("mut", " — a row letter (gutter) teleports · O/W/M/C (counts) filters by class · [Esc]")
 	case m.Sel.Rank == RankField:

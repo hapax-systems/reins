@@ -83,3 +83,26 @@ func TestFilterCandidates(t *testing.T) {
 		t.Fatalf("filter completion should offer matching ids, got %v", cands)
 	}
 }
+
+// the [/] filter navigates + fills via the SAME engine (autocomplete genuinely everywhere).
+func TestFilterNavigateAndFill(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{
+		{TaskID: "ant", AIR: map[string]string{}},
+		{TaskID: "ace", AIR: map[string]string{}},
+	}, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m = step(m, "/") // enter filter mode
+	if m.Mode != ModeFilter {
+		t.Fatal("/ should open the filter")
+	}
+	m = step(m, "a")          // narrows to ant, ace
+	m = tab(m)                // highlight the 2nd id
+	if m.CompIdx != 1 {
+		t.Fatalf("Tab should advance the filter candidate, got %d", m.CompIdx)
+	}
+	m = rght(m)               // [→] fills the filter with the highlighted id
+	if m.Filter != "ace" || len(m.visibleTasks()) != 1 {
+		t.Fatalf("[→] should fill the filter to 'ace' (filter=%q n=%d)", m.Filter, len(m.visibleTasks()))
+	}
+}

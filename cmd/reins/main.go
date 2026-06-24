@@ -115,7 +115,7 @@ func main() {
 			case strings.HasPrefix(a, "complete:"): // show the fish-style completion floor for <input>
 				m.Page, m.Mode, m.Input = model.PageTasks, model.ModeCommand, strings.TrimPrefix(a, "complete:")
 			case strings.HasPrefix(a, "filter:"):
-				m.Page, m.Filter = model.PageTasks, strings.TrimPrefix(a, "filter:")
+				m.Page, m.Mode, m.Filter = model.PageTasks, model.ModeFilter, strings.TrimPrefix(a, "filter:")
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless
