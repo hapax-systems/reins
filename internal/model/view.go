@@ -23,8 +23,8 @@ func (m Model) View() string {
 		w, h = 120, 40
 	}
 	railW := railWidth
-	if w < 100 || m.Page == PageDynamics {
-		railW = 0 // collapse the rail on narrow terminals, and on :dynamics (the graph wants full width)
+	if w < 100 || m.Page == PageDynamics || m.Page == PageLegend || m.Page == PageHelp {
+		railW = 0 // collapse the rail on narrow terminals + full-width reference pages
 	}
 	mainW := w
 	if railW > 0 {
@@ -70,6 +70,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark
 	case PageHelp:
 		return "help", 0, false
+	case PageLegend:
+		return "legend", 0, false
 	}
 	return "events", len(m.Events), m.EventsDark
 }
@@ -147,6 +149,8 @@ func (m Model) bodyFor(w, h int) string {
 		}
 	case PageHelp:
 		b.WriteString(grammar.RenderHelp())
+	case PageLegend:
+		b.WriteString(grammar.RenderLegend())
 	default:
 		if dark {
 			b.WriteString(darkHint())
@@ -266,7 +270,8 @@ func (m Model) viewFloor(w int) string {
 	}
 	r1 := " " + grammar.C("mut", "focus ") + focus + grammar.C("mut", " │ ") +
 		grammar.C("yel", "[j/k]") + "move " + grammar.C("yel", "[:]") + "cmd " +
-		grammar.C("yel", "[a]") + "AIR " + grammar.C("yel", "[q]") + "quit │ " + lens
+		grammar.C("yel", "[?]") + "legend " + grammar.C("yel", "[a]") + "AIR " +
+		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
 	case m.Mode == ModeCommand:

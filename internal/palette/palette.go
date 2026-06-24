@@ -69,18 +69,28 @@ func SeverityToken(sev string) string {
 	return "mut"
 }
 
-// LaneToken maps an owner/lane to its ownership channel color (orthogonal to severity).
+// LaneToken maps an owner/lane to its ownership channel color. CRITICAL: ownership is its OWN
+// channel — its colors must NEVER overlap the criticality ramp (grn/yel/org/red), or a cell reads
+// "1+1=3" (org = major-severity AND alpha-owner). So lanes draw only from {blu, fch, eme, 2nd}.
+// Enforced by TestLaneAndSeverityChannelsDisjoint.
 func LaneToken(owner string) string {
 	switch {
 	case owner == "alpha":
-		return "org"
+		return "eme" // was "org" — collided with SeverityToken(major/urgent)
 	case owner == "gov" || owner == "GOV" || owner == "governance":
 		return "fch"
 	case strings.HasPrefix(owner, "cc-") || strings.HasPrefix(owner, "cx-"):
 		return "blu"
+	case owner != "":
+		return "2nd" // other named lanes (greek session names etc.) — non-severity ground tone
 	}
 	return "mut"
 }
+
+// laneColorTokens / severityColorTokens are the COLORED (non-ground) tokens each channel emits;
+// they must stay disjoint (the audit test asserts it). "mut" is shared ground, excluded.
+func laneColorTokens() []string     { return []string{"eme", "fch", "blu", "2nd"} }
+func severityColorTokens() []string { return []string{"grn", "yel", "org", "red"} }
 
 // ProvToken maps a dynamics provenance status to its confidence hue.
 func ProvToken(status string) string {

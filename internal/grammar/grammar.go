@@ -366,20 +366,76 @@ func RenderHelp() string {
 		"  :dynamics [scale]  the system-dynamics map as layered ASCII",
 		"                     scale = overview|domain|artifact|runtime|evidence|1..5|all",
 		"  :help              this page",
+		"  :legend  /  [?]    decode the grammar — every glyph/color/cell, with glosses",
 		"",
 		"COMMAND   ([:] opens the command line — Enter runs, Esc cancels)",
 		"  :air on|off        the PII-safe on-air lens (default-deny redaction)",
 		"  :quit              leave",
 		"",
 		"KEYS",
-		"  [:] command   [1] events  [2] tasks  [3] dynamics  [4] help",
-		"  [a] AIR lens  [q] quit",
+		"  [:] command   [1] events  [2] tasks  [3] dynamics  [4] help  [?] legend",
+		"  [j/k] focus   [a] AIR lens  [q] quit",
 		"",
 		"On AIR, every non-allowlisted cell renders ▒▒▒ — safe for the livestream.",
 	}, "\n")
 }
 
 // pad clips/pads to exactly n RUNES (not bytes — multibyte glyphs like →/◀/✖ must not split).
+// --- legend (the on-demand decoder for the whole grammar — never alienate, always situate) ---
+
+// ordered so the legend is deterministic; the drift test asserts these cover the live glyph maps.
+var critOrder = []string{"crit", "major", "warn", "ok"}
+var provOrder = []string{"asserted", "observed", "inferred", "simulated", "rendered", "candidate"}
+
+var critStateGloss = map[string]string{
+	"crit": "critical — blocked / failed", "major": "major issue",
+	"warn": "needs attention / in review", "ok": "healthy / on track",
+}
+var provGloss = map[string]string{
+	"asserted": "stated as fact", "observed": "seen in telemetry", "inferred": "derived",
+	"simulated": "modeled", "rendered": "a generated view", "candidate": "proposed / tentative",
+}
+
+// RenderLegend decodes every mark in the grammar — glyph + plain-language gloss + a LIVE palette
+// swatch — by iterating the SAME maps the renderers use, so it can never drift. The cure for
+// unsituated novelty: a [?]/:legend keystroke answers "what am I looking at" from any page.
+func RenderLegend() string {
+	var b strings.Builder
+	hd := func(s string) { b.WriteString("\n " + C("brt", s) + "\n") }
+	row := func(swatch, gloss string) { b.WriteString("   " + swatch + "   " + C("mut", gloss) + "\n") }
+
+	b.WriteString(" " + C("brt", "LEGEND") + C("mut", " — what the marks mean    [?] or :legend toggles · any key closes") + "\n")
+
+	hd("STATE  (leading glyph, colored by criticality)")
+	for _, k := range critOrder {
+		row(C(SeverityToken(k), critGlyph[k]+" "+pad(k, 6)), critStateGloss[k])
+	}
+	hd("CRITICALITY BAR  (more fill = worse)")
+	for _, k := range critOrder {
+		row(C(SeverityToken(k), critBar(k)), k)
+	}
+	hd("FRESHNESS  (brightness = recency)")
+	fb := func(f float64) string { g, tk := freshGlyph(f); return C(tk, g) }
+	row(fb(0.9)+fb(0.5)+fb(0.1), "▇ recent … ▁ stale  (age since the task's last event)")
+	hd("TRAJECTORY  (◀ where it was · → where it's going)")
+	row(C("mut", "S6◀"), "the stage it came FROM (prior)")
+	row(C("grn", "→S7"), "pending transition to the next stage")
+	row(C("red", "→hold"), "blocked — release-gated, will not advance")
+	row(C("grn", "·ship"), "terminal / arrived (no pending move)")
+	hd("RELATIONS")
+	row(C("blu", "●N"), "N live ties (deps / governance / tied)")
+	hd("PROVENANCE  (:dynamics nodes — a confidence ladder)")
+	for _, k := range provOrder {
+		row(C(palette.ProvToken(k), statusGlyphs[k]+" "+pad(k, 9)), provGloss[k])
+	}
+	hd("COLOR  (three independent channels — each one meaning)")
+	row(C("grn", "█")+C("yel", "█")+C("org", "█")+C("red", "█"), "hue = CRITICALITY   (ok → crit)")
+	row(C("brt", "█")+C("pri", "█")+C("mut", "█"), "brightness = FRESHNESS   (recent → stale)")
+	row(C("blu", "█")+C("fch", "█")+C("eme", "█")+C("2nd", "█"), "family = OWNERSHIP   (cc · gov · alpha · other)")
+	b.WriteString("\n " + C("mut", "gray is ground; color blooms only where it means something.") + "\n")
+	return b.String()
+}
+
 func pad(s string, n int) string {
 	r := []rune(s)
 	if len(r) >= n {

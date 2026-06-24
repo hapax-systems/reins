@@ -102,6 +102,8 @@ func main() {
 				m.Page = model.PageDynamics
 			case a == "help":
 				m.Page = model.PageHelp
+			case a == "legend":
+				m.Page = model.PageLegend
 			case a == "--air":
 				m.AIR = true
 			case strings.HasPrefix(a, "cmd:"): // exercise the command-as-effect path headless

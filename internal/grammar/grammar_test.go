@@ -101,6 +101,21 @@ func TestRenderEventRowAIRRedactsDenied(t *testing.T) {
 	}
 }
 
+func TestLegendCoversAllGlyphMaps(t *testing.T) {
+	// drift guard: every glyph the renderers use must have a legend entry + a gloss.
+	leg := RenderLegend()
+	for k, g := range critGlyph {
+		if !strings.Contains(leg, g) || critStateGloss[k] == "" {
+			t.Fatalf("legend missing crit state %q (%s) or its gloss", k, g)
+		}
+	}
+	for k, g := range statusGlyphs {
+		if !strings.Contains(leg, g) || provGloss[k] == "" {
+			t.Fatalf("legend missing provenance %q (%s) or its gloss", k, g)
+		}
+	}
+}
+
 func TestGlyphIsStableAndMonochromeSafe(t *testing.T) {
 	if Glyph("pr.merged") == Glyph("review.fail") {
 		t.Fatal("distinct kinds must have distinct glyphs (the glyph carries the kind)")

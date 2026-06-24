@@ -14,6 +14,7 @@ const (
 	PageTasks    = 1
 	PageDynamics = 2
 	PageHelp     = 3
+	PageLegend   = 4
 )
 
 const (
@@ -139,8 +140,10 @@ func (m Model) Exec(line string) Model {
 			m.AIR = !m.AIR
 		}
 		m.Status = fmt.Sprintf("air %v", m.AIR)
-	case "help", "h", "?":
+	case "help", "h":
 		m.Page, m.Status = PageHelp, ":help"
+	case "legend", "?":
+		m.Page, m.Status = PageLegend, ":legend"
 	case "quit", "q":
 		m.Quitting, m.Status = true, "bye"
 	default:
@@ -207,6 +210,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "4": // :help discoverability page
 			m.Page = PageHelp
+			return m, nil
+		case "?": // :legend — decode the grammar (always situate)
+			m.Page = PageLegend
 			return m, nil
 		case "j", "down": // move the registry focus cursor (the rail tracks it)
 			m.Focus = clamp(m.Focus+1, 0, m.focusMax())
