@@ -21,7 +21,11 @@ const (
 	ModeNormal  = 0 // hotkeys + page navigation
 	ModeCommand = 1 // the command line is focused (typing a verb)
 	ModeYank    = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
+	ModeHint    = 3 // hint-teleport: labels on visible rows, type one to jump (navigate by looking)
 )
+
+// hintAlphabet: home-row-first labels for hint teleport (one key per visible row; choose by sight).
+const hintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 // the selection lattice rank (coarse→fine). The cursor lives at one rank; [↵]/[⌫] descend/ascend.
 const (
@@ -290,10 +294,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.DoorOpen {
 			return m.updateDoor(v)
 		}
+		if m.Mode == ModeHint {
+			return m.updateHint(v)
+		}
 		if m.Sel.Rank == RankField { // a field within the row is selected — h/l steer, [y] yanks it
 			return m.updateField(v)
 		}
 		switch v.String() {
+		case "f": // hint teleport — labels bloom on visible rows; type one to jump (by looking)
+			if m.Page == PageTasks && len(m.Tasks) > 0 {
+				m.Mode = ModeHint
+			}
+			return m, nil
 		case "tab": // descend into the row's fields (navigate by looking; [Tab] again / Esc ascends)
 			if _, ok := m.FocusedTask(); ok {
 				m.Sel.Rank, m.Sel.Field = RankField, selFields[0]
@@ -379,6 +391,36 @@ func fieldValue(t grammar.Task, field string) string {
 		return t.AuthorityCase
 	}
 	return ""
+}
+
+// taskWindow: the visible row window (offset, count) — the SAME math taskBody renders with, so a
+// hint label maps to the right absolute row index.
+func (m Model) taskWindow() (off, visible int) {
+	h := m.Height
+	if h < 12 {
+		h = 40 // matches View's default frame
+	}
+	visible = h - 9 // midH(h-7) - context - header
+	if visible < 1 {
+		visible = 1
+	}
+	return m.scrollOffset(visible), visible
+}
+
+// updateHint: type a row's label to teleport the cursor there; Esc cancels. No other state change.
+func (m Model) updateHint(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if v.String() == "esc" {
+		m.Mode = ModeNormal
+		return m, nil
+	}
+	if v.Type == tea.KeyRunes && len(v.Runes) == 1 {
+		off, visible := m.taskWindow()
+		if i := strings.IndexRune(hintAlphabet, v.Runes[0]); i >= 0 && i < visible && off+i < len(m.Tasks) {
+			m.Focus = off + i
+		}
+		m.Mode = ModeNormal
+	}
+	return m, nil
 }
 
 // updateField: keys at L3 (a field selected within the row). h/l steer across fields, j/k still move

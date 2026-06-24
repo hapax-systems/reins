@@ -255,6 +255,14 @@ func (m Model) taskBody(w, h int) string {
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
 	for i := off; i < off+visible && i < len(m.Tasks); i++ {
+		if m.Mode == ModeHint { // every visible row carries its teleport label in the gutter
+			label := " "
+			if li := i - off; li < len(hintAlphabet) {
+				label = string(hintAlphabet[li])
+			}
+			b.WriteString(grammar.SelLabel(label) + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
+			continue
+		}
 		switch {
 		case i == m.Focus && m.Mode == ModeYank:
 			// yank pick: the selectable FIELDS show their pick-keys ON the row — choose by LOOKING.
@@ -475,6 +483,8 @@ func (m Model) viewFloor(w int) string {
 		grammar.C("yel", "[q]") + "quit │ " + lens
 	var r2 string
 	switch {
+	case m.Mode == ModeHint:
+		r2 = grammar.C("brt", " ▶ jump") + grammar.C("mut", " — type a row's letter (shown in the gutter) to teleport there · [Esc]")
 	case m.Sel.Rank == RankField:
 		t, _ := m.FocusedTask()
 		r2 = grammar.C("brt", " ▶ field ") + grammar.SelLabel(" "+m.Sel.Field+" ") +

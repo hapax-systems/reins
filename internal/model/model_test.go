@@ -127,6 +127,24 @@ func TestFieldCursorDescendSteerYank(t *testing.T) {
 	}
 }
 
+func TestHintTeleport(t *testing.T) {
+	tasks := []grammar.Task{
+		{TaskID: "t0", AIR: map[string]string{}}, {TaskID: "t1", AIR: map[string]string{}},
+		{TaskID: "t2", AIR: map[string]string{}}, {TaskID: "t3", AIR: map[string]string{}},
+	}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m = step(m, "f")
+	if m.Mode != ModeHint {
+		t.Fatal("f should enter hint mode")
+	}
+	m = step(m, "d") // hintAlphabet = "asdf…" → 'd' is index 2
+	if m.Mode != ModeNormal || m.Focus != 2 {
+		t.Fatalf("typing 'd' should teleport to row 2: mode=%d focus=%d", m.Mode, m.Focus)
+	}
+}
+
 func TestWhichKeyMenu(t *testing.T) {
 	if mv := matchVerbs("d"); len(mv) != 1 || mv[0].name != "dynamics" {
 		t.Fatalf("'d' should match only dynamics, got %v", mv)
