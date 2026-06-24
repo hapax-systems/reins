@@ -180,7 +180,7 @@ func (m Model) viewVital(w int) string {
 		// each Act item is jumpable: in hint mode label it [1]/[2] (pick → cursor lands on that blocker).
 		ids := make([]string, 0, len(head))
 		for i, idx := range head {
-			id := m.Tasks[idx].TaskID
+			id := grammar.Redact(m.Tasks[idx].AIR, "task_id", m.Tasks[idx].TaskID, m.AIR) // Act strip honors AIR
 			if m.Mode == ModeHint {
 				id = grammar.SelLabel(fmt.Sprintf("%d", i+1)) + id
 			}
@@ -227,7 +227,7 @@ func (m Model) contextLine() string {
 	case PageTasks:
 		f := "—"
 		if t, ok := m.FocusedTask(); ok {
-			f = t.TaskID
+			f = grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR) // context line honors AIR too
 		}
 		shown := ""
 		if strings.TrimSpace(m.Filter) != "" || m.CritFilter != "" {
@@ -546,7 +546,7 @@ func (m Model) viewFloor(w int) string {
 	}
 	focus := grammar.C("mut", "—")
 	if t, ok := m.FocusedTask(); ok {
-		fid := t.TaskID
+		fid := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR) // the focus line honors AIR too
 		if r := []rune(fid); len(r) > 24 {
 			fid = string(r[:24])
 		}
