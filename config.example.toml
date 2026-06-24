@@ -3,4 +3,6 @@ api_url = "http://127.0.0.1:8799"
 council_root = "~/projects/hapax-spine"
 ledger_path = "~/.cache/hapax/coord/ledger.db"
 palette = "gruvbox"           # gruvbox (R&D) | solarized (Research)
-air_allowlist = ["kind", "subject", "score", "ts"]   # default-deny: everything else redacts on AIR
+# default-deny: every field NOT listed renders ▒▒▒ under the AIR (on-air) lens.
+# includes the :tasks registry fields (task_id, stage, no_go) so the registry stays legible on air.
+air_allowlist = ["kind", "subject", "score", "ts", "task_id", "stage", "no_go"]
