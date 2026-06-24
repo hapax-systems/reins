@@ -85,7 +85,8 @@ func (m Model) viewTitle(w int) string {
 	return " " + left + strings.Repeat(" ", gap) + right
 }
 
-// Z1 — vital strip: row1 = mode/page/counts/spine; row2 = Act exception strip (INC-5 fills it).
+// Z1 — vital strip: row1 = mode/page + criticality-split task counts + spine; row2 = the
+// EXCEPTION-ONLY Act strip (structured-silence when calm; a red hotlist of blocked items when not).
 func (m Model) viewVital(w int) string {
 	pageName, n, dark := m.pageMeta()
 	mode := grammar.C("grn", "LOCAL")
@@ -96,8 +97,38 @@ func (m Model) viewVital(w int) string {
 	if dark {
 		spine = grammar.C("red", "spine:DARK")
 	}
-	r1 := fmt.Sprintf(" %s  %s  n:%d   %s", mode, grammar.C("brt", ":"+pageName), n, spine)
-	r2 := grammar.C("mut", " "+strings.Repeat("·", 24)+"  (act strip — INC-5)")
+	ok, warn, maj, crit, blocked := 0, 0, 0, 0, []string{}
+	for _, t := range m.Tasks {
+		switch t.Criticality {
+		case "crit":
+			crit++
+		case "major":
+			maj++
+		case "warn":
+			warn++
+		default:
+			ok++
+		}
+		if t.PredictedStage == "hold" || t.Criticality == "crit" || t.Criticality == "major" {
+			blocked = append(blocked, t.TaskID)
+		}
+	}
+	counts := grammar.C("grn", fmt.Sprintf("%d✓", ok)) + " " + grammar.C("yel", fmt.Sprintf("%d▸", warn)) +
+		" " + grammar.C("org", fmt.Sprintf("%d‼", maj)) + " " + grammar.C("red", fmt.Sprintf("%d✖", crit))
+	r1 := fmt.Sprintf(" %s  %s n:%d │ tasks %s%s │ events %d │ %s",
+		mode, grammar.C("brt", ":"+pageName), n, grammar.C("brt", fmt.Sprintf("%d ", len(m.Tasks))), counts, len(m.Events), spine)
+
+	var r2 string
+	if len(blocked) == 0 {
+		r2 = grammar.C("mut", " "+strings.Repeat("·", 30)+"  all clear")
+	} else {
+		head := blocked
+		if len(head) > 3 {
+			head = head[:3]
+		}
+		r2 = grammar.C("red", fmt.Sprintf(" ‼ ACT %d blocked", len(blocked))) +
+			grammar.C("mut", " · ") + grammar.C("org", strings.Join(head, "  "))
+	}
 	return r1 + "\n" + r2
 }
 
