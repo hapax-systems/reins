@@ -156,8 +156,14 @@ func (m Model) viewVital(w int) string {
 		}
 	}
 	dot := grammar.C("mut", " · ")
-	counts := grammar.C("grn", fmt.Sprintf("%d ok", ok)) + dot + grammar.C("yel", fmt.Sprintf("%d warn", warn)) +
-		dot + grammar.C("org", fmt.Sprintf("%d major", maj)) + dot + grammar.C("red", fmt.Sprintf("%d crit", crit))
+	lbl := func(c string) string { // counts are SELECTABLE in hint mode (cross-cutting: a count = a class)
+		if m.Mode == ModeHint {
+			return grammar.SelLabel(c)
+		}
+		return ""
+	}
+	counts := lbl("O") + grammar.C("grn", fmt.Sprintf("%d ok", ok)) + dot + lbl("W") + grammar.C("yel", fmt.Sprintf("%d warn", warn)) +
+		dot + lbl("M") + grammar.C("org", fmt.Sprintf("%d major", maj)) + dot + lbl("C") + grammar.C("red", fmt.Sprintf("%d crit", crit))
 	r1 := " " + mode + grammar.C("mut", "  │  tasks ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Tasks))) +
 		grammar.C("mut", " = ") + counts + grammar.C("mut", "  │  events ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Events))) +
 		grammar.C("mut", "  │  ") + spine
@@ -210,8 +216,15 @@ func (m Model) contextLine() string {
 			f = t.TaskID
 		}
 		shown := ""
-		if strings.TrimSpace(m.Filter) != "" {
-			shown = fmt.Sprintf(" · filter %q → %d shown", m.Filter, len(m.visibleTasks()))
+		if strings.TrimSpace(m.Filter) != "" || m.CritFilter != "" {
+			var parts []string
+			if m.CritFilter != "" {
+				parts = append(parts, "class "+m.CritFilter)
+			}
+			if strings.TrimSpace(m.Filter) != "" {
+				parts = append(parts, fmt.Sprintf("%q", m.Filter))
+			}
+			shown = fmt.Sprintf(" · filter %s → %d shown [Esc clears]", strings.Join(parts, "+"), len(m.visibleTasks()))
 		}
 		return grammar.C("2nd", fmt.Sprintf(" task registry · %d tasks%s · [/] filter · focus: %s", len(m.Tasks), shown, f))
 	case PageEvents:
@@ -504,7 +517,7 @@ func (m Model) viewFloor(w int) string {
 		r2 = grammar.C("blu", " /") + " " + m.Filter + "█" +
 			grammar.C("mut", fmt.Sprintf("   %d match — [↵] keep · [Esc] clear", len(m.visibleTasks())))
 	case m.Mode == ModeHint:
-		r2 = grammar.C("brt", " ▶ jump") + grammar.C("mut", " — type a row's letter (shown in the gutter) to teleport there · [Esc]")
+		r2 = grammar.C("brt", " ▶ jump/select") + grammar.C("mut", " — a row letter (gutter) teleports · O/W/M/C (counts) filters by class · [Esc]")
 	case m.Sel.Rank == RankField:
 		t, _ := m.FocusedTask()
 		r2 = grammar.C("brt", " ▶ field ") + grammar.SelLabel(" "+m.Sel.Field+" ") +

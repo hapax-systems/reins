@@ -110,8 +110,12 @@ type Model struct {
 	DoorOpen     bool   // the /whois full-screen drill-in is open for the focused task
 	Sel          Selection // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	Filter       string // active :tasks filter (id substring); narrows the selectable set
+	CritFilter   string // active criticality-class filter (ok|warn|major|crit) — a selected count
 	CompIdx      int    // fish-style completion: the highlighted candidate in the navigable list
 }
+
+// critFromHint: the count labels in hint mode (cross-cutting selectables) → the criticality class.
+var critFromHint = map[rune]string{'O': "ok", 'W': "warn", 'M': "major", 'C': "crit"}
 
 // completions: the navigable candidate list for the command line. Dynamic on the active SELECTION —
 // when a field/row is selected, a `paste <value>` candidate is offered first so the operator can
@@ -142,18 +146,26 @@ func (m Model) acceptCompletion() Model {
 	return m.Exec(c)
 }
 
-// visibleTasks: the selectable row set — m.Tasks narrowed by the active Filter. The cursor, rail,
-// door, and yank all operate on THIS (the filter narrows what selection can address).
+// visibleTasks: the selectable row set — m.Tasks narrowed by the active Filter (id substring) AND
+// CritFilter (a selected criticality count). The cursor, rail, door, and yank all operate on THIS.
 func (m Model) visibleTasks() []grammar.Task {
-	if strings.TrimSpace(m.Filter) == "" {
+	q := strings.ToLower(strings.TrimSpace(m.Filter))
+	if q == "" && m.CritFilter == "" {
 		return m.Tasks
 	}
-	q := strings.ToLower(m.Filter)
 	out := make([]grammar.Task, 0, len(m.Tasks))
 	for _, t := range m.Tasks {
-		if strings.Contains(strings.ToLower(t.TaskID), q) {
-			out = append(out, t)
+		c := t.Criticality
+		if c == "" {
+			c = "ok"
 		}
+		if m.CritFilter != "" && c != m.CritFilter {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(t.TaskID), q) {
+			continue
+		}
+		out = append(out, t)
 	}
 	return out
 }
@@ -382,8 +394,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Status = fmt.Sprintf("selected %d '%s' tasks · [y] yank all · [Esc] clear", len(mem), t.Criticality)
 			}
 			return m, nil
-		case "esc": // collapse the selection to the bare row cursor
-			m.Sel.Members = nil
+		case "esc": // collapse the selection to the bare row cursor + clear class/count filters
+			m.Sel.Members, m.CritFilter = nil, ""
 			return m, nil
 		case "y": // yank — class-yank if a class is selected, else grab one field
 			if len(m.Sel.Members) > 0 {
@@ -523,8 +535,14 @@ func (m Model) updateHint(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if v.Type == tea.KeyRunes && len(v.Runes) == 1 {
+		r := v.Runes[0]
+		if cf, ok := critFromHint[r]; ok { // a COUNT label → filter the list to that criticality class
+			m.CritFilter, m.Focus, m.Mode = cf, 0, ModeNormal
+			m.Status = "filtered to '" + cf + "' tasks · [Esc] clear"
+			return m, nil
+		}
 		off, visible := m.taskWindow()
-		if i := strings.IndexRune(hintAlphabet, v.Runes[0]); i >= 0 && i < visible && off+i < len(m.Tasks) {
+		if i := strings.IndexRune(hintAlphabet, r); i >= 0 && i < visible && off+i < len(m.visibleTasks()) {
 			m.Focus = off + i
 		}
 		m.Mode = ModeNormal
