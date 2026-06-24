@@ -255,9 +255,14 @@ func (m Model) taskBody(w, h int) string {
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
 	for i := off; i < off+visible && i < len(m.Tasks); i++ {
-		if i == m.Focus { // the SELECTED row — a bright full-width highlight bar (always visible)
+		switch {
+		case i == m.Focus && m.Mode == ModeYank:
+			// yank pick: the selectable FIELDS show their pick-keys ON the row — choose by LOOKING.
+			b.WriteString(fitWidth(yankPickRow(m.Tasks[i], m.AIR), w) + "\n")
+		case i == m.Focus:
+			// the SELECTED row — a bright full-width highlight bar (always visible)
 			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(m.Tasks[i], m.AIR), w-1) + "\n")
-		} else {
+		default:
 			b.WriteString(" " + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
 		}
 	}
@@ -303,6 +308,35 @@ func splitAuth(noGo string) []string {
 		out = append(out, strings.TrimSuffix(strings.TrimSpace(a), "_authorized"))
 	}
 	return out
+}
+
+// yankPickRow: in ModeYank the focused row becomes a labeled field-picker IN PLACE — each yankable
+// field shows its pick-key [i]/[s]/… next to its actual value, so the operator chooses by LOOKING at
+// the data (not a separate menu). AIR-denied fields dim + redact (un-yankable, visible as such).
+func yankPickRow(t grammar.Task, air bool) string {
+	clip := func(s string, n int) string {
+		if r := []rune(s); len(r) > n {
+			return string(r[:n])
+		}
+		return s
+	}
+	fields := []struct{ key, field, val string }{
+		{"i", "task_id", clip(t.TaskID, 18)}, {"s", "stage", shortStage2(t.Stage)},
+		{"o", "owner", t.Owner}, {"w", "prior_stage", shortStage2(t.PriorStage)},
+		{"n", "predicted_stage", t.PredictedStage}, {"c", "criticality", t.Criticality},
+		{"a", "authority_case", clip(t.AuthorityCase, 14)},
+	}
+	out := grammar.C("brt", "▶ yank ")
+	for _, f := range fields {
+		v, ktok := f.val, "yel"
+		if air && t.AIR[f.field] != "ok" {
+			v, ktok = "▒▒▒", "mut"
+		} else if strings.TrimSpace(v) == "" {
+			v = "·"
+		}
+		out += grammar.C(ktok, "["+f.key+"]") + grammar.C("pri", v) + " "
+	}
+	return strings.TrimRight(out, " ")
 }
 
 // yankMenu: the field pick-list shown in ModeYank — keys + labels, AIR-denied fields dimmed (a
