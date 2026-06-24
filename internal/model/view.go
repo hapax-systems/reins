@@ -4,9 +4,26 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
+
+// focusBar renders text as an unmistakable full-width SELECTION bar (bright on the focus background),
+// stripping the row's per-cell colors so the highlight is uniform and obvious. This is THE visible
+// cursor — the operator must always see what is selected.
+func focusBar(text string, w int) string {
+	plain := ansi.Strip(text)
+	if vw := ansi.StringWidth(plain); vw < w {
+		plain += strings.Repeat(" ", w-vw)
+	} else if vw > w {
+		plain = ansi.Truncate(plain, w, "")
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(grammar.Hex("focus"))).
+		Foreground(lipgloss.Color(grammar.Hex("brt"))).
+		Bold(true).Render(plain)
+}
 
 const railWidth = 36
 
@@ -238,11 +255,11 @@ func (m Model) taskBody(w, h int) string {
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString(" " + grammar.RenderTaskHeader() + "\n")
 	for i := off; i < off+visible && i < len(m.Tasks); i++ {
-		mark := " "
-		if i == m.Focus {
-			mark = grammar.C("brt", "▌")
+		if i == m.Focus { // the SELECTED row — a bright full-width highlight bar (always visible)
+			b.WriteString(grammar.C("yel", "▶") + focusBar(grammar.RenderTaskRow(m.Tasks[i], m.AIR), w-1) + "\n")
+		} else {
+			b.WriteString(" " + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
 		}
-		b.WriteString(mark + grammar.RenderTaskRow(m.Tasks[i], m.AIR) + "\n")
 	}
 	return b.String()
 }
@@ -345,6 +362,12 @@ func (m Model) viewRail(w int) string {
 	}
 	rule := grammar.C("border", " "+strings.Repeat("─", w-2))
 	var b strings.Builder
+	// self-context: WHAT this panel is + that it is the cursor row's unfold + WHERE it sits in the
+	// whole (the part shows its place in the whole; ▶ links to the list's selection bar).
+	b.WriteString(" " + grammar.C("brt", "▶ FOCUS") +
+		grammar.C("mut", fmt.Sprintf("  row %d/%d in :tasks", m.Focus+1, len(m.Tasks))) + "\n")
+	b.WriteString(" " + grammar.C("mut", "the selected row, unfolded ↓") + "\n")
+	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("brt", "◆ "+id) + "\n")
 	b.WriteString(rule + "\n")
 	b.WriteString(line("state", orDash(shortStage2(t.Stage)), ctok) + "\n")
@@ -391,7 +414,7 @@ func (m Model) viewFloor(w int) string {
 		focus = grammar.C("brt", fid)
 	}
 	r1 := " " + grammar.C("mut", "focus ") + focus + grammar.C("mut", " │ ") +
-		grammar.C("yel", "[j/k]") + "move " + grammar.C("yel", "[↵]") + "whois " +
+		grammar.C("yel", "[j/k]") + "select " + grammar.C("yel", "[↵]") + "inspect " +
 		grammar.C("yel", "[y]") + "ank " + grammar.C("yel", "[:]") + "cmd " +
 		grammar.C("yel", "[?]") + "legend " + grammar.C("yel", "[a]") + "AIR " +
 		grammar.C("yel", "[q]") + "quit │ " + lens
@@ -399,14 +422,14 @@ func (m Model) viewFloor(w int) string {
 	switch {
 	case m.Mode == ModeYank:
 		t, _ := m.FocusedTask()
-		r2 = grammar.C("brt", " yank ") + grammar.C("mut", "field ← ") + yankMenu(t, m.AIR) +
-			grammar.C("mut", " [Esc] cancel")
+		r2 = grammar.C("brt", " yank") + grammar.C("mut", " a field of the selected task → command line + kill-ring · pick: ") +
+			yankMenu(t, m.AIR) + grammar.C("mut", " · [Esc]")
 	case m.Mode == ModeCommand:
 		r2 = grammar.C("blu", ":") + " " + m.Input + "█" + whichKey(m.Input)
 	case m.Status != "":
 		r2 = " " + grammar.C("mut", m.Status)
 	default:
-		r2 = grammar.C("blu", ":") + grammar.C("mut", " type a command — [:] to focus, [Tab] completes")
+		r2 = grammar.C("blu", ":") + grammar.C("mut", " press [:] to open the command line — type a verb, [Tab] completes")
 	}
 	return r1 + "\n" + r2
 }

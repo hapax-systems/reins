@@ -18,6 +18,9 @@ func SetPalette(mode string) { pal = palette.For(mode) }
 // C colorizes text with a palette token (the cockpit's one coloring entry point for zones/widgets).
 func C(token, text string) string { return pal.Colorize(token, text) }
 
+// Hex resolves a palette token to its raw hex (for callers that need a background, not just fg).
+func Hex(token string) string { return pal.Hex(token) }
+
 // SeverityToken / LaneToken re-exported so callers color by meaning without importing palette.
 func SeverityToken(sev string) string { return palette.SeverityToken(sev) }
 func LaneToken(owner string) string   { return palette.LaneToken(owner) }
@@ -397,13 +400,13 @@ func RenderHelp() string {
 		"  :air on|off        the PII-safe on-air lens (default-deny redaction)",
 		"  :quit              leave",
 		"",
-		"ON A FOCUSED TASK (:tasks)",
-		"  [↵] whois          drill into the full task — SDLC ladder + 7 dims + state-legal verbs",
+		"ON THE SELECTED TASK ([j/k] moves the selection bar on :tasks)",
+		"  [↵] inspect        open the full task — SDLC ladder + 7 dims + state-legal verbs (Esc back)",
 		"  [y] yank           grab a field → kill-ring + the command line (AIR-gated, mouse-free)",
 		"",
 		"KEYS",
 		"  [:] command   [1] events  [2] tasks  [3] dynamics  [4] help  [?] legend",
-		"  [j/k] focus   [↵] whois  [y] yank  [a] AIR lens  [q] quit",
+		"  [j/k] select  [↵] inspect  [y] yank  [a] AIR lens  [q] quit",
 		"",
 		"On AIR, every non-allowlisted cell renders ▒▒▒ — safe for the livestream.",
 	}, "\n")
