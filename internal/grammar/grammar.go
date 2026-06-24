@@ -32,6 +32,16 @@ func SelLabel(text string) string {
 		Bold(true).Render(text)
 }
 
+// FlashLabel: a transient effect-confirmation chip (Norman feedback). Distinct CHANNEL from SelLabel
+// — a green block (success hue) rather than the neutral selection swatch — so a flash reads as "an
+// action just landed", never as a persistent selection. Lives ~900ms then clears.
+func FlashLabel(text string) string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(pal.Hex("grn"))).
+		Foreground(lipgloss.Color(pal.Hex("bg"))).
+		Bold(true).Render(text)
+}
+
 // SeverityToken / LaneToken re-exported so callers color by meaning without importing palette.
 func SeverityToken(sev string) string { return palette.SeverityToken(sev) }
 func LaneToken(owner string) string   { return palette.LaneToken(owner) }

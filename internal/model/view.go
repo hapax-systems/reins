@@ -165,6 +165,9 @@ func (m Model) viewVital(w int) string {
 	r1 := " " + mode + grammar.C("mut", "  │  tasks ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Tasks))) +
 		grammar.C("mut", " = ") + counts + grammar.C("mut", "  │  events ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Events))) +
 		grammar.C("mut", "  │  ") + spine
+	if m.Flash != "" { // transient effect-confirmation — always-visible, even when an effect jumped to command mode
+		r1 += grammar.C("mut", "   ") + grammar.FlashLabel(" "+m.Flash+" ")
+	}
 
 	var r2 string
 	if len(blocked) == 0 {

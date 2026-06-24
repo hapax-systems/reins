@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/grammar"
@@ -112,6 +113,21 @@ type Model struct {
 	Filter       string // active :tasks filter (id substring); narrows the selectable set
 	CritFilter   string // active criticality-class filter (ok|warn|major|crit) — a selected count
 	CompIdx      int    // fish-style completion: the highlighted candidate in the navigable list
+	Flash        string // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
+	FlashSeq     int    // monotonic flash id — a stale tick only clears the flash it was armed for
+}
+
+// FlashClearMsg clears a flash after its lifetime, but only if it's still the current one (seq match).
+type FlashClearMsg struct{ Seq int }
+
+// flash sets a transient confirmation + arms a tick to clear it. Returned cmd must propagate (it does:
+// the handlers return it, and root.Update forwards the model's cmd). The seq guards against a stale
+// tick wiping a newer flash.
+func (m Model) flash(msg string) (Model, tea.Cmd) {
+	m.FlashSeq++
+	m.Flash = msg
+	seq := m.FlashSeq
+	return m, tea.Tick(900*time.Millisecond, func(time.Time) tea.Msg { return FlashClearMsg{Seq: seq} })
 }
 
 // critFromHint: the count labels in hint mode (cross-cutting selectables) → the criticality class.
@@ -372,6 +388,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.FoldTasks(v.Tasks, v.Dark), nil
 	case DynamicsMsg:
 		return m.FoldDynamics(v.Graph, v.Dark), nil
+	case FlashClearMsg:
+		if v.Seq == m.FlashSeq { // ignore a stale tick (a newer flash already superseded it)
+			m.Flash = ""
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.Width, m.Height = v.Width, v.Height // the zones lay out against this
 		return m, nil
@@ -438,7 +459,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Ring = pushRing(m.Ring, RingEntry{Value: strings.Join(vals, "\n"), Field: "class", Page: "tasks"})
 				m.Sel.Members = nil
 				m.Status = fmt.Sprintf("yanked %d task ids → kill-ring", len(vals))
-				return m, nil
+				return m.flash(fmt.Sprintf("✓ class-yanked %d ids → ring %d", len(vals), len(m.Ring)))
 			}
 			if _, ok := m.FocusedTask(); ok {
 				m.Mode, m.Status = ModeYank, ""
@@ -633,6 +654,7 @@ func (m Model) updateField(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.Ring = pushRing(m.Ring, RingEntry{Value: fieldValue(t, f), Field: f, Page: "tasks"})
 		m.Input, m.Mode, m.Sel.Rank = fieldValue(t, f), ModeCommand, RankRow
 		m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", f, len(m.Ring))
+		return m.flash(fmt.Sprintf("✓ yanked %s → ring %d", f, len(m.Ring)))
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
@@ -681,7 +703,7 @@ func (m Model) updateYank(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.Ring = pushRing(m.Ring, RingEntry{Value: val, Field: field, Page: "tasks"})
 	m.Input, m.Mode = val, ModeCommand // grabbed → straight into the command line
 	m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", field, len(m.Ring))
-	return m, nil
+	return m.flash(fmt.Sprintf("✓ yanked %s → ring %d", field, len(m.Ring)))
 }
 
 // updateCommand: key handling while the command line is focused. Enter executes (Exec),
