@@ -20,7 +20,53 @@ const (
 const (
 	ModeNormal  = 0 // hotkeys + page navigation
 	ModeCommand = 1 // the command line is focused (typing a verb)
+	ModeYank    = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
 )
+
+// RingEntry: one grabbed object, provenance-tagged (the emacs-style kill-ring, in memory).
+type RingEntry struct {
+	Value, Field, Page string
+}
+
+// pushRing prepends e, de-duping to front, bounded at 16 (MRU).
+func pushRing(r []RingEntry, e RingEntry) []RingEntry {
+	out := []RingEntry{e}
+	for _, x := range r {
+		if x.Value != e.Value {
+			out = append(out, x)
+		}
+	}
+	if len(out) > 16 {
+		out = out[:16]
+	}
+	return out
+}
+
+// yankField: key -> (field-name, value) for the FOCUSED task. Reads the SOURCE STRUCT, never the
+// screen — this is what makes Reins's yank categorically better than a screen-scraper.
+func (m Model) yankField(key string) (field, val string, ok bool) {
+	t, has := m.FocusedTask()
+	if !has {
+		return "", "", false
+	}
+	switch key {
+	case "i":
+		return "task_id", t.TaskID, true
+	case "s":
+		return "stage", t.Stage, true
+	case "o":
+		return "owner", t.Owner, true
+	case "w":
+		return "prior_stage", t.PriorStage, true
+	case "n":
+		return "predicted_stage", t.PredictedStage, true
+	case "c":
+		return "criticality", t.Criticality, true
+	case "a":
+		return "authority_case", t.AuthorityCase, true
+	}
+	return "", "", false
+}
 
 type Model struct {
 	Title        string
@@ -40,6 +86,7 @@ type Model struct {
 	Width        int    // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height       int
 	Focus        int    // selected row index into m.Tasks (the registry cursor; the rail tracks it)
+	Ring         []RingEntry // the yank kill-ring (most-recent first)
 }
 
 func clamp(v, lo, hi int) int {
@@ -219,7 +266,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeCommand {
 			return m.updateCommand(v)
 		}
+		if m.Mode == ModeYank {
+			return m.updateYank(v)
+		}
 		switch v.String() {
+		case "y": // yank — grab a field off the focused row (the copy-paste killer)
+			if _, ok := m.FocusedTask(); ok {
+				m.Mode, m.Status = ModeYank, ""
+			}
+			return m, nil
 		case ":": // enter the command line (the command-as-effect surface)
 			m.Mode, m.Input, m.Status = ModeCommand, "", ""
 			return m, nil
@@ -257,6 +312,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	return m, nil
+}
+
+// updateYank: a field key grabs that field off the focused row INTO the ring and pre-seeds the
+// command line (the cheapest highest-value paste target — Reins IS the operator's control plane).
+// AIR-gated: a field redacted on-air is un-yankable (yields the redaction token, never cleartext).
+func (m Model) updateYank(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if v.Type == tea.KeyEsc {
+		m.Mode = ModeNormal
+		return m, nil
+	}
+	field, val, ok := m.yankField(v.String())
+	if !ok {
+		return m, nil // unknown pick key — stay in the menu
+	}
+	t, _ := m.FocusedTask()
+	if m.AIR && t.AIR[field] != "ok" {
+		m.Mode, m.Status = ModeNormal, "yank: "+field+" is redacted on-air — un-yankable"
+		return m, nil
+	}
+	m.Ring = pushRing(m.Ring, RingEntry{Value: val, Field: field, Page: "tasks"})
+	m.Input, m.Mode = val, ModeCommand // grabbed → straight into the command line
+	m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", field, len(m.Ring))
 	return m, nil
 }
 

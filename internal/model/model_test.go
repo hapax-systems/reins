@@ -55,6 +55,33 @@ func TestFocusNavigationAndRail(t *testing.T) {
 	}
 }
 
+func TestYankGrabsFieldToRingAndCommandLine(t *testing.T) {
+	tasks := []grammar.Task{{TaskID: "alpha-1", Stage: "S5", Owner: "cc-a",
+		AIR: map[string]string{"task_id": "ok", "owner": "deny"}}}
+	m := New("REINS").FoldTasks(tasks, false)
+	m.Page = PageTasks
+	// 'y' enters yank mode; 'i' grabs task_id -> ring + command line
+	m = step(m, "y")
+	if m.Mode != ModeYank {
+		t.Fatalf("y should enter ModeYank, got %d", m.Mode)
+	}
+	m = step(m, "i")
+	if m.Mode != ModeCommand || m.Input != "alpha-1" {
+		t.Fatalf("grab should pre-seed the command line with the id: mode=%d input=%q", m.Mode, m.Input)
+	}
+	if len(m.Ring) != 1 || m.Ring[0].Value != "alpha-1" {
+		t.Fatalf("grab should push to the ring: %+v", m.Ring)
+	}
+	// AIR-gated: owner is denied -> un-yankable, yields no cleartext
+	m2 := New("REINS").FoldTasks(tasks, false)
+	m2.Page = PageTasks
+	m2.AIR = true
+	m2 = step(step(m2, "y"), "o")
+	if strings.Contains(m2.Input, "cc-a") || len(m2.Ring) != 0 {
+		t.Fatalf("AIR-denied field must be un-yankable (no cleartext, no ring): input=%q ring=%v", m2.Input, m2.Ring)
+	}
+}
+
 func TestWhichKeyMenu(t *testing.T) {
 	if mv := matchVerbs("d"); len(mv) != 1 || mv[0].name != "dynamics" {
 		t.Fatalf("'d' should match only dynamics, got %v", mv)
