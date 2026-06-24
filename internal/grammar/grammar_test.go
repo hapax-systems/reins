@@ -11,6 +11,20 @@ func sample() Event {
 		AIR: map[string]string{"subject": "ok", "actor": "deny", "summary": "deny"}}
 }
 
+func TestCompactTS(t *testing.T) {
+	cases := map[string]string{
+		"2026-06-24T01:53:07Z":        "01:53:07",
+		"2026-06-24T01:53:07.123456Z": "01:53:07",
+		"2026-06-24T01:53:07+00:00":   "01:53:07",
+		"14:22":                       "14:22   ", // no 'T' -> padded passthrough
+	}
+	for in, want := range cases {
+		if got := compactTS(in); got != want {
+			t.Fatalf("compactTS(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
 func TestRenderEventRowLocal(t *testing.T) {
 	got := RenderEventRow(sample(), false)
 	if !strings.Contains(got, Glyph("pr.merged")) || !strings.Contains(got, "4284") || !strings.Contains(got, "merged to main") {

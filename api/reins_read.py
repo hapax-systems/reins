@@ -8,6 +8,10 @@ from fastapi import FastAPI
 _KIND_SEVERITY = {  # kind -> base severity in [0,1]; escalations rank above routine
     "review.fail": 0.95, "session.ended": 0.4, "pr.merged": 0.6,
     "task.closed": 0.55, "stage": 0.45, "status": 0.4,
+    # live spine kinds (verified against ~/.cache/hapax/coord/ledger.db)
+    "coord_dispatch.launch_failed": 0.7, "coord_dispatch.launch_succeeded": 0.5,
+    "coord_dispatch.launch_started": 0.4, "sdlc.stage_transition": 0.5,
+    "sdlc.authorization_flip": 0.65, "task.claim": 0.45,
 }
 
 

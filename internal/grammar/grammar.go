@@ -12,10 +12,16 @@ type Event struct {
 	AIR                               map[string]string // field -> "ok"|"deny"
 }
 
-// Glyph: the closed, learned alphabet — the cell carries the kind (monochrome-safe).
+// Glyph: the closed, learned alphabet — the cell carries the kind by semantic class
+// (▸ in-progress · ✓ success · ✖ failure · ⇡ advance · ⚑ flag · ◆ task · ↟ PR), monochrome-safe.
 var glyphs = map[string]string{
-	"pr.merged": "↟", "task.closed": "◆", "session.ended": "⚙",
+	"pr.merged": "↟", "task.closed": "◆", "task.claim": "◆", "session.ended": "⚙",
 	"review.fail": "✖", "stage": "▸", "status": "·",
+	"coord_dispatch.launch_started":   "▸",
+	"coord_dispatch.launch_failed":    "✖",
+	"coord_dispatch.launch_succeeded": "✓",
+	"sdlc.stage_transition":           "⇡",
+	"sdlc.authorization_flip":         "⚑",
 }
 
 func Glyph(kind string) string {
@@ -51,12 +57,28 @@ func redact(airMap map[string]string, field, val string, on bool) string {
 	return val
 }
 
+// compactTS: presentation-only — the API returns canonical ISO (full precision, the data
+// contract); the cockpit compacts to HH:MM:SS for grid density. Unparseable -> first 8 chars.
+func compactTS(ts string) string {
+	if i := strings.IndexByte(ts, 'T'); i >= 0 {
+		t := strings.TrimSuffix(ts[i+1:], "Z")
+		if j := strings.IndexByte(t, '.'); j >= 0 { // drop sub-seconds
+			t = t[:j]
+		}
+		if k := strings.IndexByte(t, '+'); k >= 0 { // drop tz offset
+			t = t[:k]
+		}
+		return pad(t, 8)
+	}
+	return pad(ts, 8)
+}
+
 // RenderEventRow: one row of the grammar. `airOn` toggles the AIR lens (default-deny redaction).
 // Format (formats.toml row-kind "event"): TS │ scorebar glyph │ subject(6) │ summary
 func RenderEventRow(ev Event, airOn bool) string {
 	subj := redact(ev.AIR, "subject", pad(ev.Subject, 6), airOn)
 	summ := redact(ev.AIR, "summary", ev.Summary, airOn)
-	return fmt.Sprintf("%-5s %s%s %s  %s", ev.TS, ScoreBar(ev.Score), Glyph(ev.Kind), subj, summ)
+	return fmt.Sprintf("%s %s%s %s  %s", compactTS(ev.TS), ScoreBar(ev.Score), Glyph(ev.Kind), subj, summ)
 }
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
