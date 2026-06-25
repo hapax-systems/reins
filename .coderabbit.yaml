@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  review_details: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+  path_filters:
+    - "!**/coverage-go.out"
+    - "!**/coverage.xml"
+    - "!**/.venv/**"
+    - "!**/__pycache__/**"
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: |
+        Keep Codecov, Semgrep, CodeRabbit, Claude, and Codex checks advisory unless a governed Hapax task explicitly promotes a stable aggregate check to branch protection.
+    - path: "**/*.go"
+      instructions: |
+        Review Go changes for deterministic modeling, explicit error handling, and compatibility with the github.com/hapax-systems/reins module path.
+    - path: "api/**"
+      instructions: |
+        Review Python API adapter changes for default-deny AIR behavior and stable shape conversions.
+
+chat:
+  auto_reply: true

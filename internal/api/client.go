@@ -52,8 +52,8 @@ func FetchTasks(url string) ([]grammar.Task, bool, error) {
 }
 
 type dynamicsResp struct {
-	Dark   bool `json:"dark"`
-	Error  string `json:"error"`
+	Dark  bool   `json:"dark"`
+	Error string `json:"error"`
 	grammar.Graph
 }
 
