@@ -4591,25 +4591,31 @@ func (m Model) renderLastlogDoor(w, h int) string {
 	add(" " + grammar.C("mut", "retained coord events, newest at bottom — Esc closes."))
 	add(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w))))
 	add("  " + grammar.RenderEventHeader())
-	rows := m.EventScrollback.Rows
-	if len(rows) == 0 {
+	// the view = backward-paged older (PgUp, if any) on top of the retained recent window
+	view := append([]grammar.Event{}, m.LastlogOlder...)
+	view = append(view, m.EventScrollback.Rows...)
+	if len(view) == 0 {
 		add(" " + grammar.C("mut", "no retained events yet — accumulates as the event stream flows"))
 	}
 	headroom := h - len(lines) - 1
 	if headroom < 1 {
 		headroom = 1
 	}
-	skip := len(rows) - headroom
+	skip := len(view) - headroom
 	if skip < 0 {
 		skip = 0
 	}
-	for _, ev := range rows[skip:] {
+	for _, ev := range view[skip:] {
 		add("  " + grammar.RenderEventRow(ev, m.AIR))
 	}
 	for len(lines) < h-1 {
 		lines = append(lines, fitWidth("", w))
 	}
-	add(grammar.C("mut", "  [Esc]close · ") + grammar.C("2nd", fmt.Sprintf("%d retained", len(rows))))
+	paging := ""
+	if m.LastlogPaging {
+		paging = grammar.C("yel", " · paging…")
+	}
+	add(grammar.C("mut", "  [PgUp]older [PgDn]live [Esc]close · ") + grammar.C("2nd", fmt.Sprintf("%d shown", len(view))) + paging)
 	for len(lines) > h {
 		lines = lines[:h]
 	}

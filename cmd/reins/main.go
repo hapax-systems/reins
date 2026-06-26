@@ -25,6 +25,16 @@ func fetchOnce(url string) tea.Msg {
 	return msg
 }
 
+// fetchLastlogPageOnce: one backward-page fetch (PgUp in /lastlog) -> a LastlogPageMsg.
+func fetchLastlogPageOnce(url, before string) tea.Msg {
+	evs, dark, err := api.FetchEventsBefore(url, before)
+	msg := model.LastlogPageMsg{Events: evs, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+
 // fetchTasksOnce: one registry fetch -> a TasksMsg.
 func fetchTasksOnce(url string) tea.Msg {
 	ts, dark, err := api.FetchTasks(url)
@@ -187,6 +197,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, beatTick() // visual-only liveness frame; no source/readiness mutation
 	case model.SessionDetailRequest:
 		return r, func() tea.Msg { return fetchSessionDetailOnce(r.url, msg.(model.SessionDetailRequest).Role) }
+	case model.LastlogPageRequest:
+		return r, func() tea.Msg { return fetchLastlogPageOnce(r.url, msg.(model.LastlogPageRequest).Before) }
 	}
 	return r, cmd // propagate the model's cmd (e.g. tea.Quit on [q])
 }

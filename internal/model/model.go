@@ -371,6 +371,8 @@ type Model struct {
 	IntakeDoorOpen      bool        // the /intake full-screen aggregate provenance door is open
 	LastlogDoorOpen     bool        // the /lastlog scrollback door is open (retained event history)
 	EventScrollback     Scrollback  // per-window event-history ring (the /lastlog affordance), fed on poll
+	LastlogOlder        []grammar.Event // transient backward-paged events (PgUp); cleared on close
+	LastlogPaging       bool        // a /lastlog backward-page fetch is in flight
 	Sel                 Selection   // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	Filter              string      // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string      // active criticality-class filter (ok|warn|major|crit) — a selected count
@@ -1633,6 +1635,18 @@ type EventsMsg struct {
 	Dark   bool
 	Error  string
 }
+
+// LastlogPageRequest fires a backward-page fetch (PgUp in the /lastlog door); the root
+// loop honors it like SessionDetailRequest. LastlogPageMsg carries the older events back.
+type LastlogPageRequest struct {
+	Before string
+}
+
+type LastlogPageMsg struct {
+	Events []grammar.Event
+	Dark   bool
+	Error  string
+}
 type TasksMsg struct {
 	Tasks []grammar.Task
 	Dark  bool
@@ -1688,6 +1702,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.EventsError = v.Error
 		m.EventsSeq++
 		m.LastFold = "events"
+		return m, nil
+	case LastlogPageMsg:
+		// a PgUp backward-page landed: prepend the older events (newest-at-bottom order)
+		m.LastlogPaging = false
+		if v.Error == "" {
+			m.LastlogOlder = append(v.Events, m.LastlogOlder...)
+		}
 		return m, nil
 	case TasksMsg:
 		m = m.FoldTasks(v.Tasks, v.Dark)
@@ -2602,17 +2623,37 @@ func (m Model) updateIntakeDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateLastlogDoor: keys while the /lastlog scrollback door is open. Esc/Enter/q close.
-// (PgUp/PgDn backward-paging through FetchEventsBefore arrives in a later slice.)
+// updateLastlogDoor: keys while the /lastlog scrollback door is open. Esc/Enter/q close;
+// PgUp pages backward (FetchEventsBefore via LastlogPageRequest); PgDn returns to the live
+// retained window. Unknown keys are inert (no modal swallow — the door stays open, the key
+// does nothing), so the page-jump modal-trap that affects the other doors does NOT apply here.
 func (m Model) updateLastlogDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.LastlogDoorOpen = false
 	switch keyName(v) {
 	case "esc", "enter", "q":
-		// close — clean return to the page
+		m.LastlogDoorOpen = false
+		m.LastlogOlder = nil // close drops the backward-paged view (ring stays)
+		m.LastlogPaging = false
+		return m, nil
+	case "pgup":
+		if m.LastlogPaging {
+			return m, nil // a page fetch is already in flight
+		}
+		before := m.EventScrollback.OldestTS()
+		if len(m.LastlogOlder) > 0 {
+			before = m.LastlogOlder[0].TS // page further back from the oldest shown
+		}
+		if before == "" {
+			return m, nil // nothing to page back from
+		}
+		m.LastlogPaging = true
+		cursor := before
+		return m, func() tea.Msg { return LastlogPageRequest{Before: cursor} }
+	case "pgdn":
+		m.LastlogOlder = nil // return to the live retained window
+		return m, nil
 	default:
-		m.LastlogDoorOpen = true // unknown key — stay in the door
+		return m, nil // inert: door stays open, key consumed (no swallow)
 	}
-	return m, nil
 }
 
 func (m Model) doorVerbLegal(key string) bool {

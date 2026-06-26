@@ -44,6 +44,28 @@ func FetchEvents(url string) ([]grammar.Event, bool, error) {
 	return r.Events, r.Dark, nil
 }
 
+// FetchEventsBefore GETs one backward page — events strictly older than `before` (ISO ts),
+// the /lastlog backward-paging cursor. Returns (events, dark, err).
+func FetchEventsBefore(urlStr, before string) ([]grammar.Event, bool, error) {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(urlStr + "/read/events?limit=80&before=" + url.QueryEscape(before))
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/events"); err != nil {
+		return nil, true, err
+	}
+	var r readResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Error != "" {
+		return r.Events, true, fmt.Errorf("%s", r.Error)
+	}
+	return r.Events, r.Dark, nil
+}
+
 type tasksResp struct {
 	Dark  bool           `json:"dark"`
 	Error string         `json:"error"`
