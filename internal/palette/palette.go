@@ -15,12 +15,14 @@ import (
 // mode-agnostic. Severity hues (grn/yel/org/red), lane channels (blu/fch), ground greys, canvas.
 var gruvbox = map[string]string{
 	"yel": "#fabd2f", "grn": "#b8bb26", "red": "#fb4934", "org": "#fe8019",
+	"yel_dim": "#d79921", "grn_dim": "#98971a", "org_dim": "#d65d0e", "red_dim": "#cc241d",
 	"blu": "#83a598", "fch": "#d3869b", "eme": "#8ec07c",
 	"mut": "#928374", "2nd": "#bdae93", "pri": "#ebdbb2", "brt": "#fdf4c9",
 	"bg": "#1d2021", "surface": "#282828", "focus": "#3c3836", "border": "#504945",
 }
 var solarized = map[string]string{
 	"yel": "#b58900", "grn": "#859900", "red": "#dc322f", "org": "#cb4b16",
+	"yel_dim": "#836300", "grn_dim": "#566e00", "org_dim": "#913312", "red_dim": "#a02220",
 	"blu": "#268bd2", "fch": "#d33682", "eme": "#2aa198",
 	"mut": "#586e75", "2nd": "#657b83", "pri": "#839496", "brt": "#93a1a1",
 	"bg": "#002b36", "surface": "#073642", "focus": "#0a4856", "border": "#586e75",
@@ -41,7 +43,7 @@ func For(mode string) *Palette {
 	return &Palette{mode: m, tokens: t}
 }
 
-func (p *Palette) Mode() string         { return p.mode }
+func (p *Palette) Mode() string            { return p.mode }
 func (p *Palette) Hex(token string) string { return p.tokens[token] }
 
 // Colorize wraps text in the token's foreground color. Unknown token or empty text -> unchanged
@@ -69,6 +71,19 @@ func SeverityToken(sev string) string {
 	return "mut"
 }
 
+// DimSeverityToken is the criticality hue modulated by freshness — the freshness=brightness
+// channel applied WITHIN the hue (fresh > 0.6 -> the full hue; stale -> the hue_dim variant).
+// It keeps the criticality=hue channel intact (stale-warn stays dim-YELLOW, never gray) so the
+// live warn-sea gains pre-attentive variance without reordering the registry. Non-hue ("mut")
+// severities have no hue to dim and stay "mut".
+func DimSeverityToken(sev string, freshness float64) string {
+	tok := SeverityToken(sev)
+	if tok == "mut" || freshness > 0.6 {
+		return tok
+	}
+	return tok + "_dim"
+}
+
 // LaneToken maps an owner/lane to its ownership channel color. CRITICAL: ownership is its OWN
 // channel — its colors must NEVER overlap the criticality ramp (grn/yel/org/red), or a cell reads
 // "1+1=3" (org = major-severity AND alpha-owner). So lanes draw only from {blu, fch, eme, 2nd}.
@@ -89,8 +104,10 @@ func LaneToken(owner string) string {
 
 // laneColorTokens / severityColorTokens are the COLORED (non-ground) tokens each channel emits;
 // they must stay disjoint (the audit test asserts it). "mut" is shared ground, excluded.
-func laneColorTokens() []string     { return []string{"eme", "fch", "blu", "2nd"} }
-func severityColorTokens() []string { return []string{"grn", "yel", "org", "red"} }
+func laneColorTokens() []string { return []string{"eme", "fch", "blu", "2nd"} }
+func severityColorTokens() []string {
+	return []string{"grn", "yel", "org", "red", "grn_dim", "yel_dim", "org_dim", "red_dim"}
+}
 
 // ProvToken maps a dynamics provenance status to its confidence hue.
 func ProvToken(status string) string {

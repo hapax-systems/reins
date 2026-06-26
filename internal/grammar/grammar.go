@@ -44,7 +44,10 @@ func FlashLabel(text string) string {
 
 // SeverityToken / LaneToken re-exported so callers color by meaning without importing palette.
 func SeverityToken(sev string) string { return palette.SeverityToken(sev) }
-func LaneToken(owner string) string   { return palette.LaneToken(owner) }
+func DimSeverityToken(sev string, freshness float64) string {
+	return palette.DimSeverityToken(sev, freshness)
+}
+func LaneToken(owner string) string { return palette.LaneToken(owner) }
 
 // kindSeverity maps an event kind to a severity word for its heat color ("" = neutral/ground).
 func kindSeverity(kind string) string {
@@ -260,7 +263,7 @@ func RenderTaskRow(t Task, airOn bool) string {
 	if crit == "" {
 		crit = "ok"
 	}
-	ctok := SeverityToken(crit)
+	ctok := DimSeverityToken(crit, t.Freshness)
 	critVisible := !airOn || t.AIR["criticality"] == "ok"
 	if !critVisible {
 		ctok = "mut"

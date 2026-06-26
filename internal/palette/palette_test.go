@@ -27,6 +27,48 @@ func TestSemanticTokens(t *testing.T) {
 	}
 }
 
+func TestDimSeverityTokenDimsStaleWithinHue(t *testing.T) {
+	// fresh -> full hue; stale -> the _dim variant (keeps the hue, breaks the warn monoculture)
+	if got := DimSeverityToken("warn", 0.9); got != "yel" {
+		t.Fatalf("fresh warn: want yel, got %s", got)
+	}
+	if got := DimSeverityToken("warn", 0.1); got != "yel_dim" {
+		t.Fatalf("stale warn: want yel_dim, got %s", got)
+	}
+	if got := DimSeverityToken("crit", 0.1); got != "red_dim" {
+		t.Fatalf("stale crit: want red_dim, got %s", got)
+	}
+	// a non-hue severity ("mut") has no hue to dim -> stays mut
+	if got := DimSeverityToken("unknown", 0.1); got != "mut" {
+		t.Fatalf("non-hue severity: want mut, got %s", got)
+	}
+}
+
+func TestDimVariantsDefinedAndDisjointFromLanes(t *testing.T) {
+	for _, mode := range []string{"gruvbox", "solarized"} {
+		p := For(mode)
+		for _, dim := range []string{"grn_dim", "yel_dim", "org_dim", "red_dim"} {
+			if p.Hex(dim) == "" {
+				t.Fatalf("%s dim variant %s undefined", mode, dim)
+			}
+			bright := strings.TrimSuffix(dim, "_dim")
+			if p.Hex(dim) == p.Hex(bright) {
+				t.Fatalf("%s %s identical to its bright hue (no dimming)", mode, dim)
+			}
+		}
+	}
+	// the dim variants are severity-channel hues -> must stay disjoint from lane tokens
+	sev := map[string]bool{}
+	for _, s := range severityColorTokens() {
+		sev[s] = true
+	}
+	for _, l := range laneColorTokens() {
+		if sev[l] {
+			t.Fatalf("lane token %q collides with the severity channel", l)
+		}
+	}
+}
+
 func TestLaneAndSeverityChannelsDisjoint(t *testing.T) {
 	// ownership and criticality are separate perceptual channels — no shared hue (anti 1+1=3).
 	sev := map[string]bool{}
