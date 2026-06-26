@@ -205,6 +205,9 @@ func (m Model) viewTitle(w int) string {
 			active = i
 			tabs = append(tabs, grammar.C("brt", "‹"+item+"›"))
 		} else {
+			if m.windowActive(p.Page) && tok == "mut" {
+				tok = "pri" // a calm window changed since visit -> brighten (AUTO-SURFACE)
+			}
 			tabs = append(tabs, grammar.C(tok, item))
 		}
 	}
