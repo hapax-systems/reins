@@ -27,3 +27,28 @@ func (s *Scrollback) OldestTS() string {
 	}
 	return s.Rows[0].TS
 }
+
+// Feed pushes newly-seen events (ts newer than the ring's newest, or all when empty) into
+// the per-window history, bounded at Cap. Called from the stateful Update layer on each
+// EventsMsg (NOT the pure Fold) — history is legitimate accumulating state. The READ API
+// returns the newest 80-window each poll; Feed accumulates the union beyond that window so
+// the cockpit retains scrollback across polls (the BitchX/irssi "what happened while I was
+// elsewhere" affordance). AIR provenance rides on each event; the render applies the lens.
+func (s *Scrollback) Feed(evs []grammar.Event) {
+	if s.Cap <= 0 {
+		s.Cap = 512
+	}
+	newest := ""
+	if n := len(s.Rows); n > 0 {
+		newest = s.Rows[n-1].TS
+	}
+	for _, ev := range evs {
+		if ev.TS > newest {
+			s.Rows = append(s.Rows, ev)
+			newest = ev.TS
+		}
+	}
+	if len(s.Rows) > s.Cap {
+		s.Rows = s.Rows[len(s.Rows)-s.Cap:]
+	}
+}

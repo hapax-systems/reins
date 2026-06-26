@@ -61,6 +61,9 @@ func (m Model) View() string {
 	if m.IntakeDoorOpen {
 		return m.renderIntakeDoor(w, h)
 	}
+	if m.LastlogDoorOpen {
+		return m.renderLastlogDoor(w, h)
+	}
 	railW := railWidth
 	if w < 100 || m.isReferencePage() || ((m.Page == PageEvents || m.Page == PageTasks || m.Page == PageSessions) && w >= 160) {
 		railW = 0 // reference pages and wide row pages manage their own context panes
@@ -4568,6 +4571,49 @@ func (m Model) renderSelectedIntakeBucket(w int) string {
 	writeWrappedKV(&b, "next proof", intakeRowFieldForAir(row, "next_evidence", m.AIR), "pri", w)
 	writeWrappedKV(&b, "legal next", legalNext, "yel", w)
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderLastlogDoor: the /lastlog scrollback — retained coord-event history (newest at
+// bottom), the BitchX/irssi lastlog affordance. Reuses grammar.RenderEventRow so AIR is
+// single-sourced (a locally-captured private event cannot replay cleartext on-air). The
+// ring is fed on every poll (EventScrollback.Feed); PgUp/PgDn backward-paging through the
+// /read/events `before` cursor arrives in the next slice.
+func (m Model) renderLastlogDoor(w, h int) string {
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+	var lines []string
+	add := func(s string) { lines = append(lines, fitWidth(s, w)) }
+	add(" " + grammar.C("brt", "◆ DOOR /lastlog") + grammar.C("2nd", "  event-history scrollback"))
+	add(" " + grammar.C("mut", "retained coord events, newest at bottom — Esc closes."))
+	add(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w))))
+	add("  " + grammar.RenderEventHeader())
+	rows := m.EventScrollback.Rows
+	if len(rows) == 0 {
+		add(" " + grammar.C("mut", "no retained events yet — accumulates as the event stream flows"))
+	}
+	headroom := h - len(lines) - 1
+	if headroom < 1 {
+		headroom = 1
+	}
+	skip := len(rows) - headroom
+	if skip < 0 {
+		skip = 0
+	}
+	for _, ev := range rows[skip:] {
+		add("  " + grammar.RenderEventRow(ev, m.AIR))
+	}
+	for len(lines) < h-1 {
+		lines = append(lines, fitWidth("", w))
+	}
+	add(grammar.C("mut", "  [Esc]close · ") + grammar.C("2nd", fmt.Sprintf("%d retained", len(rows))))
+	for len(lines) > h {
+		lines = lines[:h]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderIntakeDoor(w, h int) string {

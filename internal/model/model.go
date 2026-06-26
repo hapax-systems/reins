@@ -369,6 +369,8 @@ type Model struct {
 	DoorOpen            bool        // the /whois full-screen drill-in is open for the focused task
 	SessionDoorOpen     bool        // the /session full-screen lane card is open for the focused session
 	IntakeDoorOpen      bool        // the /intake full-screen aggregate provenance door is open
+	LastlogDoorOpen     bool        // the /lastlog scrollback door is open (retained event history)
+	EventScrollback     Scrollback  // per-window event-history ring (the /lastlog affordance), fed on poll
 	Sel                 Selection   // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	Filter              string      // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string      // active criticality-class filter (ok|warn|major|crit) — a selected count
@@ -1191,7 +1193,7 @@ func (m Model) openEpistemicsForIntakeFocus() Model {
 }
 
 func New(title string) Model {
-	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}}
+	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}}
 }
 
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
@@ -1501,6 +1503,9 @@ func (m Model) Exec(line string) Model {
 	case "legend":
 		m = m.switchPage(PageLegend)
 		m.Status = ":legend"
+	case "lastlog":
+		m.LastlogDoorOpen = true
+		m.Status = ":lastlog · event-history scrollback · Esc close"
 	case "commands":
 		m = m.switchPage(PageCommands)
 		m.Status = ":commands · " + m.commandsSummary()
@@ -1604,6 +1609,7 @@ func (m Model) switchPage(page int) Model {
 	m.DoorOpen = false
 	m.SessionDoorOpen = false
 	m.IntakeDoorOpen = false
+	m.LastlogDoorOpen = false
 	m.RefScroll = 0
 	m.Sel.Rank, m.Sel.Field, m.Sel.Members = RankRow, "", nil
 	if page != PageTasks {
@@ -1678,6 +1684,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case EventsMsg:
 		m = m.Fold(v.Events, v.Dark)
+		m.EventScrollback.Feed(v.Events)
 		m.EventsError = v.Error
 		m.EventsSeq++
 		m.LastFold = "events"
@@ -1774,6 +1781,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.IntakeDoorOpen {
 			return m.updateIntakeDoor(v)
+		}
+		if m.LastlogDoorOpen {
+			return m.updateLastlogDoor(v)
 		}
 		if m.Mode == ModeHint {
 			return m.updateHint(v)
@@ -2588,6 +2598,19 @@ func (m Model) updateIntakeDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// just close
 	default:
 		m.IntakeDoorOpen = true // unknown key — stay in the door
+	}
+	return m, nil
+}
+
+// updateLastlogDoor: keys while the /lastlog scrollback door is open. Esc/Enter/q close.
+// (PgUp/PgDn backward-paging through FetchEventsBefore arrives in a later slice.)
+func (m Model) updateLastlogDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.LastlogDoorOpen = false
+	switch keyName(v) {
+	case "esc", "enter", "q":
+		// close — clean return to the page
+	default:
+		m.LastlogDoorOpen = true // unknown key — stay in the door
 	}
 	return m, nil
 }

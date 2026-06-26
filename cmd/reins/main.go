@@ -316,6 +316,8 @@ func main() {
 				}
 			case a == "door":
 				m.Page, m.DoorOpen = model.PageTasks, true
+			case a == "lastlog":
+				m.LastlogDoorOpen = true
 			case a == "yank":
 				m.Page, m.Mode = model.PageTasks, model.ModeYank
 			case a == "eyank": // events page in yank-pick mode (field letters on the focused event)

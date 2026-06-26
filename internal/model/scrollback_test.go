@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hapax-systems/reins/internal/grammar"
@@ -50,5 +51,31 @@ func TestScrollbackOldestTSIsBackwardCursor(t *testing.T) {
 	s.Push(grammar.Event{TS: "t2"})
 	if got := s.OldestTS(); got != "t1" {
 		t.Fatalf("oldest ts (backward cursor): want t1, got %q", got)
+	}
+}
+
+func TestScrollbackFeedAccumulatesNewOnly(t *testing.T) {
+	s := Scrollback{Cap: 512}
+	s.Feed([]grammar.Event{{TS: "t1"}, {TS: "t2"}, {TS: "t3"}})
+	if len(s.Rows) != 3 {
+		t.Fatalf("first feed: want 3 rows, got %d", len(s.Rows))
+	}
+	// re-feed an overlapping window (t2,t3) + one new (t4): only t4 accumulates
+	s.Feed([]grammar.Event{{TS: "t2"}, {TS: "t3"}, {TS: "t4"}})
+	if len(s.Rows) != 4 {
+		t.Fatalf("re-feed: want 4 rows (t1..t4), got %d", len(s.Rows))
+	}
+	if s.Rows[len(s.Rows)-1].TS != "t4" {
+		t.Fatalf("newest after feed: want t4, got %s", s.Rows[len(s.Rows)-1].TS)
+	}
+}
+
+func TestScrollbackFeedDefaultsCapWhenZero(t *testing.T) {
+	var s Scrollback // Cap 0 -> Feed defaults to 512
+	for i := 0; i < 4; i++ {
+		s.Feed([]grammar.Event{{TS: fmt.Sprintf("t%d", i)}})
+	}
+	if s.Cap != 512 || len(s.Rows) != 4 {
+		t.Fatalf("default cap + retain: want cap=512 rows=4, got cap=%d rows=%d", s.Cap, len(s.Rows))
 	}
 }
