@@ -3720,6 +3720,45 @@ def read_epistemics(council_root: str, allowlist: list[str], scope: str = "dynam
     }
 
 
+def to_trace_row(t: dict, _allowlist: list[str]) -> dict:
+    """Fold a Langfuse trace into an operational Reins row: model/tokens/cost/latency.
+    Input/output (operator content = PII) NEVER enter the row — the livestream-safe
+    projection of an LLM call. All fields are operational metadata (no PII), so all are
+    on-air safe."""
+    tu = t.get("tokenUsage") or {}
+    md = t.get("metadata") or {}
+    row = {
+        "ts": str(t.get("timestamp", "")),
+        "trace_id": str(t.get("id", "")),
+        "model": str(md.get("model") or md.get("litellm_model_id") or "?"),
+        "prompt_tok": int(tu.get("prompt") or tu.get("input") or 0),
+        "completion_tok": int(tu.get("completion") or tu.get("output") or 0),
+        "total_tok": int(tu.get("total") or 0),
+        "cost": round(float(t.get("totalPrice") or 0.0), 6),
+        "latency_ms": int(round(float(t.get("duration") or 0.0) * 1000)),
+    }
+    row["air"] = {k: "ok" for k in row}  # operational metadata only — no PII to redact
+    return row
+
+
+def read_traces(council_root: str, limit: int = 40) -> dict:
+    """Fold the existing Langfuse LLM-observability plane into a recent-traces list (WS#2).
+    Honest-dark when Langfuse is unreachable. Reuses shared.langfuse_client — never
+    re-instruments LLM calls."""
+    root = os.path.expanduser(council_root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from shared.langfuse_client import is_available, langfuse_get  # noqa: E402
+        if not is_available():
+            return {"dark": True, "error": "langfuse unavailable", "traces": []}
+        resp = langfuse_get("/traces", {"limit": limit, "orderBy": "timestamp.desc"})
+        traces = [to_trace_row(t, []) for t in (resp.get("data") or [])[:limit]]
+        return {"dark": False, "traces": traces}
+    except Exception as e:  # honest-dark
+        return {"dark": True, "error": str(e), "traces": []}
+
+
 def _projection(council_root: str) -> dict:
     root = os.path.expanduser(council_root)
     if root not in sys.path:
@@ -3762,6 +3801,10 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
         now = time.time()
         events = [to_event(r, allowlist, age_s=_age_s(str(r.get("timestamp", r.get("ts", ""))), now)) for r in raws]
         return {"dark": False, "events": events}
+
+    @app.get("/read/traces")
+    def traces(limit: int = 40) -> dict:
+        return read_traces(council_root, limit)
 
     @app.get("/read/tasks")
     def read_tasks() -> dict:

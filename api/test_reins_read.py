@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from reins_read import (
     _page_before,
     _raw_sessions,
+    to_trace_row,
     _route_binding_index,
     _session_route_binding,
     _session_sort_key,
@@ -56,6 +57,32 @@ def test_score_recency_and_kind():
     a = score_event({"kind": "pr.merged"}, age_s=5)
     b = score_event({"kind": "review.fail"}, age_s=5)  # escalation outranks
     assert 0.0 <= a <= 1.0 and b > a
+
+
+def test_to_trace_row_folds_langfuse_shape_without_pii():
+    # the LLM-trace fold (WS#2): a Langfuse trace -> an operational Reins row with
+    # model/tokens/cost/latency. Input/output (operator content = PII) NEVER enter the row.
+    row = to_trace_row(
+        {
+            "id": "trace-1",
+            "timestamp": "2026-06-26T12:00:00Z",
+            "metadata": {"model": "claude-opus-4"},
+            "tokenUsage": {"prompt": 100, "completion": 50, "total": 150},
+            "totalPrice": 0.012,
+            "duration": 2.5,
+            "input": "secret operator prompt",
+            "output": "secret completion",
+        },
+        EXPECTED_DEFAULT_ALLOW,
+    )
+    assert row["trace_id"] == "trace-1"
+    assert row["model"] == "claude-opus-4"
+    assert row["prompt_tok"] == 100 and row["completion_tok"] == 50 and row["total_tok"] == 150
+    assert row["cost"] == 0.012
+    assert row["latency_ms"] == 2500  # duration seconds -> ms
+    # PII guard: prompt/completion text must never enter the operational row
+    assert "input" not in row and "output" not in row
+    assert "secret" not in str(row)
 
 
 def test_page_before_returns_strictly_older_window():
