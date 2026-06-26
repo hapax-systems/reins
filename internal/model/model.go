@@ -2590,7 +2590,10 @@ func (m Model) updateDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.Status = "close: would emit task.closed via the governed COMMAND surface — NOT wired"
 	default:
-		m.DoorOpen = true // unknown key — stay in the door
+		if nm, cmd, handled := m.updateGlobal(v); handled {
+			return nm, cmd // pass-through: window cycle/jump (switchPage closes the door)
+		}
+		m.DoorOpen = true // non-global key — stay open (inert; nav keys no longer swallowed)
 	}
 	return m, nil
 }
@@ -2607,7 +2610,10 @@ func (m Model) updateSessionDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.Status = "resume: no session rows"
 		}
 	default:
-		m.SessionDoorOpen = true // unknown key — stay in the door
+		if nm, cmd, handled := m.updateGlobal(v); handled {
+			return nm, cmd // pass-through: window cycle/jump (switchPage closes the door)
+		}
+		m.SessionDoorOpen = true // non-global key — stay open (inert; nav no longer swallowed)
 	}
 	return m, nil
 }
@@ -2618,7 +2624,10 @@ func (m Model) updateIntakeDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "enter", "q":
 		// just close
 	default:
-		m.IntakeDoorOpen = true // unknown key — stay in the door
+		if nm, cmd, handled := m.updateGlobal(v); handled {
+			return nm, cmd // pass-through: window cycle/jump (switchPage closes the door)
+		}
+		m.IntakeDoorOpen = true // non-global key — stay open (inert; nav no longer swallowed)
 	}
 	return m, nil
 }
@@ -2652,7 +2661,10 @@ func (m Model) updateLastlogDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.LastlogOlder = nil // return to the live retained window
 		return m, nil
 	default:
-		return m, nil // inert: door stays open, key consumed (no swallow)
+		if nm, cmd, handled := m.updateGlobal(v); handled {
+			return nm, cmd // pass-through: window cycle/jump (switchPage closes the door)
+		}
+		return m, nil // non-global key — inert (door stays open; nav keys pass through above)
 	}
 }
 
