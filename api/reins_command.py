@@ -187,3 +187,90 @@ def resume_preview_app() -> FastAPI:
     return build_command_app(
         verb="resume", verify_authority=verify, preflight=preflight, transport=transport
     )
+
+
+@dataclass
+class DispatchIntent:
+    """The cockpit-owned dispatch intent — the subset of the daemon's
+    ``DispatchLaunchRequest`` that the cockpit composes (task / lane / platform / mode /
+    profile / authority). The daemon adds its OWN ``mq_db_path`` + ``event_log`` when it
+    builds the full request. The cockpit never touches those daemon-owned resources —
+    route, never mint."""
+
+    task_id: str
+    lane: str
+    platform: str
+    mode: str
+    profile: str
+    authority_case: str
+    parent_spec: str | None
+    message_id: str
+    idempotency_key: str | None = None
+
+
+def dispatch_app(*, submit_dispatch: Callable[[Any], str] | None = None) -> FastAPI:
+    """Inc 2: the dispatch verb — first real spine-write genus. Composes a
+    ``DispatchIntent`` (the cockpit-owned subset) and SUBMITS it to the
+    methodology-dispatch MQ via an
+    injected ``submit_dispatch`` boundary — route, never mint. The cockpit submits an
+    intent; the daemon consumes it, authorizes via ``validate_task``, launches, and
+    appends the ``coord_dispatch.launch_*`` event. The receipt is the pending MQ
+    message_id; the spine event (with event_seq) lands async on the next fold.
+
+    The default submit raises NotImplementedError — Inc 2 proves composition + routing
+    with an injected boundary; the real MQ-enqueue + lane-launch is a confirmed e2e
+    step (it spawns a process, so it is operator-confirmed, not autonomous)."""
+
+    submit = submit_dispatch or _default_submit_dispatch
+
+    def verify(packet: Any, target: str) -> bool:
+        # Authority triple (methodology-dispatch's model): route-not-mint.
+        return bool(target) and all(
+            packet.get(k) for k in ("authority_case", "parent_spec", "message_id")
+        )
+
+    def preflight(env: Envelope) -> bool:
+        if env.preflight_receipt.get("blocked"):
+            return False
+        pkt = env.authority_packet
+        return all(pkt.get(k) for k in ("lane", "platform", "mode", "profile"))
+
+    def transport(env: Envelope) -> Response | None:
+        pkt = env.authority_packet
+        req = DispatchIntent(
+            task_id=env.target,
+            lane=pkt["lane"],
+            platform=pkt["platform"],
+            mode=pkt["mode"],
+            profile=pkt["profile"],
+            authority_case=pkt["authority_case"],
+            parent_spec=pkt["parent_spec"],
+            message_id=pkt["message_id"],
+            idempotency_key=env.idempotency_key,
+        )
+        try:
+            message_id = submit(req)
+        except Exception as exc:
+            return Response(status="transport-failed", http=502, reason=str(exc))
+        return Response(
+            status="ok",
+            http=200,
+            receipt_id=message_id,
+            event_seq=None,  # spine event lands async via the daemon
+            fold_delta=(
+                f"dispatch submitted (message {message_id}); lane launch is async via "
+                "hapax-methodology-dispatch — the coord_dispatch event lands on the next fold"
+            ),
+            spooled=False,
+        )
+
+    return build_command_app(
+        verb="dispatch", verify_authority=verify, preflight=preflight, transport=transport
+    )
+
+
+def _default_submit_dispatch(_req: Any) -> str:
+    raise NotImplementedError(
+        "dispatch MQ producer not wired — inject submit_dispatch (Inc 2 proves composition "
+        "+ routing; the real enqueue + lane-launch e2e is a confirmed step)"
+    )

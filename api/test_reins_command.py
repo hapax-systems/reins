@@ -179,3 +179,88 @@ def test_command_endpoint_unwired_verbs_are_not_implemented():
 
     resp = TestClient(resume_preview_app()).post("/command/dispatch", json=_resume_body())
     assert resp.status_code == 501
+
+
+# ---- Inc 2: dispatch (first real spine-write genus, async via methodology-dispatch) ----
+# The cockpit COMPOSES a DispatchLaunchRequest and SUBMITS it to the methodology-dispatch
+# MQ via an injected boundary (route, never mint — the daemon consumes, authorizes via
+# validate_task, launches, appends coord_dispatch). The receipt is the pending MQ
+# message_id; the spine event lands async on the next fold. The real enqueue + lane
+# launch is a confirmed e2e step; here the submit boundary is injected (TDD).
+
+
+def _dispatch_body(
+    task_id="reins-air-confidentiality-interaction-hardening-20260624",
+    lane="cx-crit",
+    authority_case="CASE-X",
+    parent_spec="/spec.md",
+    message_id="mq-123",
+    idempotency_key="dkey-1",
+    blocked=False,
+    omit=(),
+):
+    pkt = {
+        "lane": lane,
+        "platform": "codex",
+        "mode": "headless",
+        "profile": "full",
+        "authority_case": authority_case,
+        "parent_spec": parent_spec,
+        "message_id": message_id,
+    }
+    for k in omit:
+        pkt.pop(k, None)
+    return {
+        "target": task_id,
+        "authority_packet": pkt,
+        "preflight_receipt": {"blocked": blocked},
+        "idempotency_key": idempotency_key,
+    }
+
+
+def test_dispatch_composes_request_and_submits_async():
+    from reins_command import dispatch_app
+
+    submitted = []
+
+    def submit(req):
+        submitted.append(req)
+        return "mq-msg-1"
+
+    resp = TestClient(dispatch_app(submit_dispatch=submit)).post(
+        "/command/dispatch", json=_dispatch_body()
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["receipt_id"] == "mq-msg-1"  # the pending MQ message id
+    assert body["event_seq"] is None  # spine event lands async via the daemon
+    req = submitted[0]
+    assert req.task_id == "reins-air-confidentiality-interaction-hardening-20260624"
+    assert req.lane == "cx-crit"
+    assert req.platform == "codex" and req.mode == "headless" and req.profile == "full"
+    assert req.authority_case == "CASE-X"
+    assert req.parent_spec == "/spec.md"
+    assert req.message_id == "mq-123"
+    assert req.idempotency_key == "dkey-1"
+
+
+def test_dispatch_requires_authority_case_and_parent_spec():
+    from reins_command import dispatch_app
+
+    resp = TestClient(dispatch_app(submit_dispatch=lambda _r: "m")).post(
+        "/command/dispatch", json=_dispatch_body(omit=("authority_case", "parent_spec"))
+    )
+    assert resp.status_code == 403
+
+
+def test_dispatch_surfaces_submit_failure_never_synthesizes_success():
+    from reins_command import dispatch_app
+
+    def submit(_r):
+        raise RuntimeError("mq-down")
+
+    resp = TestClient(dispatch_app(submit_dispatch=submit)).post(
+        "/command/dispatch", json=_dispatch_body()
+    )
+    assert resp.status_code == 502
+    assert resp.json()["status"] == "transport-failed"
