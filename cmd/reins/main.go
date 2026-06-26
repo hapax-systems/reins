@@ -75,6 +75,16 @@ func fetchSessionsOnce(url string) tea.Msg {
 	return msg
 }
 
+// fetchTracesOnce: one LLM-observability fetch -> a TracesMsg.
+func fetchTracesOnce(url string) tea.Msg {
+	tr, dark, err := api.FetchTraces(url)
+	msg := model.TracesMsg{Traces: tr, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+
 func fetchSessionDetailOnce(url, role string) tea.Msg {
 	d, dark, err := api.FetchSessionDetail(url, role)
 	msg := model.SessionDetailMsg{Detail: d, Dark: dark}
@@ -135,6 +145,9 @@ func epistemicsTick(url string) tea.Cmd {
 func sessionsTick(url string) tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return fetchSessionsOnce(url) })
 }
+func tracesTick(url string) tea.Cmd { // LLM-spend obs — a cadence between sessions(4s) and intake(8s)
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTracesOnce(url) })
+}
 func intakeTick(url string) tea.Cmd {
 	return tea.Tick(8*time.Second, func(time.Time) tea.Msg { return fetchIntakeOnce(url) })
 }
@@ -167,7 +180,8 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchCapabilitiesOnce(r.url) },
 		func() tea.Msg { return fetchGatesOnce(r.url) },
 		func() tea.Msg { return fetchDomainsOnce(r.url) },
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), beatTick(),
+		func() tea.Msg { return fetchTracesOnce(r.url) },
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), beatTick(),
 	)
 }
 
@@ -185,6 +199,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, epistemicsTick(r.url) // re-arm evidence/provenance polling
 	case model.SessionsMsg:
 		return r, sessionsTick(r.url) // re-arm the live lane roster poll/re-fold loop
+	case model.TracesMsg:
+		return r, tracesTick(r.url) // re-arm the LLM-observability poll/re-fold loop
 	case model.IntakeMsg:
 		return r, intakeTick(r.url) // re-arm intake snapshot polling
 	case model.CapabilitiesMsg:
@@ -259,6 +275,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageDomains, true
 	case "lifecycles", "life", "lifecycle", "ndlc", "n-dlc":
 		return model.PageLifecycles, true
+	case "traces", "trace":
+		return model.PageTraces, true
 	case "intent":
 		return model.PageIntent, true
 	case "legend":
@@ -301,6 +319,7 @@ func main() {
 		caps, cd, capsErr := api.FetchCapabilities(cfg.APIURL)
 		gates, gd, gatesErr := api.FetchGates(cfg.APIURL)
 		doms, domd, domErr := api.FetchDomains(cfg.APIURL)
+		tr, trd, traceErr := api.FetchTraces(cfg.APIURL)
 		m := model.New("REINS")
 		m = updateProbeModel(m, model.EventsMsg{Events: evs, Dark: ed, Error: errorText(evErr)})
 		m = updateProbeModel(m, model.TasksMsg{Tasks: ts, Dark: td, Error: errorText(taskErr)})
@@ -311,6 +330,7 @@ func main() {
 		m = updateProbeModel(m, model.CapabilitiesMsg{Capabilities: caps, Dark: cd, Error: errorText(capsErr)})
 		m = updateProbeModel(m, model.GatesMsg{Gates: gates, Dark: gd, Error: errorText(gatesErr)})
 		m = updateProbeModel(m, model.DomainsMsg{Domains: doms, Dark: domd, Error: errorText(domErr)})
+		m = updateProbeModel(m, model.TracesMsg{Traces: tr, Dark: trd, Error: errorText(traceErr)})
 		for _, a := range os.Args[2:] {
 			if page, ok := probePageToken(a); ok {
 				m.Page = page

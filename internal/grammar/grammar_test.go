@@ -3,6 +3,8 @@ package grammar
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func sample() Event {
@@ -278,5 +280,71 @@ func TestRenderTaskRowAIRRedacts(t *testing.T) {
 	}
 	if !strings.Contains(got, "event-spine") {
 		t.Fatalf("AIR must keep the allowlisted task_id: %q", got)
+	}
+}
+
+func sampleTrace() Trace {
+	return Trace{
+		TS: "2026-06-26T12:00:00Z", TraceID: "trace-1", Model: "claude-opus-4",
+		PromptTok: 100, CompletionTok: 50, TotalTok: 150, Cost: 0.012345, LatencyMs: 2500,
+		AIR: map[string]string{
+			"ts": "ok", "trace_id": "ok", "model": "ok", "latency_ms": "ok",
+			"prompt_tok": "ok", "completion_tok": "ok", "total_tok": "ok", "cost": "ok",
+		},
+	}
+}
+
+func TestRenderTraceRowLocal(t *testing.T) {
+	got := RenderTraceRow(sampleTrace(), false)
+	for _, want := range []string{"12:00:00", "trace-1", "claude-opus-4", "100/50/150", "$0.012345"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("local trace row missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "2500ms") {
+		t.Fatalf("local trace row should carry the latency value:\n%s", got)
+	}
+}
+
+func TestRenderTraceRowAIRRedactsDenied(t *testing.T) {
+	tr := sampleTrace()
+	tr.AIR = map[string]string{"ts": "ok", "trace_id": "deny", "model": "deny", "latency_ms": "ok", "total_tok": "ok", "cost": "ok"}
+	got := RenderTraceRow(tr, true)
+	for _, leak := range []string{"trace-1", "claude-opus-4"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("AIR trace row leaked denied %q:\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "▒") {
+		t.Fatalf("AIR trace row must show the redaction glyph for denied fields:\n%s", got)
+	}
+	if !strings.Contains(got, "$0.012345") { // allowlisted operational metadata survives AIR
+		t.Fatalf("AIR trace row should keep allowlisted cost:\n%s", got)
+	}
+}
+
+func TestTraceGlyphsAreMonochromeSafe(t *testing.T) {
+	// latency is a magnitude -> carried by SHAPE (bar height), never hue. Distinct magnitudes
+	// must produce distinct bars; both bars stay on the shared-ground token so they touch none
+	// of the three meaning-channels (criticality-hue / freshness-brightness / ownership-family).
+	lo, hi := latencyHistogram(50), latencyHistogram(5000)
+	if lo == hi {
+		t.Fatalf("latency bar must differ by magnitude: lo=%q hi=%q", lo, hi)
+	}
+	// channel-safety + Peirce redundant-label: strip ALL color and the precise labels still read.
+	strip := ansi.Strip(RenderTraceRow(sampleTrace(), false))
+	for _, want := range []string{"2500ms", "$0.012345"} {
+		if !strings.Contains(strip, want) {
+			t.Fatalf("monochrome trace row lost a label that must read without color: %q\n%s", want, strip)
+		}
+	}
+}
+
+func TestRenderTraceHeaderAligns(t *testing.T) {
+	got := RenderTraceHeader()
+	for _, want := range []string{"TIME", "LATENCY", "TRACE", "MODEL", "TOKENS", "COST"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace header missing column %q:\n%s", want, got)
+		}
 	}
 }

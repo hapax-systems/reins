@@ -185,3 +185,48 @@ func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
 		t.Fatalf("epistemics row should decode map identity and refs: %+v", row)
 	}
 }
+
+func TestFetchTracesReadsRowsAndDarkFlag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/traces" {
+			t.Fatalf("FetchTraces should GET /read/traces, got %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"dark": false, "error": "",
+			"traces": [{
+				"ts": "2026-06-26T12:00:00Z", "trace_id": "trace-1", "model": "claude-opus-4",
+				"prompt_tok": 100, "completion_tok": 50, "total_tok": 150,
+				"cost": 0.012345, "latency_ms": 2500,
+				"air": {"trace_id": "ok", "model": "ok"}
+			}]
+		}`))
+	}))
+	defer srv.Close()
+	tr, dark, err := FetchTraces(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dark {
+		t.Fatal("traces should not be dark")
+	}
+	if len(tr) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(tr))
+	}
+	row := tr[0]
+	if row.TraceID != "trace-1" || row.Model != "claude-opus-4" {
+		t.Fatalf("trace identity fields did not decode: %+v", row)
+	}
+	if row.PromptTok != 100 || row.CompletionTok != 50 || row.TotalTok != 150 {
+		t.Fatalf("token counts did not decode: %+v", row)
+	}
+	if row.Cost != 0.012345 || row.LatencyMs != 2500 {
+		t.Fatalf("cost/latency did not decode: %+v", row)
+	}
+}
+
+func TestFetchTracesUnreachableFoldsDark(t *testing.T) {
+	tr, dark, err := FetchTraces("http://127.0.0.1:0")
+	if len(tr) != 0 || !dark || err == nil {
+		t.Fatalf("unreachable api must fold honest-dark (nil traces, dark=true, err): len=%d dark=%v err=%v", len(tr), dark, err)
+	}
+}

@@ -188,6 +188,7 @@ var windowRegistry = []WindowDef{
 	{Key: "9", ID: "surfaces", Name: "surfaces", Short: "surf", Page: PageSurfaces, Scope: "engine", Lifecycle: "engine", Kind: "registry"},
 	{Key: "0", ID: "domains", Name: "domains", Short: "doms", Page: PageDomains, Scope: "engine", Lifecycle: "engine", Kind: "registry"},
 	{Key: "L", ID: "lifecycles", Name: "lifecycles", Short: "life", Page: PageLifecycles, Scope: "engine", Lifecycle: "engine", Kind: "registry"},
+	{Key: "T", ID: "traces", Name: "traces", Short: "traces", Page: PageTraces, Scope: "instance", Lifecycle: "substrate", Kind: "stream"},
 	{Key: "?", ID: "legend", Name: "legend", Short: "legend", Page: PageLegend, Scope: "engine", Lifecycle: "engine", Kind: "reference"},
 }
 
@@ -209,6 +210,7 @@ var splitPairRegistry = []SplitPairDef{
 	{Page: PageSurfaces, Source: "sessions", Target: "surface registry", Join: "affordance registry", Mode: splitModeReference, SourceCursor: splitSourceAnchor, TargetReactivity: splitTargetIndependent, TargetCursor: splitTargetScroll, TargetScrollable: true, SourceOwnedVerbs: splitSessionVerbs(), Contract: "surface registry names available modes/doors for the held lane"},
 	{Page: PageDomains, Source: "sessions", Target: "domain registry", Join: "domain lens", Mode: splitModeReference, SourceCursor: splitSourceAnchor, TargetReactivity: splitTargetIndependent, TargetCursor: splitTargetScroll, TargetScrollable: true, SourceOwnedVerbs: splitSessionVerbs(), Contract: "domain lens situates selected lane inside SDLC/RDLC/n-DLC maps"},
 	{Page: PageLifecycles, Source: "sessions", Target: "lifecycle registry", Join: "tenant lifecycle", Mode: splitModeReference, SourceCursor: splitSourceAnchor, TargetReactivity: splitTargetIndependent, TargetCursor: splitTargetScroll, TargetScrollable: true, SourceOwnedVerbs: splitSessionVerbs(), Contract: "lifecycle contracts expose SDLC/RDLC/LDLC/n-DLC tenants without assuming one operator taxonomy"},
+	{Page: PageTraces, Source: "sessions", Target: "trace feed", Join: "model/latency", Mode: splitModeReference, SourceCursor: splitSourceAnchor, TargetReactivity: splitTargetIndependent, TargetCursor: splitTargetScroll, TargetScrollable: true, SourceOwnedVerbs: splitSessionVerbs(), Contract: "trace feed contextualizes LLM spend without minting authority"},
 }
 
 // DomainDef is the extensibility layer above windows: Reins can project SDLC, RDLC, capability

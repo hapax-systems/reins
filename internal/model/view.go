@@ -147,6 +147,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "tasks", len(m.Tasks), m.TasksDark
 	case PageSessions:
 		return "sessions", len(m.Sessions), m.SessionsDark
+	case PageTraces:
+		return "traces", len(m.Traces), m.TracesDark
 	case PageYard:
 		return "yard", len(m.Tasks), m.TasksDark && m.SessionsDark && m.EventsDark
 	case PageReadiness:
@@ -298,6 +300,13 @@ func (m Model) windowSignal(page int) (string, string) {
 			return "DARK", "red"
 		}
 		if n := len(m.Events); n > 0 {
+			return fmt.Sprintf("%d", n), "mut"
+		}
+	case PageTraces:
+		if m.TracesDark {
+			return "DARK", "red"
+		}
+		if n := len(m.Traces); n > 0 {
 			return fmt.Sprintf("%d", n), "mut"
 		}
 	case PageTasks:
@@ -537,6 +546,8 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.taskBody(w, h)
 	case PageSessions:
 		return m.sessionsBody(w, h)
+	case PageTraces:
+		return m.tracesBody(w, h)
 	case PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
@@ -1043,7 +1054,7 @@ func (m Model) splitContextPane(w, h int) string {
 		body = m.sessionConstraintPane(w)
 	case PageCaps:
 		body = m.renderCapabilitySplitPane(w, bodyH)
-	case PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
+	case PageTraces, PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
 		body = m.splitReferenceSlice(w, bodyH)
 	default:
 		body = m.eventContextPane(w)
@@ -8965,6 +8976,18 @@ func (m Model) contextLine() string {
 			return grammar.C("2nd", " live coord events · no events · focus: —")
 		}
 		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown · [j/k] select · [y]ank · focus: %s", len(m.Events), f))
+	case PageTraces:
+		f := "—"
+		if tr, ok := m.FocusedTrace(); ok {
+			f = grammar.Redact(tr.AIR, "trace_id", tr.TraceID, m.AIR)
+			if r := []rune(f); len(r) > 28 {
+				f = string(r[:28])
+			}
+		}
+		if len(m.Traces) == 0 {
+			return grammar.C("2nd", " LLM traces · no rows · focus: —")
+		}
+		return grammar.C("2nd", fmt.Sprintf(" LLM traces · newest at bottom · %d rows · [j/k] select · focus: %s", len(m.Traces), f))
 	case PageSessions:
 		f := "—"
 		if s, ok := m.FocusedSession(); ok {
@@ -8997,6 +9020,45 @@ func (m Model) eventsBody(w, h int) string {
 		return m.eventsWideBody(w, h)
 	}
 	return m.eventsListBody(w, h)
+}
+
+// tracesBody: context line + header + a windowed slice of LLM-trace rows that keeps the focused
+// row in view (default = the newest tail). A first-class SELECTABLE surface — a focus cursor +
+// [j/k] to move — symmetric with :events. Field-yank is a tracked follow-up; the row still
+// focuses + AIR-gates per field via grammar.RenderTraceRow.
+func (m Model) tracesBody(w, h int) string {
+	if m.TracesDark {
+		return m.contextLine() + "\n" + darkHint(m.TracesError, m.AIR)
+	}
+	return m.tracesListBody(w, h)
+}
+
+func (m Model) tracesListBody(w, h int) string {
+	visible := h - 2 // context + header
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(m.Traces) > visible {
+		start = len(m.Traces) - visible // tail = newest by default
+		if m.TFocus < start {
+			start = m.TFocus
+		}
+		if m.TFocus >= start+visible {
+			start = m.TFocus - visible + 1
+		}
+	}
+	var b strings.Builder
+	b.WriteString(m.contextLine() + "\n")
+	b.WriteString("  " + grammar.RenderTraceHeader() + "\n")
+	for i := start; i < start+visible && i < len(m.Traces); i++ {
+		if i == m.TFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(grammar.RenderTraceRow(m.Traces[i], m.AIR), w-1) + "\n")
+		} else {
+			b.WriteString("  " + grammar.RenderTraceRow(m.Traces[i], m.AIR) + "\n")
+		}
+	}
+	return b.String()
 }
 
 func (m Model) eventsWideBody(w, h int) string {

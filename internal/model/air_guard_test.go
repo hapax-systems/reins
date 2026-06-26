@@ -21,6 +21,7 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 		roleS, sessS, platS     = "LEAKROLE", "LEAKSESSION", "LEAKPLATFORM"
 		rdyS, blockS, claimS    = "LEAKREADY", "LEAKBLOCK", "LEAKCLAIM"
 		pathS, specS            = "LEAKPATH", "LEAKSPEC"
+		traceS, modelS          = "LEAKTRACE", "LEAKMODEL"
 	)
 	denyAll := func(keys ...string) map[string]string {
 		m := map[string]string{}
@@ -82,12 +83,21 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 		Totals: map[string]int{"request_attention": 1},
 	}
 	sentinels := []string{
-		idS, ownS, caseS, nogoS, subjS, actorS, summS, roleS, sessS, platS, rdyS, blockS, claimS, pathS, specS, "active",
+		idS, ownS, caseS, nogoS, subjS, actorS, summS, roleS, sessS, platS, rdyS, blockS, claimS, pathS, specS, traceS, modelS, "active",
 		"SECRET-INTAKE-ID", "SECRET-INTAKE-AUTHORITY", "SECRET-INTAKE-EVIDENCE", "SECRET-INTAKE-MISSING",
 		"SECRET-INTAKE-ACTION", "SECRET-INTAKE-DETAIL", "SECRET-INTAKE-SOURCE-REFS", "SECRET-INTAKE-NEXT-EVIDENCE",
 	}
 
-	base := New("REINS").FoldTasks([]grammar.Task{task}, false).Fold([]grammar.Event{ev}, false).FoldSessions([]grammar.Session{sess}, false).FoldIntake(intake, false)
+	tr := grammar.Trace{
+		TS: "2026-06-26T12:00:00Z", TraceID: traceS, Model: modelS,
+		PromptTok: 100, CompletionTok: 50, TotalTok: 150, Cost: 0.012345, LatencyMs: 2500,
+		AIR: map[string]string{
+			"ts": "ok", "trace_id": "deny", "model": "deny", "latency_ms": "ok",
+			"prompt_tok": "ok", "completion_tok": "ok", "total_tok": "ok", "cost": "ok",
+		},
+	}
+
+	base := New("REINS").FoldTasks([]grammar.Task{task}, false).Fold([]grammar.Event{ev}, false).FoldSessions([]grammar.Session{sess}, false).FoldIntake(intake, false).FoldTraces([]grammar.Trace{tr}, false)
 	base.SessionDetail = grammar.SessionDetail{
 		Role: roleS,
 		Task: grammar.SessionTaskDetail{
@@ -173,6 +183,8 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 			m.Page, m.SplitContext = PageCaps, true
 			return m
 		}(),
+		"traces":      func() Model { m := base; m.Page = PageTraces; return m }(),
+		"traces-yank": func() Model { m := base; m.Page, m.Mode = PageTraces, ModeYank; return m }(),
 	}
 	for name, m := range surfaces {
 		frame := ansi.Strip(m.View())

@@ -68,6 +68,8 @@ func TestProbePageTokenCoversRegisteredPagesAndAliases(t *testing.T) {
 		{"n-dlc", model.PageLifecycles},
 		{"intent", model.PageIntent},
 		{"legend", model.PageLegend},
+		{"traces", model.PageTraces},
+		{"trace", model.PageTraces},
 	} {
 		t.Run(tt.arg, func(t *testing.T) {
 			page, ok := probePageToken(tt.arg)
@@ -85,5 +87,17 @@ func TestUpdateProbeModelAdvancesReadSourceState(t *testing.T) {
 	m := updateProbeModel(model.New("REINS"), model.EventsMsg{})
 	if m.EventsSeq != 1 || m.LastFold != "events" {
 		t.Fatalf("probe update should mirror live read folds, seq=%d last=%q", m.EventsSeq, m.LastFold)
+	}
+}
+
+func TestTickCmdProducesTracesMsg(t *testing.T) {
+	// against an unreachable url, the traces fetch must still yield a TracesMsg (dark=true), never panic.
+	msg := fetchTracesOnce("http://127.0.0.1:0")
+	tm, ok := msg.(model.TracesMsg)
+	if !ok {
+		t.Fatalf("fetchTracesOnce must yield model.TracesMsg, got %T", msg)
+	}
+	if !tm.Dark {
+		t.Fatal("unreachable traces api must fold honest-dark, not empty-success")
 	}
 }

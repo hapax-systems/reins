@@ -20,11 +20,12 @@ func TestSubMenuDescentAndRun(t *testing.T) {
 	m = step(m, ":") // command line
 	m = tab(m)       // events(0) -> tasks(1)
 	m = tab(m)       // tasks(1) -> sessions(2)
-	m = tab(m)       // sessions(2) -> yard(3)
-	m = tab(m)       // yard(3) -> readiness(4)
-	m = tab(m)       // readiness(4) -> intake(5)
-	m = tab(m)       // intake(5) -> capabilities(6)
-	m = tab(m)       // capabilities(6) -> dynamics(7), which has a sub-menu
+	m = tab(m)       // sessions(2) -> traces(3)
+	m = tab(m)       // traces(3) -> yard(4)
+	m = tab(m)       // yard(4) -> readiness(5)
+	m = tab(m)       // readiness(5) -> intake(6)
+	m = tab(m)       // intake(6) -> capabilities(7)
+	m = tab(m)       // capabilities(7) -> dynamics(8), which has a sub-menu
 	c, _ := m.curCandidate()
 	if c.Label != "dynamics" || len(c.Sub) == 0 {
 		t.Fatalf("expected to highlight the dynamics sub-menu node, got %q (sub=%d)", c.Label, len(c.Sub))

@@ -28,6 +28,7 @@ const (
 	PageIntake     = 14
 	PageEpistemics = 15
 	PageLifecycles = 16
+	PageTraces     = 17
 )
 
 const (
@@ -305,6 +306,7 @@ type Model struct {
 	Events              []grammar.Event
 	Tasks               []grammar.Task
 	Sessions            []grammar.Session
+	Traces              []grammar.Trace
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -315,6 +317,7 @@ type Model struct {
 	EventsDark          bool
 	TasksDark           bool
 	SessionsDark        bool
+	TracesDark          bool
 	SessionDetailDark   bool
 	IntakeDark          bool
 	CapabilitiesDark    bool
@@ -325,6 +328,7 @@ type Model struct {
 	EventsError         string
 	TasksError          string
 	SessionsError       string
+	TracesError         string
 	SessionDetailError  string
 	IntakeError         string
 	CapabilitiesError   string
@@ -335,6 +339,7 @@ type Model struct {
 	EventsSeq           int
 	TasksSeq            int
 	SessionsSeq         int
+	TracesSeq           int
 	IntakeSeq           int
 	CapabilitiesSeq     int
 	GatesSeq            int
@@ -355,6 +360,7 @@ type Model struct {
 	Focus               int             // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
 	EFocus              int             // selected row index into m.Events (the :events cursor) — selection is page-aware
 	SFocus              int             // selected row index into m.Sessions (the :sessions cursor)
+	TFocus              int             // selected row index into m.Traces (the :traces cursor)
 	IFocus              int             // selected row index into visibleIntakeRows (the :intake bucket cursor)
 	CFocus              int             // selected capability/status row index into the grouped :capabilities projection
 	CommandFocus        int             // selected command registry row
@@ -501,6 +507,14 @@ func (m Model) FocusedSession() (grammar.Session, bool) {
 	return m.Sessions[m.SFocus], true
 }
 
+// FocusedTrace: the LLM-observability row under the :traces cursor.
+func (m Model) FocusedTrace() (grammar.Trace, bool) {
+	if m.TFocus < 0 || m.TFocus >= len(m.Traces) {
+		return grammar.Trace{}, false
+	}
+	return m.Traces[m.TFocus], true
+}
+
 // FocusedIntakeRow returns the aggregate observation bucket under the :intake cursor.
 func (m Model) FocusedIntakeRow() (grammar.IntakeRow, bool) {
 	rows := m.visibleIntakeRows()
@@ -624,6 +638,8 @@ func (m Model) pageRows() int {
 		return len(m.Events)
 	case PageSessions:
 		return len(m.Sessions)
+	case PageTraces:
+		return len(m.Traces)
 	case PageIntake:
 		return len(m.visibleIntakeRows())
 	case PageCaps:
@@ -668,6 +684,9 @@ func (m Model) curFocus() int {
 	if m.Page == PageSessions {
 		return m.SFocus
 	}
+	if m.Page == PageTraces {
+		return m.TFocus
+	}
 	if m.Page == PageIntake {
 		return m.IFocus
 	}
@@ -704,7 +723,7 @@ func (m Model) curFocus() int {
 // focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
 // so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
 func (m Model) focusTo(i int) Model {
-	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent {
+	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces {
 		return m
 	}
 	max := m.pageRows() - 1
@@ -716,6 +735,8 @@ func (m Model) focusTo(i int) Model {
 		m.EFocus = i
 	} else if m.Page == PageSessions {
 		m.SFocus = i
+	} else if m.Page == PageTraces {
+		m.TFocus = i
 	} else if m.Page == PageIntake {
 		m.IFocus = i
 	} else if m.Page == PageCaps {
@@ -1242,6 +1263,21 @@ func (m Model) FoldSessions(ss []grammar.Session, dark bool) Model {
 	return m
 }
 
+// FoldTraces: the pure projection for the :traces LLM-observability page. No hidden state;
+// re-folding restores the view (the hot-reload property). The cursor clamps into range.
+func (m Model) FoldTraces(tr []grammar.Trace, dark bool) Model {
+	m.Traces = tr
+	if len(m.Traces) == 0 {
+		m.TFocus = 0
+	} else if m.TFocus >= len(m.Traces) {
+		m.TFocus = len(m.Traces) - 1
+	} else if m.TFocus < 0 {
+		m.TFocus = 0
+	}
+	m.TracesDark = dark
+	return m
+}
+
 func (m Model) FoldSessionDetail(d grammar.SessionDetail, dark bool) Model {
 	m.SessionDetail = d
 	m.SessionDetailDark = dark
@@ -1364,6 +1400,7 @@ var verbs = []verbDef{
 	{name: "events", aliases: []string{"e"}, kind: commandRead, group: "window", gloss: "live coord event stream", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "tasks", aliases: []string{"t"}, kind: commandRead, group: "window", gloss: "the task registry", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "sessions", aliases: []string{"s"}, kind: commandRead, group: "window", gloss: "live agent/session roster", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "traces", aliases: []string{"trace"}, kind: commandRead, group: "window", gloss: "recent LLM-observability traces (model/tokens/cost/latency)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "yard", kind: commandRead, group: "window", gloss: "Trainyard-style SDLC cockpit over live Reins read models", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "readiness", aliases: []string{"ready", "gates", "gate"}, kind: commandRead, group: "window", gloss: "gates/readiness projection across read sources, lanes, tasks, and command routes", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "intake", aliases: []string{"observations", "obs", "inbox"}, kind: commandRead, group: "window", gloss: "source-backed intake observations/demand projection", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1460,6 +1497,9 @@ func (m Model) Exec(line string) Model {
 	case "sessions":
 		m = m.switchPage(PageSessions)
 		m.Status = ":sessions"
+	case "traces":
+		m = m.switchPage(PageTraces)
+		m.Status = ":traces"
 	case "yard":
 		m = m.switchPage(PageYard)
 		m.Status = ":yard"
@@ -1699,6 +1739,13 @@ type EpistemicsMsg struct {
 	Error      string
 }
 
+// TracesMsg carries a fresh LLM-observability fetch into Update (sent by cmd/reins on each tick).
+type TracesMsg struct {
+	Traces []grammar.Trace
+	Dark   bool
+	Error  string
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case EventsMsg:
@@ -1707,6 +1754,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.EventsError = v.Error
 		m.EventsSeq++
 		m.LastFold = "events"
+		return m, nil
+	case TracesMsg:
+		m = m.FoldTraces(v.Traces, v.Dark)
+		m.TracesError = v.Error
+		m.TracesSeq++
+		m.LastFold = "traces"
 		return m, nil
 	case LastlogPageMsg:
 		// a PgUp backward-page landed: prepend the older events (newest-at-bottom order)

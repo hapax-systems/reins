@@ -174,6 +174,33 @@ func FetchSessions(url string) ([]grammar.Session, bool, error) {
 	return r.Sessions, r.Dark, nil
 }
 
+type tracesResp struct {
+	Dark   bool            `json:"dark"`
+	Error  string          `json:"error"`
+	Traces []grammar.Trace `json:"traces"`
+}
+
+// FetchTraces GETs the LLM-observability recent-traces fold. Returns (traces, dark, err).
+func FetchTraces(url string) ([]grammar.Trace, bool, error) {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(url + "/read/traces")
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/traces"); err != nil {
+		return nil, true, err
+	}
+	var r tracesResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Error != "" {
+		return r.Traces, true, fmt.Errorf("%s", r.Error)
+	}
+	return r.Traces, r.Dark, nil
+}
+
 type sessionDetailResp struct {
 	Dark   bool                  `json:"dark"`
 	Error  string                `json:"error"`

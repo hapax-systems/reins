@@ -188,6 +188,77 @@ func RenderEventRow(ev Event, airOn bool) string {
 	return fmt.Sprintf("%s %s%s %s %s %s", ts, bar, glyph, subj, who, what)
 }
 
+// Trace is the unified-API READ contract for one LLM-observability row (mirrors
+// reins_read.to_trace_row). Every field is operational metadata (model/tokens/cost/latency);
+// the operator's prompt/completion (PII) NEVER enter the row — the livestream-safe projection
+// of an LLM call. On-air every field is safe, so air[field]=="ok" for all.
+type Trace struct {
+	TS            string            `json:"ts"`
+	TraceID       string            `json:"trace_id"`
+	Model         string            `json:"model"`
+	PromptTok     int               `json:"prompt_tok"`
+	CompletionTok int               `json:"completion_tok"`
+	TotalTok      int               `json:"total_tok"`
+	Cost          float64           `json:"cost"`
+	LatencyMs     int               `json:"latency_ms"`
+	AIR           map[string]string `json:"air"`
+}
+
+// latencyBucket maps a latency (ms) to a 1..6 fill count on a scale tuned to LLM-call durations
+// (sub-quarter-second … tens of seconds). Latency is a MAGNITUDE — carried by bar SHAPE, never a
+// hue — so it cannot collide with the criticality channel (slow ≠ broken).
+func latencyBucket(ms int) int {
+	switch {
+	case ms < 250:
+		return 1
+	case ms < 750:
+		return 2
+	case ms < 1500:
+		return 3
+	case ms < 3000:
+		return 4
+	case ms < 6000:
+		return 5
+	default:
+		return 6
+	}
+}
+
+// latencyHistogram: a fixed-width monochrome magnitude bar (█ fill · ░ remainder) + the precise ms
+// label. Token is "mut" — shared ground, excluded from the channel-disjoint invariant — so the bar
+// touches none of the three meaning-channels; the magnitude lives entirely in SHAPE. The numeric
+// label is the Peirce redundant signal: text reads in grayscale where the bar cannot vary by hue.
+func latencyHistogram(ms int) string {
+	n := latencyBucket(ms)
+	bar := strings.Repeat("█", n) + strings.Repeat("░", 6-n)
+	return C("mut", bar) + " " + C("mut", fmt.Sprintf("%5dms", ms))
+}
+
+// RenderTraceHeader: the column header that SITUATES the LLM-spend stream; pads align under
+// RenderTraceRow so the grid never jitters.
+func RenderTraceHeader() string {
+	return C("mut", fmt.Sprintf(" %-8s %-13s %-16s %-14s %-11s %s", "TIME", "LATENCY", "TRACE", "MODEL", "TOKENS p/c/t", "COST"))
+}
+
+// RenderTraceRow: one self-explaining LLM-call row — TIME · LATENCY(histogram) · TRACE · MODEL ·
+// TOKENS(prompt/completion/total) · COST. Magnitudes are SHAPE (bar) + TEXT (literal), never hue,
+// so the row is channel-pure and monochrome-legible; `airOn` redacts per field (structure kept).
+func RenderTraceRow(tr Trace, airOn bool) string {
+	ts := compactTS(tr.TS)
+	if airOn && tr.AIR["ts"] != "ok" {
+		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	}
+	lat := latencyHistogram(tr.LatencyMs)
+	if airOn && tr.AIR["latency_ms"] != "ok" {
+		lat = C("mut", "▒▒▒▒▒▒▒▒▒")
+	}
+	id := C("pri", dotsOr(redact(tr.AIR, "trace_id", tr.TraceID, airOn), 16))
+	model := C("mut", dotsOr(redact(tr.AIR, "model", tr.Model, airOn), 14))
+	tok := C("mut", pad(redact(tr.AIR, "total_tok", fmt.Sprintf("%d/%d/%d", tr.PromptTok, tr.CompletionTok, tr.TotalTok), airOn), 11))
+	cost := C("mut", redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), airOn))
+	return fmt.Sprintf("%s %s %s %s %s %s", ts, lat, id, model, tok, cost)
+}
+
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
 type Task struct {
 	TaskID         string            `json:"task_id"`
@@ -1231,6 +1302,9 @@ func RenderLegend() string {
 	for _, k := range provOrder {
 		row(C(palette.ProvToken(k), statusGlyphs[k]+" "+pad(k, 9)), provGloss[k])
 	}
+	hd("TRACES  (LLM spend — latency shape · cost text · neither is a hue)")
+	row(latencyHistogram(1200), "█▆▄▁ latency magnitude (mut; NOT criticality — magnitude by SHAPE)")
+	row(C("mut", "$0.012345"), "USD cost at 6dp (mut; NOT ownership — a literal, not a family)")
 	hd("COLOR  (three independent channels — each one meaning)")
 	row(C("grn", "█")+C("yel", "█")+C("org", "█")+C("red", "█"), "hue = CRITICALITY   (ok → crit)")
 	row(C("brt", "█")+C("pri", "█")+C("mut", "█"), "brightness = FRESHNESS   (recent → stale)")
