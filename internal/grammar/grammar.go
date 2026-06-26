@@ -1243,6 +1243,24 @@ var provGloss = map[string]string{
 	"simulated": "modeled", "rendered": "a generated view", "candidate": "proposed / tentative",
 }
 
+// eventGlyphLegend decodes the EVENT-kind glyph alphabet (the leading glyph on :events rows) so a
+// cold / on-air viewer can decode every mark Glyph() can emit — knowledge-in-the-world. Ordered for
+// stable reading; covers every distinct value in the glyphs map plus the generic fallback. Several
+// of these marks are intentionally shared with the criticality STATE alphabet (▸/✓/✖); the legend
+// situates BOTH readings rather than hiding the overload. Drift-guarded by TestLegendCoversAllGlyphMaps.
+var eventGlyphLegend = []struct{ glyph, gloss string }{
+	{"▸", "in-progress · launch started · stage event"},
+	{"✓", "succeeded"},
+	{"✖", "failed (launch / review)"},
+	{"⇡", "stage advanced (transition)"},
+	{"⚑", "authorization changed (flag)"},
+	{"◆", "task — claimed / closed"},
+	{"↟", "PR merged"},
+	{"⚙", "session ended"},
+	{"·", "status · heartbeat"},
+	{"✶", "other / unrecognized event"},
+}
+
 // DynamicsHeader situates the :dynamics graph for a viewer who cannot interact (the livestream
 // audience): the map THESIS (macro reading before the micro) + an always-present inline provenance
 // key so the node confidence-ladder decodes without focusing anything.
@@ -1276,6 +1294,10 @@ func RenderLegend() string {
 	hd("STATE  (leading glyph, colored by criticality)")
 	for _, k := range critOrder {
 		row(C(SeverityToken(k), critGlyph[k]+" "+pad(k, 6)), critStateGloss[k])
+	}
+	hd("EVENTS  (leading glyph by kind — :events rows)")
+	for _, e := range eventGlyphLegend {
+		row(C("mut", pad(e.glyph, 2)), e.gloss)
 	}
 	hd("CRITICALITY BAR  (more fill = worse)")
 	for _, k := range critOrder {

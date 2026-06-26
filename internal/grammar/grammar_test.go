@@ -232,6 +232,16 @@ func TestLegendCoversAllGlyphMaps(t *testing.T) {
 			t.Fatalf("legend missing provenance %q (%s) or its gloss", k, g)
 		}
 	}
+	// drift guard (class-closure): every EVENT-kind glyph a :events row can show must also be
+	// decodable in the legend — a cold/on-air viewer must not meet an un-situated mark (⇡/⚑/↟/⚙/✶).
+	for kind, g := range glyphs {
+		if !strings.Contains(leg, g) {
+			t.Fatalf("legend missing event glyph %q for kind %q", g, kind)
+		}
+	}
+	if generic := Glyph("__never_a_real_kind__"); !strings.Contains(leg, generic) {
+		t.Fatalf("legend missing the generic/fallback event glyph %q", generic)
+	}
 }
 
 func TestGlyphIsStableAndMonochromeSafe(t *testing.T) {
