@@ -15,3 +15,6 @@ __pycache__/
 
 # instance config (never commit real paths/secrets)
 /config.toml
+
+# property-based testing artifact cache (regenerable)
+/.hypothesis/

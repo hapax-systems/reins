@@ -45,7 +45,7 @@ func TestEventYank(t *testing.T) {
 	if m.Input != "third" || m.Mode != ModeCommand {
 		t.Fatalf("yanking the subject should pre-seed the command line with 'third', got %q (mode %d)", m.Input, m.Mode)
 	}
-	if len(m.Ring) != 1 || m.Ring[0].Field != "subject" {
+	if len(m.Ring) != 1 || m.Ring[0].Field != "subject" || m.Ring[0].AIR != "ok" {
 		t.Fatalf("the event yank should push to the kill-ring, got %+v", m.Ring)
 	}
 }

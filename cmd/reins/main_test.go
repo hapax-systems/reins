@@ -17,3 +17,73 @@ func TestTickCmdProducesEventsMsg(t *testing.T) {
 		t.Fatal("unreachable api must fold to dark (honest), not empty-success")
 	}
 }
+
+func TestParseProbeSize(t *testing.T) {
+	w, h, ok := parseProbeSize("size:170x46")
+	if !ok || w != 170 || h != 46 {
+		t.Fatalf("size:170x46 parsed as w=%d h=%d ok=%v", w, h, ok)
+	}
+	for _, bad := range []string{"size:", "size:170", "size:0x46", "size:170x0", "size:widextall"} {
+		if w, h, ok := parseProbeSize(bad); ok {
+			t.Fatalf("%q should be rejected, got w=%d h=%d", bad, w, h)
+		}
+	}
+}
+
+func TestProbePageTokenCoversRegisteredPagesAndAliases(t *testing.T) {
+	for _, tt := range []struct {
+		arg  string
+		page int
+	}{
+		{"events", model.PageEvents},
+		{"tasks", model.PageTasks},
+		{"sessions", model.PageSessions},
+		{"yard", model.PageYard},
+		{"readiness", model.PageReadiness},
+		{"ready", model.PageReadiness},
+		{"gates", model.PageReadiness},
+		{"gate", model.PageReadiness},
+		{"capabilities", model.PageCaps},
+		{"caps", model.PageCaps},
+		{"cap", model.PageCaps},
+		{"intake", model.PageIntake},
+		{"obs", model.PageIntake},
+		{"dynamics", model.PageDynamics},
+		{"dyn", model.PageDynamics},
+		{"epistemics", model.PageEpistemics},
+		{"epi", model.PageEpistemics},
+		{"help", model.PageHelp},
+		{"commands", model.PageCommands},
+		{"cmds", model.PageCommands},
+		{"windows", model.PageWindows},
+		{"wins", model.PageWindows},
+		{"surfaces", model.PageSurfaces},
+		{"surf", model.PageSurfaces},
+		{"domains", model.PageDomains},
+		{"terrain", model.PageDomains},
+		{"lifecycles", model.PageLifecycles},
+		{"life", model.PageLifecycles},
+		{"lifecycle", model.PageLifecycles},
+		{"ndlc", model.PageLifecycles},
+		{"n-dlc", model.PageLifecycles},
+		{"intent", model.PageIntent},
+		{"legend", model.PageLegend},
+	} {
+		t.Run(tt.arg, func(t *testing.T) {
+			page, ok := probePageToken(tt.arg)
+			if !ok || page != tt.page {
+				t.Fatalf("probePageToken(%q) = page %d ok %v, want page %d", tt.arg, page, ok, tt.page)
+			}
+		})
+	}
+	if page, ok := probePageToken("unknown"); ok {
+		t.Fatalf("unknown probe token should not route, got page %d", page)
+	}
+}
+
+func TestUpdateProbeModelAdvancesReadSourceState(t *testing.T) {
+	m := updateProbeModel(model.New("REINS"), model.EventsMsg{})
+	if m.EventsSeq != 1 || m.LastFold != "events" {
+		t.Fatalf("probe update should mirror live read folds, seq=%d last=%q", m.EventsSeq, m.LastFold)
+	}
+}

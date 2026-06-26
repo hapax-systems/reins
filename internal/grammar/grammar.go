@@ -153,19 +153,36 @@ func shortKind(k string) string {
 // WHAT. Subject is wide enough to read; actor is lane-colored; the "what" falls back to the kind
 // when there is no summary (so a row is never just a truncated stub). `airOn` redacts per field.
 func RenderEventRow(ev Event, airOn bool) string {
-	bar, glyph := ScoreBar(ev.Score), Glyph(ev.Kind) // single runes — colorized AFTER width math
-	if sev := kindSeverity(ev.Kind); sev != "" {
+	ts := compactTS(ev.TS)
+	if airOn && ev.AIR["ts"] != "ok" {
+		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	}
+	bar := ScoreBar(ev.Score)
+	if airOn && ev.AIR["score"] != "ok" {
+		bar = C("mut", "▒▒▒▒")
+	}
+	glyph := Glyph(ev.Kind) // single rune — colorized AFTER width math
+	if airOn && ev.AIR["kind"] != "ok" {
+		glyph = C("mut", "▒")
+	} else if sev := kindSeverity(ev.Kind); sev != "" {
 		tok := palette.SeverityToken(sev)
-		bar, glyph = pal.Colorize(tok, bar), pal.Colorize(tok, glyph)
+		if !(airOn && ev.AIR["score"] != "ok") {
+			bar = pal.Colorize(tok, bar)
+		}
+		glyph = pal.Colorize(tok, glyph)
 	}
 	subj := C("pri", dotsOr(redact(ev.AIR, "subject", ev.Subject, airOn), 26))
-	who := C(LaneToken(ev.Actor), dotsOr(redact(ev.AIR, "actor", ev.Actor, airOn), 10))
+	whoTok := LaneToken(ev.Actor)
+	if airOn && ev.AIR["actor"] != "ok" {
+		whoTok = "mut"
+	}
+	who := C(whoTok, dotsOr(redact(ev.AIR, "actor", ev.Actor, airOn), 10))
 	what := ev.Summary
 	if strings.TrimSpace(what) == "" {
 		what = shortKind(ev.Kind)
 	}
 	what = C("mut", redact(ev.AIR, "summary", what, airOn))
-	return fmt.Sprintf("%s %s%s %s %s %s", compactTS(ev.TS), bar, glyph, subj, who, what)
+	return fmt.Sprintf("%s %s%s %s %s %s", ts, bar, glyph, subj, who, what)
 }
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
@@ -244,10 +261,17 @@ func RenderTaskRow(t Task, airOn bool) string {
 		crit = "ok"
 	}
 	ctok := SeverityToken(crit)
+	critVisible := !airOn || t.AIR["criticality"] == "ok"
+	if !critVisible {
+		ctok = "mut"
+	}
 
 	g := critGlyph[crit]
 	if g == "" {
 		g = "·"
+	}
+	if !critVisible {
+		g = "▒"
 	}
 	st := C(ctok, g)
 
@@ -255,9 +279,12 @@ func RenderTaskRow(t Task, airOn bool) string {
 	if t.RelCount > 0 {
 		rel = C("blu", pad(fmt.Sprintf("●%d", t.RelCount), 3))
 	}
+	if airOn && t.AIR["rel_count"] != "ok" {
+		rel = C("mut", pad("▒▒▒", 3))
+	}
 
 	idTok := "pri"
-	if crit == "crit" {
+	if critVisible && crit == "crit" {
 		idTok = "brt"
 	}
 	id := C(idTok, dotsOr(redact(t.AIR, "task_id", t.TaskID, airOn), 22))
@@ -281,8 +308,15 @@ func RenderTaskRow(t Task, airOn bool) string {
 	default:
 		nxtRaw = "→" + t.PredictedStage
 	}
+	if airOn && t.AIR["predicted_stage"] != "ok" {
+		ntok = "mut"
+	}
 	nxt := C(ntok, dotsOr(redact(t.AIR, "predicted_stage", nxtRaw, airOn), 5))
-	who := C(LaneToken(t.Owner), dotsOr(redact(t.AIR, "owner", t.Owner, airOn), 8))
+	whoTok := LaneToken(t.Owner)
+	if airOn && t.AIR["owner"] != "ok" {
+		whoTok = "mut"
+	}
+	who := C(whoTok, dotsOr(redact(t.AIR, "owner", t.Owner, airOn), 8))
 
 	bar := critBar(crit)
 	if airOn && t.AIR["criticality"] != "ok" {
@@ -295,6 +329,480 @@ func RenderTaskRow(t Task, airOn bool) string {
 	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s", st, rel, id, stg, was, nxt, who, C(ctok, bar), C(ftok, fg))
 }
 
+// Session is the unified-API READ contract for one live agent/session lane. It is deliberately a
+// roster/health projection, not a transcript or PTY stream: raw session content stays outside AIR
+// until the governed command surface exists.
+type Session struct {
+	Role              string            `json:"role"`
+	Session           string            `json:"session"`
+	Platform          string            `json:"platform"`
+	State             string            `json:"state"`
+	Readiness         string            `json:"readiness"`
+	Blocker           string            `json:"blocker"`
+	Attention         float64           `json:"attention"`
+	Alive             bool              `json:"alive"`
+	Idle              bool              `json:"idle"`
+	Stalled           bool              `json:"stalled"`
+	ClaimedTask       string            `json:"claimed_task"`
+	RouteID           string            `json:"route_id"`
+	RouteMode         string            `json:"mode"`
+	RouteProfile      string            `json:"profile"`
+	RouteBindingState string            `json:"route_binding_state"`
+	RouteEvidenceRef  string            `json:"route_evidence_ref"`
+	OutputAgeS        float64           `json:"output_age_s"`
+	RelayAgeS         float64           `json:"relay_age_s"`
+	AIR               map[string]string `json:"air"`
+}
+
+type SessionHealth struct {
+	Alive      bool    `json:"alive"`
+	Idle       bool    `json:"idle"`
+	Stalled    bool    `json:"stalled"`
+	OutputAgeS float64 `json:"output_age_s"`
+	RelayAgeS  float64 `json:"relay_age_s"`
+}
+
+type SessionTmux struct {
+	Session      string  `json:"session"`
+	Exists       bool    `json:"exists"`
+	Attached     bool    `json:"attached"`
+	ActivityAgeS float64 `json:"activity_age_s"`
+}
+
+type SessionTaskDetail struct {
+	TaskID          string `json:"task_id"`
+	Status          string `json:"status"`
+	AssignedTo      string `json:"assigned_to"`
+	AuthorityCase   string `json:"authority_case"`
+	ParentSpec      string `json:"parent_spec"`
+	MutationSurface string `json:"mutation_surface"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type EvidenceRef struct {
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	MTime     string `json:"mtime"`
+	Size      int    `json:"size"`
+	Privacy   string `json:"privacy"`
+	RawAccess bool   `json:"raw_access"`
+}
+
+type ResumeContext struct {
+	Intent         string   `json:"intent"`
+	Ready          bool     `json:"ready"`
+	Authority      string   `json:"authority"`
+	BlockedReasons []string `json:"blocked_reasons"`
+}
+
+type SessionEvidenceSummary struct {
+	Total                   int            `json:"total"`
+	ByKind                  map[string]int `json:"by_kind"`
+	TranscriptRootsObserved int            `json:"transcript_roots_observed"`
+	TranscriptRootsMissing  int            `json:"transcript_roots_missing"`
+	Truncated               bool           `json:"truncated"`
+	Privacy                 string         `json:"privacy"`
+	RawAccess               bool           `json:"raw_access"`
+}
+
+type SessionDetail struct {
+	Role            string                 `json:"role"`
+	Platform        string                 `json:"platform"`
+	State           string                 `json:"state"`
+	Readiness       string                 `json:"readiness"`
+	Blocker         string                 `json:"blocker"`
+	Attention       float64                `json:"attention"`
+	Health          SessionHealth          `json:"health"`
+	Tmux            SessionTmux            `json:"tmux"`
+	Task            SessionTaskDetail      `json:"task"`
+	EvidenceRefs    []EvidenceRef          `json:"evidence_refs"`
+	EvidenceSummary SessionEvidenceSummary `json:"evidence_summary"`
+	Resume          ResumeContext          `json:"resume"`
+	AIR             map[string]string      `json:"air"`
+}
+
+// IntakeSource is a bounded metadata row for one durable intake source. It names the source,
+// freshness, count, and evidence ref posture without reading raw inbox/note/notification bodies.
+type IntakeSource struct {
+	ID        string            `json:"id"`
+	Path      string            `json:"path"`
+	Exists    bool              `json:"exists"`
+	MTime     string            `json:"mtime"`
+	AgeBucket string            `json:"age_bucket"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+
+// IntakeRow is an aggregate observation/demand row. Request IDs, note bodies, notification messages,
+// URLs, and raw evidence refs stay outside this first-order read model.
+type IntakeRow struct {
+	ID            string            `json:"id"`
+	Source        string            `json:"source"`
+	Kind          string            `json:"kind"`
+	Status        string            `json:"status"`
+	Severity      string            `json:"severity"`
+	Count         int               `json:"count"`
+	Blocker       string            `json:"blocker"`
+	Coverage      string            `json:"coverage"`
+	TaskLinkState string            `json:"task_link_state"`
+	EvidenceCount int               `json:"evidence_count"`
+	AgeBucket     string            `json:"age_bucket"`
+	Authority     string            `json:"authority"`
+	Evidence      string            `json:"evidence"`
+	Missing       string            `json:"missing"`
+	Action        string            `json:"action"`
+	Detail        string            `json:"detail"`
+	SourceRefs    string            `json:"source_refs"`
+	NextEvidence  string            `json:"next_evidence"`
+	AIR           map[string]string `json:"air"`
+}
+
+type IntakeSummary struct {
+	Sources []IntakeSource `json:"sources"`
+	Rows    []IntakeRow    `json:"rows"`
+	Totals  map[string]int `json:"totals"`
+}
+
+// CapabilitySource is a metadata-only source row for capability routing. Paths and details are
+// evidence pointers, not execution authority.
+type CapabilitySource struct {
+	ID        string            `json:"id"`
+	Path      string            `json:"path"`
+	Exists    bool              `json:"exists"`
+	MTime     string            `json:"mtime"`
+	AgeBucket string            `json:"age_bucket"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	Detail    string            `json:"detail"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+
+// CapabilityRow is capability-first. Platform routes are evidence below this level, never the
+// ontology of the capability page.
+type CapabilityRow struct {
+	CapabilityID       string            `json:"capability_id"`
+	Status             string            `json:"status"`
+	Authority          string            `json:"authority"`
+	CapabilityClass    string            `json:"capability_class"`
+	SurfaceFamily      string            `json:"surface_family"`
+	SpendModel         string            `json:"spend_model"`
+	EgressClass        string            `json:"egress_class"`
+	ReceiptRequirement string            `json:"receipt_requirement"`
+	RouteCount         int               `json:"route_count"`
+	OKCount            int               `json:"ok_count"`
+	BlockedCount       int               `json:"blocked_count"`
+	EvidenceCount      int               `json:"evidence_count"`
+	Blocker            string            `json:"blocker"`
+	HKPPosture         string            `json:"hkp_posture"`
+	SourceRefs         string            `json:"source_refs"`
+	SourceRefLabels    []string          `json:"source_ref_labels"`
+	AIR                map[string]string `json:"air"`
+}
+
+// CapabilityRoute is route evidence for a capability. It does not select or launch the route.
+type CapabilityRoute struct {
+	RouteID             string            `json:"route_id"`
+	CapabilityID        string            `json:"capability_id"`
+	Platform            string            `json:"platform"`
+	Mode                string            `json:"mode"`
+	Profile             string            `json:"profile"`
+	ModelID             string            `json:"model_id"`
+	Effort              string            `json:"effort"`
+	ContextMode         string            `json:"context_mode"`
+	FastMode            string            `json:"fast_mode"`
+	Quantization        string            `json:"quantization"`
+	CapacityPool        string            `json:"capacity_pool"`
+	DemandVector        string            `json:"demand_vector"`
+	Hardening           string            `json:"hardening"`
+	EvalPlane           string            `json:"eval_plane"`
+	ReviewObligation    string            `json:"review_obligation"`
+	LearningEligibility string            `json:"learning_eligibility"`
+	BenchmarkCoverage   string            `json:"benchmark_coverage"`
+	FixedOverhead       string            `json:"fixed_overhead"`
+	RouteState          string            `json:"route_state"`
+	AuthorityCeiling    string            `json:"authority_ceiling"`
+	FreshnessOK         bool              `json:"freshness_ok"`
+	QuotaState          string            `json:"quota_state"`
+	ReceiptCount        int               `json:"receipt_count"`
+	Blockers            []string          `json:"blockers"`
+	EvidenceCount       int               `json:"evidence_count"`
+	AIR                 map[string]string `json:"air"`
+}
+
+// CapabilityTool is route-level tool evidence. It is not bound to an individual live session until
+// session records expose a route id, so renderers must label it as candidate route evidence.
+type CapabilityTool struct {
+	RouteID      string            `json:"route_id"`
+	Platform     string            `json:"platform"`
+	ToolID       string            `json:"tool_id"`
+	Status       string            `json:"status"`
+	Available    bool              `json:"available"`
+	AuthorityUse string            `json:"authority_use"`
+	ObservedAt   string            `json:"observed_at"`
+	StaleAfter   string            `json:"stale_after"`
+	EvidenceRef  string            `json:"evidence_ref"`
+	Privacy      string            `json:"privacy"`
+	RawAccess    bool              `json:"raw_access"`
+	AIR          map[string]string `json:"air"`
+}
+
+type CapabilitySummary struct {
+	Sources []CapabilitySource `json:"sources"`
+	Rows    []CapabilityRow    `json:"rows"`
+	Routes  []CapabilityRoute  `json:"routes"`
+	Tools   []CapabilityTool   `json:"tools"`
+	Totals  map[string]int     `json:"totals"`
+}
+
+// GateSource is a metadata-only source row for readiness/gate truth.
+type GateSource struct {
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	Detail    string            `json:"detail"`
+	AgeBucket string            `json:"age_bucket"`
+	Path      string            `json:"path"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+
+// GateRow preserves the exact gate/blocker name that is currently stopping action.
+type GateRow struct {
+	GateID    string            `json:"gate_id"`
+	Domain    string            `json:"domain"`
+	Source    string            `json:"source"`
+	Subject   string            `json:"subject"`
+	State     string            `json:"state"`
+	Severity  string            `json:"severity"`
+	Authority string            `json:"authority"`
+	Evidence  string            `json:"evidence"`
+	Missing   string            `json:"missing"`
+	Action    string            `json:"action"`
+	AIR       map[string]string `json:"air"`
+}
+
+type GateSummary struct {
+	Sources []GateSource   `json:"sources"`
+	Rows    []GateRow      `json:"rows"`
+	Totals  map[string]int `json:"totals"`
+}
+
+// DomainSource is a metadata-only source row for optional source-backed lifecycle/domain packs.
+type DomainSource struct {
+	ID        string            `json:"id"`
+	Path      string            `json:"path"`
+	Exists    bool              `json:"exists"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	AgeBucket string            `json:"age_bucket"`
+	Authority string            `json:"authority"`
+	Detail    string            `json:"detail"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+
+// DomainRow is an extensible SDLC/RDLC/n-DLC row. It is evidence/navigation, not route authority.
+type DomainRow struct {
+	DomainID         string            `json:"domain_id"`
+	Label            string            `json:"label"`
+	Lifecycle        string            `json:"lifecycle"`
+	Terrain          string            `json:"terrain"`
+	Depth            string            `json:"depth"`
+	Scope            string            `json:"scope"`
+	State            string            `json:"state"`
+	AuthorityCeiling string            `json:"authority_ceiling"`
+	ClaimCeiling     string            `json:"claim_ceiling"`
+	Windows          string            `json:"windows"`
+	Surfaces         string            `json:"surfaces"`
+	Parity           string            `json:"parity"`
+	EvidenceCount    int               `json:"evidence_count"`
+	Blocker          string            `json:"blocker"`
+	SourceRefs       string            `json:"source_refs"`
+	AIR              map[string]string `json:"air"`
+}
+
+type DomainRelation struct {
+	Source           string            `json:"source"`
+	Target           string            `json:"target"`
+	Relation         string            `json:"relation"`
+	AuthorityCeiling string            `json:"authority_ceiling"`
+	SourceRefs       string            `json:"source_refs"`
+	AIR              map[string]string `json:"air"`
+}
+
+// LifecycleRow is an authority-aware tenant lifecycle contract. SDLC/RDLC/LDLC are instance
+// examples, not product enums; future n-DLC rows should load through the same shape.
+type LifecycleRow struct {
+	LifecycleID      string            `json:"lifecycle_id"`
+	Label            string            `json:"label"`
+	Owner            string            `json:"owner"`
+	Scope            string            `json:"scope"`
+	Plant            string            `json:"plant"`
+	Posture          string            `json:"posture"`
+	State            string            `json:"state"`
+	Maturity         string            `json:"maturity"`
+	AdapterID        string            `json:"adapter_id"`
+	AuthorityCeiling string            `json:"authority_ceiling"`
+	ClaimSurface     string            `json:"claim_surface"`
+	MutationSurface  string            `json:"mutation_surface"`
+	DarkPolicy       string            `json:"dark_policy"`
+	FreshnessPolicy  string            `json:"freshness_policy"`
+	AIRClass         string            `json:"air_class"`
+	Windows          string            `json:"windows"`
+	Surfaces         string            `json:"surfaces"`
+	Commands         string            `json:"commands"`
+	ReceiptContracts string            `json:"receipt_contracts"`
+	EvidenceCount    int               `json:"evidence_count"`
+	Blocker          string            `json:"blocker"`
+	NextEvidence     string            `json:"next_evidence"`
+	SourceRefs       string            `json:"source_refs"`
+	AIR              map[string]string `json:"air"`
+}
+
+type DomainSummary struct {
+	Sources              []DomainSource   `json:"sources"`
+	Rows                 []DomainRow      `json:"rows"`
+	Relations            []DomainRelation `json:"relations"`
+	Totals               map[string]int   `json:"totals"`
+	Authority            string           `json:"authority"`
+	GeneratedAt          string           `json:"generated_at"`
+	PackageHash          string           `json:"package_hash"`
+	DefaultLens          string           `json:"default_lens"`
+	LifecycleSources     []DomainSource   `json:"lifecycle_sources"`
+	Lifecycles           []LifecycleRow   `json:"lifecycles"`
+	LifecycleTotals      map[string]int   `json:"lifecycle_totals"`
+	LifecycleAuthority   string           `json:"lifecycle_authority"`
+	LifecycleGeneratedAt string           `json:"lifecycle_generated_at"`
+	LifecyclePackageHash string           `json:"lifecycle_package_hash"`
+	LifecycleDefaultLens string           `json:"lifecycle_default_lens"`
+}
+
+// RenderSessionHeader: a compact live-lane roster. The first cell is a health glyph; task is AIR
+// denied by default because task ids can carry incident text.
+func RenderSessionHeader() string {
+	return C("mut", fmt.Sprintf(" %-1s %-5s %-13s %-7s %-8s %-5s %-7s %-7s %s",
+		"h", "RDY", "ROLE", "PLAT", "STATE", "ATTN", "OUT", "RELAY", "TASK"))
+}
+
+func sessionToken(state string) string {
+	switch state {
+	case "active":
+		return "grn"
+	case "idle":
+		return "yel"
+	case "stalled", "offline":
+		return "red"
+	}
+	return "mut"
+}
+
+func readinessToken(readiness string) string {
+	switch readiness {
+	case "claim", "live":
+		return "grn"
+	case "idle", "stale":
+		return "yel"
+	case "stall", "off", "offline":
+		return "red"
+	}
+	return "mut"
+}
+
+func sessionHealthVisible(s Session, airOn bool) bool {
+	if !airOn {
+		return true
+	}
+	for _, f := range []string{"state", "alive", "idle", "stalled"} {
+		if s.AIR[f] != "ok" {
+			return false
+		}
+	}
+	return true
+}
+
+func sessionGlyph(s Session, airOn bool) string {
+	if !sessionHealthVisible(s, airOn) {
+		return "▒"
+	}
+	switch {
+	case s.Stalled:
+		return "!"
+	case !s.Alive:
+		return "○"
+	case s.Idle:
+		return "·"
+	default:
+		return "●"
+	}
+}
+
+func compactAge(age float64) string {
+	if age <= 0 {
+		return "·"
+	}
+	switch {
+	case age < 60:
+		return fmt.Sprintf("%.0fs", age)
+	case age < 3600:
+		return fmt.Sprintf("%.0fm", age/60)
+	case age < 86400:
+		return fmt.Sprintf("%.1fh", age/3600)
+	}
+	return fmt.Sprintf("%.1fd", age/86400)
+}
+
+func compactAttention(score float64) string {
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	return fmt.Sprintf("%s%.2f", ScoreBar(score), score)
+}
+
+// RenderSessionRow renders one lane without exposing raw output. AIR gates every value by field,
+// including the derived health ages; default config leaves claimed_task redacted.
+func RenderSessionRow(s Session, airOn bool) string {
+	tok := sessionToken(s.State)
+	if !sessionHealthVisible(s, airOn) {
+		tok = "mut"
+	}
+	glyph := C(tok, sessionGlyph(s, airOn))
+	roleTok := LaneToken(s.Role)
+	if airOn && s.AIR["role"] != "ok" {
+		roleTok = "mut"
+	}
+	rdyTok := readinessToken(s.Readiness)
+	if airOn && s.AIR["readiness"] != "ok" {
+		rdyTok = "mut"
+	}
+	rdy := C(rdyTok, dotsOr(redact(s.AIR, "readiness", s.Readiness, airOn), 5))
+	role := C(roleTok, dotsOr(redact(s.AIR, "role", s.Role, airOn), 13))
+	plat := C("2nd", dotsOr(redact(s.AIR, "platform", s.Platform, airOn), 7))
+	state := C(tok, dotsOr(redact(s.AIR, "state", s.State, airOn), 8))
+	attn := C("pri", dotsOr(redact(s.AIR, "attention", compactAttention(s.Attention), airOn), 5))
+	out := C("mut", dotsOr(redact(s.AIR, "output_age_s", compactAge(s.OutputAgeS), airOn), 7))
+	relay := C("mut", dotsOr(redact(s.AIR, "relay_age_s", compactAge(s.RelayAgeS), airOn), 7))
+	taskTok := "2nd"
+	if airOn && s.AIR["claimed_task"] != "ok" {
+		taskTok = "mut"
+	}
+	taskVal := redact(s.AIR, "claimed_task", s.ClaimedTask, airOn)
+	if strings.TrimSpace(taskVal) == "" {
+		taskVal = "·····"
+	}
+	task := C(taskTok, dotsOr(taskVal, 48))
+	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s", glyph, rdy, role, plat, state, attn, out, relay, task)
+}
+
 // --- :dynamics — the system-dynamics map (obsoletes the standalone :8765 cytoscape viewer) ---
 
 // Layer / Node / Edge mirror reins_read's to_node/to_edge + the seed's layer list.
@@ -303,27 +811,186 @@ type Layer struct {
 	Label string `json:"label"`
 }
 type Node struct {
-	ID     string            `json:"id"`
-	Label  string            `json:"label"`
-	Kind   string            `json:"kind"`
-	Layer  string            `json:"layer"`
-	Status string            `json:"status"`
-	Res    string            `json:"res"`
-	AIR    map[string]string `json:"air"`
+	ID              string            `json:"id"`
+	Label           string            `json:"label"`
+	Kind            string            `json:"kind"`
+	Layer           string            `json:"layer"`
+	Status          string            `json:"status"`
+	Res             string            `json:"res"`
+	Summary         string            `json:"summary"`
+	Context         string            `json:"context"`
+	Docs            string            `json:"docs"`
+	HardeningNotes  string            `json:"hardening_notes"`
+	Aliases         string            `json:"aliases"`
+	Tags            string            `json:"tags"`
+	SourceRefs      string            `json:"source_refs"`
+	SourceRefLabels []string          `json:"source_ref_labels"`
+	AIR             map[string]string `json:"air"`
 }
 type Edge struct {
+	ID              string            `json:"id"`
+	Source          string            `json:"source"`
+	Target          string            `json:"target"`
+	Relation        string            `json:"relation"`
+	Status          string            `json:"status"`
+	Layer           string            `json:"layer"`
+	Res             string            `json:"res"`
+	Confidence      string            `json:"confidence"`
+	Summary         string            `json:"summary"`
+	Docs            string            `json:"docs"`
+	SourceRefs      string            `json:"source_refs"`
+	SourceRefLabels []string          `json:"source_ref_labels"`
+	AIR             map[string]string `json:"air"`
+}
+type DynamicsSource struct {
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	Detail    string            `json:"detail"`
+	AgeBucket string            `json:"age_bucket"`
+	Path      string            `json:"path"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+type DynamicsRow struct {
+	Kind     string            `json:"kind"`
+	ID       string            `json:"id"`
 	Source   string            `json:"source"`
-	Target   string            `json:"target"`
-	Relation string            `json:"relation"`
 	Status   string            `json:"status"`
+	Severity string            `json:"severity"`
+	Count    int               `json:"count"`
+	Detail   string            `json:"detail"`
 	AIR      map[string]string `json:"air"`
 }
+type DynamicsWorkbenchDefaults struct {
+	InquiryMode     string            `json:"inquiry_mode"`
+	AudienceMode    string            `json:"audience_mode"`
+	ExplanationPath string            `json:"explanation_path"`
+	AIR             map[string]string `json:"air"`
+}
+type DynamicsWorkbenchInquiry struct {
+	ID           string            `json:"id"`
+	Label        string            `json:"label"`
+	Lens         string            `json:"lens"`
+	Prompt       string            `json:"prompt"`
+	AnswerShape  []string          `json:"answer_shape"`
+	FocusNodeIDs []string          `json:"focus_node_ids"`
+	FocusEdgeIDs []string          `json:"focus_edge_ids"`
+	AIR          map[string]string `json:"air"`
+}
+type DynamicsWorkbenchAudience struct {
+	ID       string            `json:"id"`
+	Label    string            `json:"label"`
+	Emphasis string            `json:"emphasis"`
+	AIR      map[string]string `json:"air"`
+}
+type DynamicsWorkbenchScene struct {
+	Title          string            `json:"title"`
+	Lens           string            `json:"lens"`
+	SelectionGroup string            `json:"selection_group"`
+	SelectionID    string            `json:"selection_id"`
+	Takeaway       string            `json:"takeaway"`
+	Caveat         string            `json:"caveat"`
+	AIR            map[string]string `json:"air"`
+}
+type DynamicsWorkbenchExplanation struct {
+	ID          string                   `json:"id"`
+	Label       string                   `json:"label"`
+	Summary     string                   `json:"summary"`
+	MustInclude []string                 `json:"must_include"`
+	SceneCount  int                      `json:"scene_count"`
+	Scenes      []DynamicsWorkbenchScene `json:"scenes"`
+	AIR         map[string]string        `json:"air"`
+}
+type DynamicsWorkbench struct {
+	Status           string                         `json:"status"`
+	Missing          string                         `json:"missing"`
+	Defaults         DynamicsWorkbenchDefaults      `json:"defaults"`
+	InquiryModes     []DynamicsWorkbenchInquiry     `json:"inquiry_modes"`
+	AudienceModes    []DynamicsWorkbenchAudience    `json:"audience_modes"`
+	ExplanationPaths []DynamicsWorkbenchExplanation `json:"explanation_paths"`
+	FollowOnTranches []string                       `json:"follow_on_tranches"`
+	AIR              map[string]string              `json:"air"`
+}
+type DynamicsPackage struct {
+	Sources      []DynamicsSource  `json:"sources"`
+	Validation   []DynamicsRow     `json:"validation"`
+	Lenses       []DynamicsRow     `json:"lenses"`
+	Claims       []DynamicsRow     `json:"claims"`
+	Observations []DynamicsRow     `json:"observations"`
+	Relations    []DynamicsRow     `json:"relations"`
+	Totals       map[string]int    `json:"totals"`
+	Authority    string            `json:"authority_case"`
+	GeneratedAt  string            `json:"generated_at"`
+	PackageHash  string            `json:"package_hash"`
+	DefaultLens  string            `json:"default_lens"`
+	Workbench    DynamicsWorkbench `json:"workbench_contract"`
+}
+
+// EpistemicSource is a metadata-only source row for the typed epistemics read model.
+// It names evidence channels and source health without exposing source bodies.
+type EpistemicSource struct {
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Count     int               `json:"count"`
+	Detail    string            `json:"detail"`
+	AgeBucket string            `json:"age_bucket"`
+	Path      string            `json:"path"`
+	Privacy   string            `json:"privacy"`
+	RawAccess bool              `json:"raw_access"`
+	AIR       map[string]string `json:"air"`
+}
+
+// EpistemicReadRow is the typed source-backed reference row used by :epistemics.
+// Map identity fields are structural joins; subject/detail/source bodies remain AIR-gated.
+type EpistemicReadRow struct {
+	RowID           string            `json:"row_id"`
+	Family          string            `json:"family"`
+	SubjectKind     string            `json:"subject_kind"`
+	SubjectRef      string            `json:"subject_ref"`
+	Subject         string            `json:"subject"`
+	Status          string            `json:"status"`
+	Posture         string            `json:"posture"`
+	Authority       string            `json:"authority"`
+	AuthorityCase   string            `json:"authority_case"`
+	EvidenceCount   int               `json:"evidence_count"`
+	Evidence        string            `json:"evidence"`
+	Source          string            `json:"source"`
+	SourceRefs      string            `json:"source_refs"`
+	SourceRefLabels []string          `json:"source_ref_labels"`
+	Freshness       string            `json:"freshness"`
+	Privacy         string            `json:"privacy"`
+	RawAccess       bool              `json:"raw_access"`
+	Missing         string            `json:"missing"`
+	Action          string            `json:"action"`
+	Detail          string            `json:"detail"`
+	MapKind         string            `json:"map_kind"`
+	MapID           string            `json:"map_id"`
+	MapSource       string            `json:"map_source"`
+	MapTarget       string            `json:"map_target"`
+	MapRelation     string            `json:"map_relation"`
+	AIR             map[string]string `json:"air"`
+}
+
+type EpistemicsSummary struct {
+	SchemaVersion string             `json:"schema_version"`
+	Scope         string             `json:"scope"`
+	AuthorityCase string             `json:"authority_case"`
+	GeneratedAt   string             `json:"generated_at"`
+	PackageHash   string             `json:"package_hash"`
+	Sources       []EpistemicSource  `json:"sources"`
+	Rows          []EpistemicReadRow `json:"rows"`
+	Totals        map[string]int     `json:"totals"`
+}
+
 type Graph struct {
-	MapID  string  `json:"map_id"`
-	Thesis string  `json:"thesis"`
-	Layers []Layer `json:"layers"`
-	Nodes  []Node  `json:"nodes"`
-	Edges  []Edge  `json:"edges"`
+	MapID   string          `json:"map_id"`
+	Thesis  string          `json:"thesis"`
+	Layers  []Layer         `json:"layers"`
+	Nodes   []Node          `json:"nodes"`
+	Edges   []Edge          `json:"edges"`
+	Package DynamicsPackage `json:"package"`
 }
 
 // AtResolution returns the sub-graph at view-scale maxRes (the seed's view_scales: 1=overview …
@@ -348,7 +1015,7 @@ func (g Graph) AtResolution(maxRes int) Graph {
 			edges = append(edges, e)
 		}
 	}
-	return Graph{MapID: g.MapID, Thesis: g.Thesis, Layers: g.Layers, Nodes: nodes, Edges: edges}
+	return Graph{MapID: g.MapID, Thesis: g.Thesis, Layers: g.Layers, Nodes: nodes, Edges: edges, Package: g.Package}
 }
 
 // statusGlyph: provenance as a confidence ladder — filled = solid, open = tentative (the seed's
@@ -417,24 +1084,70 @@ func RenderHelp() string {
 		"REINS — one cockpit for the whole delivery lifecycle.",
 		"",
 		"PAGES",
-		"  :events            live coord event stream (scored, glyph grammar)",
-		"  :tasks             the task registry (live projection)",
-		"  :dynamics [scale]  the system-dynamics map as layered ASCII",
-		"                     scale = overview|domain|artifact|runtime|evidence|1..5|all",
-		"  :help              this page",
-		"  :legend  /  [?]    decode the grammar — every glyph/color/cell, with glosses",
+		"  [1] :events          live coord event stream; [j/k] select, [y] yank event fields",
+		"  [2] :tasks           task registry; [/] filter, [f] hint/select, [V] class-select",
+		"  [3] :sessions        live lane roster; [j/k] select, [Enter] detail, [r] resume stub",
+		"  [Y] :yard            Trainyard SDLC cockpit; ladder/attention/fleet/gates",
+		"  [R] :readiness       gates/readiness projection; sources, lane blockers, route receipts",
+		"  [I] :intake          source-backed intake observations; snapshots, buckets, gaps",
+		"  [C] :capabilities    routing fit/admission projection; [j/k] select capability",
+		"  [4] :dynamics [scale] system-dynamics map; [j/k] focus, [J/K] scroll, [E] epistemics",
+		"                       scale = overview|domain|artifact|runtime|evidence|1..5|all",
+		"  [E] :epistemics      evidence/provenance posture; [j/k] select derived rows",
+		"  [5] :help            this page; [j/k] scroll when clipped",
+		"  [6] :commands        unified command catalog; authority/preflight/receipt/UI delta",
+		"  [7] :windows         lifecycle/window registry; every screen is jumpable/cycleable",
+		"  [8] :intent          review-before-run pane; target/subject/preflight/receipt",
+		"  [9] :surfaces        transient doors/modes registry; no buried modal lore",
+		"  [0] :domains         domain/terrain lens registry; extensible SDLC/RDLC/n-DLC map",
+		"  [L] :lifecycles      tenant lifecycle contracts; SDLC/RDLC/LDLC/n-DLC rows",
+		"  [?] :legend          decode every glyph/color/cell; [g/G] top/bottom",
 		"",
-		"COMMAND   ([:] opens the command line — Enter runs, Esc cancels)",
+		"COMMAND   ([:] opens the command line — Tab navigates, → fills, Enter accepts, Esc cancels)",
 		"  :air on|off        the PII-safe on-air lens (default-deny redaction)",
+		"  :note <text>       local note sink; free text is hidden while AIR is on",
 		"  :quit              leave",
 		"",
-		"ON THE SELECTED TASK ([j/k] moves the selection bar on :tasks)",
-		"  [↵] inspect        open the full task — SDLC ladder + 7 dims + state-legal verbs (Esc back)",
-		"  [y] yank           grab a field → kill-ring + the command line (AIR-gated, mouse-free)",
+		"TASKS",
+		"  [↵] inspect        open /whois — SDLC ladder + 7 dims + governed verb stubs",
+		"  [Tab] field rank   [h/l] steer fields; [y] yanks the selected field",
+		"  [y] yank           navigable grab mode: [j/k] rows, [Tab/←/→] fields, [Enter] grabs",
+		"  [/] filter         id substring filter; completion offers visible ids",
+		"  [f] hint/select    row letters, O/W/M/C class filters, 1/2 Act-jumps",
+		"  [V] class-select   select visible siblings with the same criticality; [Esc] clears",
+		"",
+		"EVENTS",
+		"  [j/k]/[g/G]        move the event cursor",
+		"  [y] yank           [t] time [K] kind [s] subject [a] actor [m] summary",
+		"",
+		"SESSIONS",
+		"  [j/k]/[g/G]        move the session cursor",
+		"  [y] yank           [r] role [p] platform [d] readiness [b] blocker [s] session [c] task",
+		"  [Enter] detail     full-screen lane card; roster facts only",
+		"  [r] resume-intent  governed route stub only; no transcript, PTY, or dispatch path",
+		"",
+		"REFERENCE PAGES",
+		"  [j/k] scroll       [g/G] top/bottom; wide screens add a context/contract rail",
+		"                       :capabilities is cursorful: [j/k] capability, [g/G] first/last",
+		"  [←/→] cycle        next/previous registered window; [ and ] also work; title +N = hidden windows",
+		"  [|] split context  session source left; active window becomes declared relation/context",
+		"                       linked split: [j/k] source, [J/K] right context scroll",
+		"                       source-only split: [j/k] lane anchor, [J/K] right context scroll; [Enter]/[y] source",
+		"",
+		"SPLIT PAIRS",
+		"  linked             events, tasks, sessions, yard, readiness, intake, capabilities; [j/k] source updates context",
+		"  source-only        dynamics, epistemics, intent, help, commands, windows, surfaces, domains, lifecycles, legend",
+		"  panes              left is sessions source; right is active window relation/context; [J/K] scrolls right",
+		"",
+		"COMPOSITION",
+		"  {{focus}}          inject the current row identity into a command",
+		"  {{sel.*}}          inject field/value/status/family/receipt/missing refs; completion previews values",
+		"  {{ring.0}}         replay the most recent AIR-safe yank without copy-paste",
+		"  split context      session source plus relation context is a registered layout surface",
 		"",
 		"KEYS",
-		"  [:] command   [1] events  [2] tasks  [3] dynamics  [4] help  [?] legend",
-		"  [j/k] select  [↵] inspect  [y] yank  [a] AIR lens  [q] quit",
+		"  global: [:] command  [1-9/0/Y/R/I/C/L/?] pages  [←/→] windows  [|] split  [a] AIR lens  [q] quit",
+		"  rows:   [j/k] select  [g/G] top/bottom  [y] yank",
 		"",
 		"On AIR, every non-allowlisted cell renders ▒▒▒ — safe for the livestream.",
 	}, "\n")
@@ -484,7 +1197,7 @@ func RenderLegend() string {
 	hd := func(s string) { b.WriteString("\n " + C("brt", s) + "\n") }
 	row := func(swatch, gloss string) { b.WriteString("   " + swatch + "   " + C("mut", gloss) + "\n") }
 
-	b.WriteString(" " + C("brt", "LEGEND") + C("mut", " — what the marks mean    [?] or :legend toggles · any key closes") + "\n")
+	b.WriteString(" " + C("brt", "LEGEND") + C("mut", " — what the marks mean    open with [?] or :legend") + "\n")
 
 	hd("STATE  (leading glyph, colored by criticality)")
 	for _, k := range critOrder {
@@ -504,6 +1217,13 @@ func RenderLegend() string {
 	row(C("grn", "·ship"), "terminal / arrived (no pending move)")
 	hd("RELATIONS")
 	row(C("blu", "●N"), "N live ties (deps / governance / tied)")
+	hd("LAYOUT  (pane relationship and scroll grammar)")
+	row(C("yel", "split:ctx"), "split is active; left source and right context are paired")
+	row(C("mut", "split:wide"), "wide contextual rail is active without split source")
+	row(C("yel", "▶"), "active source row; navigation rebinds the context")
+	row(C("pri", "◆"), "independent source row; right context does not rebind")
+	row(C("border", "│"), "pane divider; panes should explain each other")
+	row(C("mut", "… N more"), "overflow rows exist below the current viewport")
 	hd("PROVENANCE  (:dynamics nodes — a confidence ladder)")
 	for _, k := range provOrder {
 		row(C(palette.ProvToken(k), statusGlyphs[k]+" "+pad(k, 9)), provGloss[k])

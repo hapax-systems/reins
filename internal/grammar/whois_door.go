@@ -52,6 +52,9 @@ func RenderWhoisDoor(t Task, airOn bool, w, h int) string {
 		crit = "ok"
 	}
 	ctok := SeverityToken(crit)
+	if airOn && !whoisFieldVisible(t, "criticality", airOn) {
+		ctok = "mut"
+	}
 
 	val := func(field, raw string) string { return redact(t.AIR, field, raw, airOn) }
 	stageVisible := whoisFieldVisible(t, "stage", airOn)
@@ -96,14 +99,25 @@ func RenderWhoisDoor(t Task, airOn bool, w, h int) string {
 		return strings.Join(dock[:h], "\n")
 	}
 	maxBody := h - len(dock)
-	if len(lines) > maxBody {
-		lines = lines[:maxBody]
-	}
+	lines = doorBodyWithOverflow(lines, maxBody, w, "door")
 	for len(lines) < maxBody {
 		blank()
 	}
 	lines = append(lines, dock...)
 	return strings.Join(lines, "\n")
+}
+
+func doorBodyWithOverflow(lines []string, maxBody, w int, label string) []string {
+	if maxBody <= 0 {
+		return nil
+	}
+	if len(lines) <= maxBody {
+		return lines
+	}
+	hidden := len(lines) - maxBody + 1
+	out := append([]string(nil), lines[:maxBody]...)
+	out[maxBody-1] = whoisLine(w, whoisSeg{"mut", fmt.Sprintf("… %d %s rows hidden; taller frame", hidden, label)})
+	return out
 }
 
 func whoisDimensions(lines *[]string, t Task, w int, airOn bool, val func(string, string) string, ctok string) {
@@ -114,6 +128,9 @@ func whoisDimensions(lines *[]string, t Task, w int, airOn bool, val func(string
 	glyph := critGlyph[crit]
 	if glyph == "" {
 		glyph = "·"
+	}
+	if airOn && !whoisFieldVisible(t, "criticality", airOn) {
+		glyph = "▒"
 	}
 	stage := val("stage", shortStage(t.Stage))
 	prior := val("prior_stage", shortStage(t.PriorStage))
@@ -126,6 +143,22 @@ func whoisDimensions(lines *[]string, t Task, w int, airOn bool, val func(string
 	}
 	fresh := val("freshness", fmt.Sprintf("%.2f", t.Freshness))
 	rel := whoisRedactRel(t, airOn, fmt.Sprintf("●%d", t.RelCount))
+	predTok := whoisPredictedToken(t.PredictedStage)
+	if airOn && !whoisFieldVisible(t, "predicted_stage", airOn) {
+		predTok = "mut"
+	}
+	ownerTok := LaneToken(t.Owner)
+	if airOn && !whoisFieldVisible(t, "owner", airOn) {
+		ownerTok = "mut"
+	}
+	freshTok := "pri"
+	if airOn && !whoisFieldVisible(t, "freshness", airOn) {
+		freshTok = "mut"
+	}
+	relTok := "blu"
+	if airOn && !whoisFieldVisible(t, "rel_count", airOn) {
+		relTok = "mut"
+	}
 
 	addDim := func(label string, segs ...whoisSeg) {
 		base := []whoisSeg{{"mut", "  " + pad(label, 12) + ": "}}
@@ -134,11 +167,11 @@ func whoisDimensions(lines *[]string, t Task, w int, airOn bool, val func(string
 	}
 	addDim("state", whoisSeg{ctok, glyph + " " + stage}, whoisSeg{"mut", " — current lifecycle state"})
 	addDim("was", whoisSeg{"mut", "◀ " + dotsOr(prior, 4)}, whoisSeg{"mut", " — prior stage"})
-	addDim("now→next", whoisSeg{"pri", stage}, whoisSeg{"mut", " → "}, whoisSeg{whoisPredictedToken(t.PredictedStage), pred})
+	addDim("now→next", whoisSeg{"pri", stage}, whoisSeg{"mut", " → "}, whoisSeg{predTok, pred})
 	addDim("criticality", whoisSeg{ctok, critVal + " " + bar})
-	addDim("owner", whoisSeg{LaneToken(t.Owner), val("owner", dotsOr(t.Owner, 8))})
-	addDim("freshness", whoisSeg{"pri", fresh})
-	addDim("relations", whoisSeg{"blu", rel})
+	addDim("owner", whoisSeg{ownerTok, val("owner", dotsOr(t.Owner, 8))})
+	addDim("freshness", whoisSeg{freshTok, fresh})
+	addDim("relations", whoisSeg{relTok, rel})
 }
 
 func whoisAuthorizationLines(t Task, w int, airOn bool) []string {
@@ -163,13 +196,14 @@ func whoisAuthorizationLines(t Task, w int, airOn bool) []string {
 func whoisVerbDock(w int, t Task, stage int) string {
 	pred := strings.ToLower(strings.TrimSpace(t.PredictedStage))
 	verbs := []struct {
+		key   string
 		name  string
 		legal bool
 	}{
-		{name: "arm", legal: stage >= 7 && pred == "hold"},
-		{name: "rework", legal: pred == "hold"},
-		{name: "refute", legal: stage >= 5},
-		{name: "close", legal: pred == "ship"},
+		{key: "a", name: "arm", legal: stage >= 7 && pred == "hold"},
+		{key: "r", name: "rework", legal: pred == "hold"},
+		{key: "f", name: "refute", legal: stage >= 5},
+		{key: "c", name: "close", legal: pred == "ship"},
 	}
 	segs := []whoisSeg{{"mut", "VERB DOCK: "}}
 	for i, v := range verbs {
@@ -177,7 +211,7 @@ func whoisVerbDock(w int, t Task, stage int) string {
 			segs = append(segs, whoisSeg{"mut", " "})
 		}
 		if v.legal {
-			segs = append(segs, whoisSeg{"yel", "[" + v.name + "]"})
+			segs = append(segs, whoisSeg{"yel", "[" + v.key + "]"}, whoisSeg{"pri", " " + v.name})
 		} else {
 			segs = append(segs, whoisSeg{"mut", " " + v.name + " "})
 		}

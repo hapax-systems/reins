@@ -45,31 +45,39 @@ func (m Model) commandCandidates() []Candidate {
 		return m.templateCandidates(prefix)
 	}
 
-	var out []Candidate
-	// dynamic-on-selection: inject the selected field's live value (leads the list).
-	if t, ok := m.FocusedTask(); ok && m.Sel.Rank == RankField && m.Sel.Field != "" {
-		v := fieldValue(t, m.Sel.Field)
-		out = append(out, Candidate{Label: pastePrefix + m.Sel.Field, Value: v, Detail: "inject ‹" + clip(v, 32) + "›"})
-	}
-
 	fields := strings.Fields(m.Input)
 	trailingSpace := strings.HasSuffix(m.Input, " ")
 
+	var out []Candidate
+	// dynamic-on-selection: inject the selected field's live value only when paste is what the user
+	// is asking for. A typed command must never be preempted by the current selection.
+	if pasteCandidateAllowed(m.Input) {
+		if field, v, ok := m.selectedPasteValue(); ok {
+			out = append(out, Candidate{Label: pastePrefix + field, Value: v, Detail: "inject ‹" + clip(v, 32) + "›"})
+		}
+	}
+
 	// ARG level: a verb is fully typed and we're now completing its argument.
 	if len(fields) >= 1 && (trailingSpace || len(fields) >= 2) {
-		if vd, ok := lookupVerb(fields[0]); ok && len(vd.args) > 0 {
-			argPrefix := ""
-			if !trailingSpace && len(fields) >= 2 {
-				argPrefix = fields[len(fields)-1]
-			}
-			for _, a := range vd.args {
-				if strings.HasPrefix(a.Label, argPrefix) {
-					a.Value = vd.name + " " + a.Label // accept RUNS the full command
-					out = append(out, a)
+		if vd, ok := lookupVerb(fields[0]); ok {
+			if len(vd.args) > 0 {
+				argPrefix := ""
+				if !trailingSpace && len(fields) >= 2 {
+					argPrefix = fields[len(fields)-1]
 				}
+				for _, a := range vd.args {
+					if strings.HasPrefix(a.Label, argPrefix) {
+						a.Value = vd.name + " " + a.Label // accept RUNS the full command
+						out = append(out, a)
+					}
+				}
+				return out
 			}
-			return out
+			if vd.freeform {
+				return out
+			}
 		}
+		return out
 	}
 
 	// VERB level: prefix-match the verb table.
@@ -78,10 +86,10 @@ func (m Model) commandCandidates() []Candidate {
 		prefix = fields[0]
 	}
 	for _, v := range verbs {
-		if !strings.HasPrefix(v.name, prefix) {
+		if !v.matchesPrefix(prefix) {
 			continue
 		}
-		c := Candidate{Label: v.name, Detail: v.gloss}
+		c := Candidate{Label: v.name, Detail: v.detail()}
 		if len(v.args) > 0 {
 			c.Sub = v.args // signals "descend on accept"
 		} else {
@@ -90,6 +98,18 @@ func (m Model) commandCandidates() []Candidate {
 		out = append(out, c)
 	}
 	return out
+}
+
+func pasteCandidateAllowed(input string) bool {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return true
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) != 1 {
+		return false
+	}
+	return strings.HasPrefix("paste", fields[0])
 }
 
 // filterCandidates: the [/] filter surface. Same engine — completing the filter offers the live task
@@ -103,6 +123,10 @@ func (m Model) filterCandidates() []Candidate {
 		if len(out) >= 8 {
 			break
 		}
+		label := taskFieldValueForAir(t, "task_id", m.AIR)
+		if m.AIR && label == "▒▒▒" {
+			continue
+		}
 		if seen[t.TaskID] {
 			continue
 		}
@@ -110,11 +134,7 @@ func (m Model) filterCandidates() []Candidate {
 			continue
 		}
 		seen[t.TaskID] = true
-		c := t.Criticality
-		if c == "" {
-			c = "ok"
-		}
-		out = append(out, Candidate{Label: t.TaskID, Value: t.TaskID, Detail: c})
+		out = append(out, Candidate{Label: label, Value: t.TaskID, Detail: taskFieldValueForAir(t, "criticality", m.AIR)})
 	}
 	return out
 }
@@ -131,6 +151,9 @@ func (m Model) curCandidate() (Candidate, bool) {
 // acceptCompletion — [Enter]: a leaf RUNS (Exec); a Sub node DESCENDS; a paste candidate INJECTS.
 // With no candidates, Enter runs whatever is typed.
 func (m Model) acceptCompletion() Model {
+	if commandInputShouldRunTyped(m.Input) {
+		return m.Exec(m.Input)
+	}
 	c, ok := m.curCandidate()
 	if !ok {
 		return m.Exec(m.Input)
@@ -148,6 +171,24 @@ func (m Model) acceptCompletion() Model {
 	default:
 		return m.Exec(c.Value)
 	}
+}
+
+func commandInputShouldRunTyped(input string) bool {
+	if _, open := openTemplatePrefix(input); open {
+		return false
+	}
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return false
+	}
+	vd, ok := lookupVerb(fields[0])
+	if !ok {
+		return false
+	}
+	if vd.freeform && len(fields) >= 2 {
+		return true
+	}
+	return len(fields) == 1 && !strings.HasSuffix(input, " ") && len(vd.args) == 0
 }
 
 // fillCompletion — [→]: accept INTO the line (descend or fill the input), never run. Fish's accept

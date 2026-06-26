@@ -3,6 +3,8 @@ package grammar
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func columnRailGraph() Graph {
@@ -59,9 +61,87 @@ func TestRenderColumnRailAIRRedactsDeniedLabelKeepsTopology(t *testing.T) {
 	if strings.Contains(got, "Secret Target Label") {
 		t.Fatalf("AIR leaked a denied node label:\n%s", got)
 	}
-	for _, want := range []string{"dst", statusGlyph("observed", map[string]string{"status": "ok"}, true), "▶"} {
+	for _, want := range []string{"dst", statusGlyph("observed", map[string]string{"status": "ok"}, true), "→"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AIR render should keep node identity/glyph/topology %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestRenderColumnRailEdgesDoNotOverwriteNodeLabels(t *testing.T) {
+	g := Graph{
+		Layers: []Layer{
+			{ID: "a", Label: "A"},
+			{ID: "b", Label: "B"},
+			{ID: "c", Label: "C"},
+		},
+		Nodes: []Node{
+			{ID: "src", Label: "Source", Layer: "a", Status: "observed", AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+			{ID: "mid", Label: "Middle", Layer: "b", Status: "observed", AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+			{ID: "dst", Label: "Target", Layer: "c", Status: "asserted", AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+		},
+		Edges: []Edge{{Source: "src", Target: "dst", Relation: "skips", Status: "observed"}},
+	}
+
+	got := RenderColumnRail(g, 0, false, 96)
+	for _, want := range []string{"src Source", "mid Middle", "dst Target", "→"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("column rail should preserve node text and flow glyph %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderColumnRailFrameAnimatesEdgesWithoutMovingTopology(t *testing.T) {
+	g := columnRailGraph()
+	frame0 := RenderColumnRailFrame(g, 0, false, 96, 0)
+	frame1 := RenderColumnRailFrame(g, 0, false, 96, 1)
+	if frame0 == frame1 {
+		t.Fatalf("frame phase should move a flow mark without rebuilding topology:\n%s", frame0)
+	}
+	for _, frame := range []string{frame0, frame1} {
+		for _, want := range []string{"SENSE", "input Input", "policy Policy", "→", "•"} {
+			if !strings.Contains(frame, want) {
+				t.Fatalf("animated rail frame missing stable topology/flow mark %q:\n%s", want, frame)
+			}
+		}
+		for i, line := range strings.Split(frame, "\n") {
+			if got := ansi.StringWidth(ansi.Strip(line)); got > 96 {
+				t.Fatalf("animated rail line %d exceeds width: %d %q", i, got, line)
+			}
+		}
+	}
+}
+
+func TestRenderColumnRailFrameCapsFlowMarks(t *testing.T) {
+	g := Graph{
+		Layers: []Layer{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}},
+	}
+	for i := 0; i < 12; i++ {
+		src := "src" + string(rune('a'+i))
+		dst := "dst" + string(rune('a'+i))
+		g.Nodes = append(g.Nodes,
+			Node{ID: src, Label: "Source", Layer: "a", Status: "observed", AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+			Node{ID: dst, Label: "Target", Layer: "b", Status: "asserted", AIR: map[string]string{"id": "ok", "label": "ok", "status": "ok"}},
+		)
+		g.Edges = append(g.Edges, Edge{Source: src, Target: dst, Relation: "feeds", Status: "observed"})
+	}
+
+	frame := RenderColumnRailFrame(g, 0, false, 96, 0)
+	marks := strings.Count(frame, "•")
+	if marks == 0 || marks > columnRailMaxFlowMarks {
+		t.Fatalf("animated rail should cap flow marks to 1..%d, got %d:\n%s", columnRailMaxFlowMarks, marks, frame)
+	}
+}
+
+func TestRenderColumnRailFrameFocusedMarksNodeAndEdge(t *testing.T) {
+	g := columnRailGraph()
+	nodeFrame := ansi.Strip(RenderColumnRailFrameFocused(g, 0, false, 96, 0, ColumnRailFocus{Kind: "node", ID: "input"}))
+	if !strings.Contains(nodeFrame, "▶input") {
+		t.Fatalf("focused rail should mark the selected node without moving its label:\n%s", nodeFrame)
+	}
+
+	edgeFrame := ansi.Strip(RenderColumnRailFrameFocused(g, 0, false, 96, 0, ColumnRailFocus{Kind: "edge", Source: "input", Target: "policy", Relation: "feeds"}))
+	if !strings.Contains(edgeFrame, "◆") {
+		t.Fatalf("focused rail should mark the selected edge path:\n%s", edgeFrame)
 	}
 }

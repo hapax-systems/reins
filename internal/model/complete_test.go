@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,7 +19,12 @@ func TestSubMenuDescentAndRun(t *testing.T) {
 	m.Width, m.Height = 120, 40
 	m = step(m, ":") // command line
 	m = tab(m)       // events(0) -> tasks(1)
-	m = tab(m)       // tasks(1) -> dynamics(2), which has a sub-menu
+	m = tab(m)       // tasks(1) -> sessions(2)
+	m = tab(m)       // sessions(2) -> yard(3)
+	m = tab(m)       // yard(3) -> readiness(4)
+	m = tab(m)       // readiness(4) -> intake(5)
+	m = tab(m)       // intake(5) -> capabilities(6)
+	m = tab(m)       // capabilities(6) -> dynamics(7), which has a sub-menu
 	c, _ := m.curCandidate()
 	if c.Label != "dynamics" || len(c.Sub) == 0 {
 		t.Fatalf("expected to highlight the dynamics sub-menu node, got %q (sub=%d)", c.Label, len(c.Sub))
@@ -70,6 +76,99 @@ func TestPasteCandidateInjects(t *testing.T) {
 	}
 }
 
+func TestPasteCandidateDoesNotPreemptExactTypedCommand(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{{TaskID: "abc", Stage: "S5", AIR: map[string]string{}}}, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m.Mode = ModeCommand
+	m.Input = "tasks"
+	m.Sel.Rank, m.Sel.Field = RankField, "stage"
+
+	cands := m.completionTree()
+	for _, c := range cands {
+		if c.Label == pastePrefix+"stage" {
+			t.Fatalf("paste candidate should not appear while an exact command is typed, got %+v", cands)
+		}
+	}
+	m = ent(m)
+	if m.Mode != ModeNormal || m.Page != PageTasks || m.Input != "" || !strings.Contains(m.Status, ":tasks") {
+		t.Fatalf("exact typed command should run, not paste: mode=%d page=%d input=%q status=%q", m.Mode, m.Page, m.Input, m.Status)
+	}
+}
+
+func TestFreeformNoteRunsTypedLineDespiteCompletion(t *testing.T) {
+	m := New("REINS")
+	m.Width, m.Height = 120, 40
+	m.Mode = ModeCommand
+	m.Input = "note hello world"
+
+	cands := m.completionTree()
+	if len(cands) != 0 {
+		t.Fatalf("freeform note with text should not fall back to top-level verbs, got %+v", cands)
+	}
+	m = ent(m)
+	if m.Mode != ModeNormal || m.Page != PageEvents || !strings.Contains(m.Status, "note ▸ hello world") {
+		t.Fatalf("freeform note should execute typed text without switching windows: mode=%d page=%d status=%q", m.Mode, m.Page, m.Status)
+	}
+}
+
+func TestPasteCandidateRedactsDeniedFieldOnAir(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{{TaskID: "abc", Owner: "secret-owner", AIR: map[string]string{"owner": "deny"}}}, false)
+	m.Width, m.Height = 120, 40
+	m.Page = PageTasks
+	m.AIR = true
+	m.Mode = ModeCommand
+	m.Sel.Rank, m.Sel.Field = RankField, "owner"
+	cands := m.completionTree()
+	if len(cands) == 0 || cands[0].Label != pastePrefix+"owner" {
+		t.Fatalf("selected field should lead completion candidates, got %+v", cands)
+	}
+	if cands[0].Value != "▒▒▒" || strings.Contains(cands[0].Detail, "secret-owner") {
+		t.Fatalf("paste candidate must be AIR-safe, got %+v", cands[0])
+	}
+}
+
+func TestPasteCandidateIsPageAware(t *testing.T) {
+	m := New("REINS").Fold([]grammar.Event{{
+		TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "event-subject",
+		AIR: map[string]string{"subject": "ok"},
+	}}, false)
+	m.Width, m.Height = 120, 40
+	m.Page, m.Mode = PageEvents, ModeCommand
+	m.Sel.Rank, m.Sel.Field = RankField, "subject"
+	cands := m.completionTree()
+	if len(cands) == 0 || cands[0].Label != pastePrefix+"subject" || cands[0].Value != "event-subject" {
+		t.Fatalf("event selected field should lead paste completion, got %+v", cands)
+	}
+
+	m = New("REINS").FoldSessions([]grammar.Session{{
+		Role: "cx-p0", Platform: "codex", AIR: map[string]string{"platform": "ok"},
+	}}, false)
+	m.Width, m.Height = 120, 40
+	m.Page, m.Mode = PageSessions, ModeCommand
+	m.Sel.Rank, m.Sel.Field = RankField, "platform"
+	cands = m.completionTree()
+	if len(cands) == 0 || cands[0].Label != pastePrefix+"platform" || cands[0].Value != "codex" {
+		t.Fatalf("session selected field should lead paste completion, got %+v", cands)
+	}
+}
+
+func TestCommandRegistryCandidatesExposeGroupedMetadataAndAliases(t *testing.T) {
+	m := New("REINS")
+	m.Mode = ModeCommand
+	m.Input = "cmds"
+	cands := m.completionTree()
+	if len(cands) != 1 || cands[0].Label != "commands" || !strings.Contains(cands[0].Detail, "read/registry") {
+		t.Fatalf("alias completion should expose canonical command metadata, got %+v", cands)
+	}
+
+	m.Input = "intent "
+	cands = m.completionTree()
+	if len(cands) == 0 || cands[0].Label != "resume" || cands[0].Value != "intent resume" {
+		t.Fatalf("intent command should expose review-before-run subcommands, got %+v", cands)
+	}
+}
+
 // the filter surface uses the SAME engine — candidates are the live task ids.
 func TestFilterCandidates(t *testing.T) {
 	m := New("REINS").FoldTasks([]grammar.Task{
@@ -81,6 +180,34 @@ func TestFilterCandidates(t *testing.T) {
 	cands := m.completionTree()
 	if len(cands) != 1 || cands[0].Value != "alpha" {
 		t.Fatalf("filter completion should offer matching ids, got %v", cands)
+	}
+}
+
+func TestFilterCandidatesOmitDeniedTaskIDsOnAir(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{
+		{TaskID: "SECRET-ID", Criticality: "crit", AIR: map[string]string{"task_id": "deny", "criticality": "deny"}},
+		{TaskID: "public-id", Criticality: "warn", AIR: map[string]string{"task_id": "ok", "criticality": "deny"}},
+	}, false)
+	m.AIR = true
+	m.Mode = ModeFilter
+	cands := m.completionTree()
+	for _, c := range cands {
+		if strings.Contains(c.Label, "SECRET") || strings.Contains(c.Value, "SECRET") || strings.Contains(c.Detail, "crit") {
+			t.Fatalf("filter completion leaked denied AIR data: %+v", cands)
+		}
+	}
+	if len(cands) != 1 || cands[0].Label != "public-id" || cands[0].Detail != "▒▒▒" {
+		t.Fatalf("expected only AIR-allowed ids with redacted denied detail, got %+v", cands)
+	}
+}
+
+func TestCommandInputDisplayHidesNoteFreeTextOnAir(t *testing.T) {
+	m := New("REINS")
+	m.AIR = true
+	m.Mode = ModeCommand
+	m.Input = "note SECRET-FREE-TEXT"
+	if got := m.commandInputDisplay(); strings.Contains(got, "SECRET-FREE-TEXT") || got != "note ▒▒▒" {
+		t.Fatalf("AIR command input display should hide note free text, got %q", got)
 	}
 }
 

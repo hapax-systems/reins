@@ -101,6 +101,97 @@ func TestRenderEventRowAIRRedactsDenied(t *testing.T) {
 	}
 }
 
+func TestRenderSessionRowLocalAndAIR(t *testing.T) {
+	s := Session{
+		Role: "cx-p0", Session: "hapax-codex-cx-p0", Platform: "codex", State: "active",
+		Readiness: "claim", Blocker: "none", Attention: 0.92,
+		Alive: true, ClaimedTask: "PRIVATE-TASK", OutputAgeS: 42, RelayAgeS: 3600,
+		AIR: map[string]string{
+			"role": "ok", "platform": "ok", "state": "ok", "alive": "ok", "idle": "ok", "stalled": "ok",
+			"readiness": "ok", "blocker": "ok", "attention": "ok",
+			"session": "deny", "claimed_task": "deny", "output_age_s": "ok", "relay_age_s": "ok",
+		},
+	}
+	local := RenderSessionRow(s, false)
+	if !strings.Contains(local, "cx-p0") || !strings.Contains(local, "claim") || !strings.Contains(local, "PRIVATE-TASK") {
+		t.Fatalf("local session row missing fields: %q", local)
+	}
+	air := RenderSessionRow(s, true)
+	for _, leak := range []string{"hapax-codex-cx-p0", "PRIVATE-TASK"} {
+		if strings.Contains(air, leak) {
+			t.Fatalf("AIR session row leaked denied %q: %q", leak, air)
+		}
+	}
+	if !strings.Contains(air, "cx-p0") || !strings.Contains(air, "▒▒▒") {
+		t.Fatalf("AIR session row should keep structural role and redact denied fields: %q", air)
+	}
+}
+
+func TestRenderSessionRowRedactsHealthGlyphWhenDerivedFieldsDenied(t *testing.T) {
+	s := Session{
+		Role: "cx", Platform: "codex", State: "active", Readiness: "live", Alive: true,
+		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "deny", "readiness": "deny", "attention": "deny", "alive": "deny", "idle": "deny", "stalled": "deny"},
+	}
+	air := RenderSessionRow(s, true)
+	if strings.Contains(air, "●") || strings.Contains(air, "active") {
+		t.Fatalf("AIR session row leaked denied health state through glyph/text: %q", air)
+	}
+	if !strings.Contains(air, "▒") {
+		t.Fatalf("AIR session row should keep health structure with redaction: %q", air)
+	}
+}
+
+func TestRenderSessionDoorAIRRedactsOperationalHandles(t *testing.T) {
+	s := Session{
+		Role: "cx-p0", Session: "SECRET-TMUX", Platform: "codex", State: "active", Alive: true,
+		Readiness: "claim", Blocker: "none", Attention: 0.91,
+		ClaimedTask: "SECRET-TASK", OutputAgeS: 12, RelayAgeS: 34,
+		RouteID: "codex.headless.full", RouteMode: "headless", RouteProfile: "full",
+		RouteBindingState: "policy_only", RouteEvidenceRef: "SECRET-ROUTE-REF",
+		AIR: map[string]string{
+			"role": "ok", "platform": "ok", "state": "ok", "alive": "ok", "idle": "ok", "stalled": "ok",
+			"readiness": "ok", "blocker": "ok", "attention": "ok", "route_id": "ok", "mode": "ok", "profile": "ok",
+			"route_binding_state": "ok",
+			"session":             "deny", "claimed_task": "deny", "output_age_s": "ok", "relay_age_s": "ok",
+		},
+	}
+	local := RenderSessionDoor(s, SessionDetail{}, false, false, "", false, 100, 34)
+	for _, want := range []string{"DOOR /session", "SECRET-TMUX", "SECRET-TASK", "ROUTE BINDING", "SECRET-ROUTE-REF", "RESUME CONTRACT"} {
+		if !strings.Contains(local, want) {
+			t.Fatalf("local session door missing %q:\n%s", want, local)
+		}
+	}
+	air := RenderSessionDoor(s, SessionDetail{}, false, false, "", true, 100, 34)
+	for _, leak := range []string{"SECRET-TMUX", "SECRET-TASK", "SECRET-ROUTE-REF"} {
+		if strings.Contains(air, leak) {
+			t.Fatalf("AIR session door leaked denied %q:\n%s", leak, air)
+		}
+	}
+	if !strings.Contains(air, "cx-p0") || !strings.Contains(air, "policy_only") || !strings.Contains(air, "▒▒▒") || !strings.Contains(air, "No command dispatch") {
+		t.Fatalf("AIR session door should keep structure/contract and redact handles:\n%s", air)
+	}
+}
+
+func TestRenderSessionDoorDetailAIRRedactsRefs(t *testing.T) {
+	s := Session{Role: "cx-p0", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.9,
+		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"}}
+	d := SessionDetail{
+		Role:         "cx-p0",
+		Task:         SessionTaskDetail{TaskID: "SECRET-TASK", Status: "claimed", AuthorityCase: "SECRET-CASE", ParentSpec: "SECRET-SPEC"},
+		EvidenceRefs: []EvidenceRef{{Kind: "transcript_candidate", Path: "/secret/transcript.jsonl", Size: 12}},
+		AIR:          map[string]string{"status": "ok", "task_id": "deny", "authority_case": "deny", "parent_spec": "deny", "path": "deny"},
+	}
+	air := RenderSessionDoor(s, d, true, false, "", true, 120, 40)
+	for _, leak := range []string{"SECRET-TASK", "SECRET-CASE", "SECRET-SPEC", "/secret/transcript.jsonl"} {
+		if strings.Contains(air, leak) {
+			t.Fatalf("AIR session detail leaked denied %q:\n%s", leak, air)
+		}
+	}
+	if !strings.Contains(air, "EVIDENCE REFS") || !strings.Contains(air, "claimed") || !strings.Contains(air, "▒▒▒") {
+		t.Fatalf("AIR session detail should keep structure/status and redact refs:\n%s", air)
+	}
+}
+
 func TestRenderWhoisDoor(t *testing.T) {
 	tk := Task{TaskID: "door-x", Stage: "S7_RELEASE", PriorStage: "S6_IMPL", PredictedStage: "hold",
 		Owner: "cc-a", Criticality: "warn", NoGo: "docs_mutation_authorized,implementation_authorized",

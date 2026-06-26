@@ -1,0 +1,187 @@
+package api
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+	}))
+	defer srv.Close()
+
+	_, dark, err := FetchIntake(srv.URL)
+	if err == nil {
+		t.Fatal("FetchIntake should return an error for a missing endpoint")
+	}
+	if !dark {
+		t.Fatal("FetchIntake should darken the read source on HTTP 404")
+	}
+	if !strings.Contains(err.Error(), "/read/intake returned 404") {
+		t.Fatalf("FetchIntake error should name the missing endpoint and status, got %q", err.Error())
+	}
+}
+
+func TestFetchDomainsReadsSourceBackedSummary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/domains" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"dark": false,
+			"domains": {
+				"sources": [{"id":"pack","status":"observed","count":1}],
+				"rows": [{"domain_id":"rdlc","lifecycle":"RDLC","state":"candidate","air":{"domain_id":"ok"}}],
+				"relations": [],
+				"totals": {"sources":1,"rows":1,"relations":0},
+				"authority": "CASE-DOMAIN",
+				"generated_at": "2026-06-25T10:00:00Z",
+				"package_hash": "sha256:test",
+				"default_lens": "lifecycle",
+				"lifecycle_sources": [{"id":"lifecycle-registry","status":"observed","count":1}],
+				"lifecycles": [{"lifecycle_id":"ldlc","state":"dark_specified","maturity":"declared-not-modeled","air":{"lifecycle_id":"ok","state":"ok","maturity":"ok"}}],
+				"lifecycle_totals": {"sources":1,"rows":1,"missing_sources":0},
+				"lifecycle_authority": "support_non_authoritative"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	domains, dark, err := FetchDomains(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dark {
+		t.Fatal("domains should not be dark")
+	}
+	if domains.Authority != "CASE-DOMAIN" || len(domains.Rows) != 1 || domains.Rows[0].DomainID != "rdlc" || len(domains.Lifecycles) != 1 || domains.Lifecycles[0].LifecycleID != "ldlc" {
+		t.Fatalf("bad domain summary: %+v", domains)
+	}
+}
+
+func TestFetchDynamicsReadsThesis(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/dynamics" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"dark": false,
+			"map_id": "system-dynamics-map-v1",
+			"thesis": "source-neutral semantic graph backbone",
+			"layers": [{"id":"backbone","label":"Backbone"}],
+			"nodes": [{"id":"n1","label":"Node","layer":"backbone","status":"asserted","summary":"Node summary","context":"Node context","docs":"Doc Label","hardening_notes":"Validate it","aliases":"node alias","tags":"tag-a","source_refs":"docs:1 refs","source_ref_labels":["node.md#doc"],"air":{"id":"ok","label":"ok","layer":"ok","status":"ok","summary":"ok","context":"ok","docs":"ok","hardening_notes":"ok","aliases":"ok","tags":"ok","source_refs":"ok","source_ref_labels":"ok"}}],
+			"edges": [{"id":"e1","source":"n1","target":"n2","relation":"feeds","status":"observed","layer":"runtime","res":"4","confidence":"0.95","summary":"Edge summary","docs":"Edge Doc","source_refs":"docs:1 refs","source_ref_labels":["edge.md#doc"],"air":{"id":"ok","source":"ok","target":"ok","relation":"ok","status":"ok","layer":"ok","res":"ok","confidence":"ok","summary":"ok","docs":"ok","source_refs":"ok","source_ref_labels":"ok"}}],
+			"package": {
+				"authority_case":"CASE-DYN",
+				"totals":{"sources":1},
+				"workbench_contract": {
+					"status":"observed",
+					"defaults":{"inquiry_mode":"release-gates","audience_mode":"operator","explanation_path":"release-readiness"},
+					"inquiry_modes":[{"id":"release-gates","label":"What gates release?","lens":"operating-slice","prompt":"Follow gates","answer_shape":["ordered gate path"],"focus_node_ids":["n1"],"focus_edge_ids":["e1"],"air":{"id":"ok","label":"ok","lens":"ok","prompt":"ok","answer_shape":"ok","focus_node_ids":"ok","focus_edge_ids":"ok"}}],
+					"audience_modes":[{"id":"operator","label":"Operator","emphasis":"diagnostic next action","air":{"id":"ok","label":"ok","emphasis":"ok"}}],
+					"explanation_paths":[{"id":"release-readiness","label":"Release readiness path","summary":"Teach release readiness","must_include":["what this does not prove"],"scene_count":1,"scenes":[{"title":"State what this does not prove","lens":"evidence-risk","selection_group":"nodes","selection_id":"view-manifest","caveat":"Not live truth","air":{"title":"ok","lens":"ok","selection_group":"ok","selection_id":"ok","caveat":"ok"}}],"air":{"id":"ok","label":"ok","summary":"ok","must_include":"ok","scene_count":"ok","scenes":"ok"}}],
+					"follow_on_tranches":["bitemporal snapshot registry"]
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	g, dark, err := FetchDynamics(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dark {
+		t.Fatal("dynamics should not be dark")
+	}
+	if g.MapID != "system-dynamics-map-v1" || g.Thesis != "source-neutral semantic graph backbone" || len(g.Nodes) != 1 || len(g.Edges) != 1 {
+		t.Fatalf("bad dynamics graph: %+v", g)
+	}
+	if g.Nodes[0].Summary != "Node summary" || g.Nodes[0].Docs != "Doc Label" || g.Nodes[0].HardeningNotes != "Validate it" {
+		t.Fatalf("dynamics node explanation metadata should decode: %+v", g.Nodes[0])
+	}
+	if g.Nodes[0].SourceRefs != "docs:1 refs" || len(g.Nodes[0].SourceRefLabels) != 1 || g.Nodes[0].SourceRefLabels[0] != "node.md#doc" {
+		t.Fatalf("dynamics node source refs should decode: %+v", g.Nodes[0])
+	}
+	if g.Edges[0].ID != "e1" || g.Edges[0].Confidence != "0.95" || g.Edges[0].Summary != "Edge summary" || g.Edges[0].Docs != "Edge Doc" {
+		t.Fatalf("dynamics edge explanation metadata should decode: %+v", g.Edges[0])
+	}
+	if g.Edges[0].SourceRefs != "docs:1 refs" || len(g.Edges[0].SourceRefLabels) != 1 || g.Edges[0].SourceRefLabels[0] != "edge.md#doc" {
+		t.Fatalf("dynamics edge source refs should decode: %+v", g.Edges[0])
+	}
+	if g.Package.Workbench.Defaults.InquiryMode != "release-gates" || len(g.Package.Workbench.InquiryModes) != 1 || g.Package.Workbench.InquiryModes[0].Label != "What gates release?" {
+		t.Fatalf("dynamics workbench contract should decode: %+v", g.Package.Workbench)
+	}
+	if len(g.Package.Workbench.ExplanationPaths) != 1 || g.Package.Workbench.ExplanationPaths[0].Scenes[0].Title != "State what this does not prove" {
+		t.Fatalf("dynamics explanation scenes should decode: %+v", g.Package.Workbench.ExplanationPaths)
+	}
+}
+
+func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/epistemics" || r.URL.Query().Get("scope") != "dynamics" {
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"dark": false,
+			"error": "",
+			"epistemics": {
+				"schema_version": "epistemics.read.v1",
+				"scope": "dynamics",
+				"authority_case": "CASE-DYN",
+				"generated_at": "2026-06-25T12:00:00Z",
+				"package_hash": "sha256:test",
+				"sources": [{"id":"seed","status":"observed","count":2,"privacy":"metadata-only","raw_access":false,"air":{"id":"ok","status":"ok","count":"ok","privacy":"ok","raw_access":"ok"}}],
+				"rows": [{
+					"row_id":"map-edge:e1",
+					"family":"dynamics",
+					"subject_kind":"map-edge",
+					"subject_ref":"e1",
+					"subject":"e1",
+					"status":"observed",
+					"posture":"source-backed",
+					"authority_case":"CASE-DYN",
+					"evidence_count":1,
+					"evidence":"source_refs:1",
+					"source":"seed",
+					"source_refs":"seed:1 refs",
+					"source_ref_labels":["edge.md#doc"],
+					"freshness":"2026-06-25T12:00:00Z",
+					"privacy":"metadata-only",
+					"raw_access":false,
+					"map_kind":"edge",
+					"map_id":"e1",
+					"map_source":"n1",
+					"map_target":"n2",
+					"map_relation":"feeds",
+					"air":{"row_id":"ok","family":"ok","subject_kind":"ok","subject_ref":"ok","status":"ok","posture":"ok","authority_case":"ok","evidence_count":"ok","evidence":"ok","source":"ok","source_refs":"ok","source_ref_labels":"ok","freshness":"ok","privacy":"ok","raw_access":"ok","map_kind":"ok","map_id":"ok","map_source":"ok","map_target":"ok","map_relation":"ok"}
+				}],
+				"totals": {"sources":1,"rows":1,"map_edges":1}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	ep, dark, err := FetchEpistemics(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dark {
+		t.Fatal("epistemics should not be dark")
+	}
+	if ep.SchemaVersion != "epistemics.read.v1" || ep.Scope != "dynamics" || len(ep.Sources) != 1 || len(ep.Rows) != 1 {
+		t.Fatalf("bad epistemics summary: %+v", ep)
+	}
+	row := ep.Rows[0]
+	if row.RowID != "map-edge:e1" || row.MapSource != "n1" || row.MapTarget != "n2" || row.MapRelation != "feeds" || len(row.SourceRefLabels) != 1 {
+		t.Fatalf("epistemics row should decode map identity and refs: %+v", row)
+	}
+}
