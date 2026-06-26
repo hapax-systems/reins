@@ -9,6 +9,8 @@ transport to (`python -m shared.coord_event_log append`, cc-claim/cc-close,
 hapax-methodology-dispatch).
 """
 
+from fastapi.testclient import TestClient
+
 from reins_command import Envelope, Response, route_command
 
 
@@ -111,3 +113,69 @@ def test_route_command_routes_via_verifier_not_trust():
         already_emitted={},
     )
     assert seen.get("called") is True
+
+
+# ---- Inc 1: resume-intent preview wedge (HTTP endpoint + no-op transport) ----
+# Proves the full envelope -> preflight -> receipt loop end-to-end with ZERO mint
+# surface: the transport is a no-op that returns the stub's "would emit" preview as
+# a structured receipt. No spine write, no CoordWriter, no authority minted.
+
+
+def _resume_body(target="cx-crit", authority_packet="grant-xyz", idempotency_key="k1", blocked=False):
+    return {
+        "target": target,
+        "authority_packet": authority_packet,
+        "preflight_receipt": {"blocked": blocked},
+        "idempotency_key": idempotency_key,
+    }
+
+
+def test_resume_preview_returns_fold_delta_with_no_real_write():
+    from reins_command import resume_preview_app
+
+    resp = TestClient(resume_preview_app()).post("/command/resume", json=_resume_body())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "session.resume" in body["fold_delta"]
+    assert body["event_seq"] is None  # no real spine write
+    assert body["spooled"] is False
+
+
+def test_resume_preview_rejects_missing_authority():
+    from reins_command import resume_preview_app
+
+    resp = TestClient(resume_preview_app()).post(
+        "/command/resume", json=_resume_body(authority_packet="")
+    )
+    assert resp.status_code == 403
+    assert resp.json()["status"] == "authority-rejected"
+
+
+def test_resume_preview_fails_blocked_preflight():
+    from reins_command import resume_preview_app
+
+    resp = TestClient(resume_preview_app()).post(
+        "/command/resume", json=_resume_body(blocked=True)
+    )
+    assert resp.status_code == 409
+    assert resp.json()["status"] == "preflight-failed"
+
+
+def test_resume_preview_idempotent_replay_does_not_re_emit():
+    from reins_command import resume_preview_app
+
+    client = TestClient(resume_preview_app())
+    body = _resume_body(idempotency_key="dup-x")
+    first = client.post("/command/resume", json=body)
+    second = client.post("/command/resume", json=body)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["duplicate"] is False
+    assert second.json()["duplicate"] is True
+
+
+def test_command_endpoint_unwired_verbs_are_not_implemented():
+    from reins_command import resume_preview_app
+
+    resp = TestClient(resume_preview_app()).post("/command/dispatch", json=_resume_body())
+    assert resp.status_code == 501

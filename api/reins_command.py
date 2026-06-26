@@ -19,6 +19,10 @@ composes + verifies + forwards, and physically cannot append.
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
 
 @dataclass
 class Envelope:
@@ -45,6 +49,8 @@ class Response:
     http: int
     receipt_id: str | None = None
     event_seq: int | None = None
+    fold_delta: str | None = None
+    spooled: bool = False
     duplicate: bool = False
     reason: str | None = None
 
@@ -81,3 +87,103 @@ def route_command(
     if receipt is None:
         return Response(status="transport-failed", http=502)
     return receipt
+
+
+class CommandRequest(BaseModel):
+    """The HTTP body for POST /command/{verb}. ``authority_packet`` is verify-only
+    data (an EscapeGrant, an AuthorityCase triple, or a verb-bound capability) —
+    minted upstream, never here."""
+
+    target: str
+    authority_packet: Any
+    preflight_receipt: dict
+    idempotency_key: str
+
+
+def _resp_to_dict(resp: Response) -> dict:
+    return {
+        "status": resp.status,
+        "http": resp.http,
+        "receipt_id": resp.receipt_id,
+        "event_seq": resp.event_seq,
+        "fold_delta": resp.fold_delta,
+        "spooled": resp.spooled,
+        "duplicate": resp.duplicate,
+        "reason": resp.reason,
+    }
+
+
+def build_command_app(
+    *,
+    verb: str,
+    verify_authority: Callable[[Any, str], bool],
+    preflight: Callable[[Envelope], bool],
+    transport: Callable[[Envelope], Response | None],
+) -> FastAPI:
+    """A thin HTTP wrapper around route_command for one wired verb. All effectful
+    surfaces are injected (verify/preflight/transport) — this adds NO authority of
+    its own. Idempotency for the preview wedge is an in-memory ``emitted`` map; the
+    substrate's UNIQUE on event_id replaces it for real writes (Inc 2+)."""
+
+    app = FastAPI()
+    emitted: dict[str, str] = {}
+
+    @app.post("/command/{v}")
+    def command(v: str, req: CommandRequest) -> JSONResponse:
+        if v != verb:
+            return JSONResponse(
+                {"status": "not-implemented", "http": 501, "reason": f"{v} not wired"},
+                status_code=501,
+            )
+        envelope = Envelope(
+            verb=v,
+            target=req.target,
+            authority_packet=req.authority_packet,
+            preflight_receipt=req.preflight_receipt,
+            idempotency_key=req.idempotency_key,
+        )
+        resp = route_command(
+            envelope,
+            verify_authority=verify_authority,
+            preflight=preflight,
+            transport=transport,
+            already_emitted=emitted,
+        )
+        if resp.status == "ok" and resp.receipt_id:
+            emitted[envelope.idempotency_key] = resp.receipt_id
+        return JSONResponse(_resp_to_dict(resp), status_code=resp.http)
+
+    return app
+
+
+def resume_preview_app() -> FastAPI:
+    """Inc 1 wedge: the resume-intent preview. A no-op transport returns the stub's
+    'would emit session.resume(<lane>)' preview as a structured receipt — proving the
+    full contract end-to-end with ZERO mint surface (no spine write, no authority
+    minted). Inc 2 wires the real transport for the first real write (dispatch)."""
+
+    def verify(packet: Any, target: str) -> bool:
+        # Preview wedge: the packet must be present + the lane identity resolvable.
+        # Inc 2 replaces this with verify_escape_grant (real, route-not-mint).
+        return bool(packet) and bool(target)
+
+    def preflight(env: Envelope) -> bool:
+        # The cockpit dry-ran the transition; a blocked receipt forbids the verb.
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: Envelope) -> Response:
+        return Response(
+            status="ok",
+            http=200,
+            receipt_id=f"preview-{env.idempotency_key}",
+            event_seq=None,  # no real spine write
+            fold_delta=(
+                f"would emit session.resume({env.target}) via the governed COMMAND "
+                "surface — preview (no-op transport; Inc 2 wires the real write)"
+            ),
+            spooled=False,
+        )
+
+    return build_command_app(
+        verb="resume", verify_authority=verify, preflight=preflight, transport=transport
+    )
