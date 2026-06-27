@@ -489,6 +489,36 @@ func main() {
 				fmt.Printf("\n%d facets · binding from %s%s\n", len(samples), src, airNote)
 				return
 			}
+			if a == "trainyard" {
+				// --probe trainyard: render the octolinear SDLC metro-map. Uses live /read/tasks when
+				// reachable, else a fixture exercising every honesty rule: a clear lane, an amber gate,
+				// a crit task pulled to a siding, a DARK (✖) gate, and the WITNESS terminus. Color is a
+				// redundant amplifier — the map reads in grayscale.
+				ts, dark, _ := api.FetchTasks(cfg.APIURL)
+				src := "live /read/tasks"
+				if dark || len(ts) == 0 {
+					src = "fixture (API dark)"
+					ts = []grammar.Task{
+						{TaskID: "alpha", Stage: "S5_IMPL", Owner: "claude", Criticality: "ok", Freshness: 0.92, RelCount: 2},
+						{TaskID: "beta", Stage: "S8_SHIP", Owner: "claude", Criticality: "warn", Freshness: 0.4, RelCount: 1},
+						{TaskID: "gamma", Stage: "S6_VERIFY", Owner: "codex", Criticality: "crit", Freshness: 0.5, RelCount: 2},
+						{TaskID: "delta", Stage: "S3_PLAN", Owner: "codex", Criticality: "ok", Freshness: 0.0, RelCount: 1},
+						{TaskID: "epsilon", Stage: "S7_RELEASE", Owner: "claude", Criticality: "ok", Freshness: 0.1, RelCount: 1},
+						{TaskID: "omega", Stage: "S2_SCOPE", Owner: "operator", Criticality: "ok", Freshness: 0.7, RelCount: 1},
+					}
+				}
+				w := 100
+				for _, b := range os.Args[2:] {
+					if pw, _, ok := parseProbeSize(b); ok {
+						w = pw
+					}
+				}
+				fmt.Println("TRAINYARD — octolinear SDLC metro-map (WITNESS terminus; state in shape+position)")
+				fmt.Println()
+				fmt.Println(grammar.RenderTrainyard(grammar.Trainyard{Tasks: ts}, w))
+				fmt.Printf("\n%d tasks · binding from %s\n", len(ts), src)
+				return
+			}
 		}
 		evs, ed, evErr := api.FetchEvents(cfg.APIURL)
 		ts, td, taskErr := api.FetchTasks(cfg.APIURL)
