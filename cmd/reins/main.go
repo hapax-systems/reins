@@ -557,7 +557,9 @@ func main() {
 		fmt.Println(m.View())
 		return
 	}
-	r := root{m: model.New("REINS"), url: cfg.APIURL}
+	launch := model.New("REINS")
+	launch.Page = model.PageCoordinator // land on the Yard Coordinator (the new framework gestalt), not the legacy :events
+	r := root{m: launch, url: cfg.APIURL}
 	if _, err := tea.NewProgram(r, tea.WithAltScreen()).Run(); err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
