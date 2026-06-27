@@ -528,6 +528,9 @@ func (m Model) blockedBreakdown(indices []int) (hold, risk int) {
 			continue
 		}
 		t := m.Tasks[idx]
+		if m.AIR && t.AIR["predicted_stage"] != "ok" {
+			continue // on air a denied predicted_stage must not be classified — the hold·risk split discloses it
+		}
 		if strings.EqualFold(t.PredictedStage, "hold") {
 			hold++
 			continue
@@ -908,10 +911,15 @@ func (m Model) coordinatorThroughputLine(w int) string {
 	held, hot := 0, 0
 	fresh := make([]float64, 0, len(m.Tasks))
 	for _, t := range m.Tasks {
-		if t.Criticality == "crit" || t.Criticality == "major" || t.PredictedStage == "hold" {
+		// On air, a denied criticality/predicted_stage must not be classified into the held tally,
+		// and a denied freshness must not enter the sparkline — the aggregate discloses the field.
+		classOK := !m.AIR || (t.AIR["criticality"] == "ok" && t.AIR["predicted_stage"] == "ok")
+		if classOK && (t.Criticality == "crit" || t.Criticality == "major" || t.PredictedStage == "hold") {
 			held++
 		}
-		fresh = append(fresh, t.Freshness)
+		if !m.AIR || t.AIR["freshness"] == "ok" {
+			fresh = append(fresh, t.Freshness)
+		}
 	}
 	for _, s := range m.Sessions {
 		if s.Attention >= 0.5 {
