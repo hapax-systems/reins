@@ -9701,11 +9701,15 @@ func (m Model) eventContextPane(w int) string {
 	}
 	sameSubject, sameActor, failures, successes := 0, 0, 0, 0
 	kinds := map[string]int{}
+	subjAnchorOK := !m.AIR || ev.AIR["subject"] == "ok"
+	actorAnchorOK := !m.AIR || ev.AIR["actor"] == "ok"
 	for _, x := range m.Events {
-		if ev.Subject != "" && x.Subject == ev.Subject {
+		// neighborhood-by-subject/actor must not COUNT denied items (the cardinality discloses the
+		// redacted field) — gate on BOTH the anchor's and the compared event's per-field AIR.
+		if subjAnchorOK && (!m.AIR || x.AIR["subject"] == "ok") && ev.Subject != "" && x.Subject == ev.Subject {
 			sameSubject++
 		}
-		if ev.Actor != "" && x.Actor == ev.Actor {
+		if actorAnchorOK && (!m.AIR || x.AIR["actor"] == "ok") && ev.Actor != "" && x.Actor == ev.Actor {
 			sameActor++
 		}
 		if (!m.AIR || x.AIR["kind"] == "ok") && strings.Contains(strings.ToLower(x.Kind), "fail") {
@@ -9716,9 +9720,13 @@ func (m Model) eventContextPane(w int) string {
 		}
 		kinds[grammar.Redact(x.AIR, "kind", shortKindForPanel(x.Kind), m.AIR)]++ // per-event AIR: a denied kind aggregates as ▒▒▒, never leaks
 	}
+	// the state is a function of (kind, score); assert it only when BOTH inputs air — else "routine"
+	// would leak "kind!=fail && score<0.45" through the back door. Both denied → honest unknown.
 	stateTok := "grn"
 	state := "routine"
-	if strings.Contains(strings.ToLower(ev.Kind), "fail") || ev.Score >= 0.70 {
+	if m.AIR && (ev.AIR["kind"] != "ok" || ev.AIR["score"] != "ok") {
+		stateTok, state = "mut", "▒▒▒"
+	} else if strings.Contains(strings.ToLower(ev.Kind), "fail") || ev.Score >= 0.70 {
 		stateTok, state = "red", "breakdown"
 	} else if ev.Score >= 0.45 {
 		stateTok, state = "yel", "watch"
@@ -9735,7 +9743,7 @@ func (m Model) eventContextPane(w int) string {
 	line("kind", kind, "blu")
 	line("actor", actor, grammar.LaneToken(ev.Actor))
 	line("summary", summary, "2nd")
-	line("score", fmt.Sprintf("%.2f", ev.Score), "pri")
+	line("score", grammar.Redact(ev.AIR, "score", fmt.Sprintf("%.2f", ev.Score), m.AIR), "pri")
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "neighborhood") + "\n")
 	line("same subj", fmt.Sprintf("%d events", sameSubject), "pri")
@@ -11865,8 +11873,12 @@ func (m Model) genericSlackRows(w int) []string {
 }
 
 func (m Model) eventSlackRows(w int) []string {
-	failures, successes := 0, 0
+	failures, successes, shown := 0, 0, 0
 	for _, ev := range m.Events {
+		if m.AIR && ev.AIR["kind"] != "ok" {
+			continue // a denied kind must not be classified into the mix OR its "other" denominator
+		}
+		shown++
 		kind := strings.ToLower(ev.Kind)
 		if strings.Contains(kind, "fail") {
 			failures++
@@ -11876,7 +11888,7 @@ func (m Model) eventSlackRows(w int) []string {
 		}
 	}
 	var b strings.Builder
-	writeWrappedKV(&b, "event mix", fmt.Sprintf("fail:%d · succeed:%d · other:%d", failures, successes, maxVisible(0, len(m.Events)-failures-successes)), "2nd", w)
+	writeWrappedKV(&b, "event mix", fmt.Sprintf("fail:%d · succeed:%d · other:%d", failures, successes, maxVisible(0, shown-failures-successes)), "2nd", w)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }
 
@@ -11884,8 +11896,12 @@ func (m Model) taskSlackRows(w int) []string {
 	crit := map[string]int{}
 	hold := 0
 	for _, t := range m.Tasks {
-		crit[strings.TrimSpace(t.Criticality)]++
-		if strings.Contains(strings.ToLower(t.PredictedStage), "hold") || strings.Contains(strings.ToLower(t.Stage), "release") {
+		if !m.AIR || t.AIR["criticality"] == "ok" {
+			crit[strings.TrimSpace(t.Criticality)]++ // a denied criticality must not be tallied into the mix
+		}
+		predHold := strings.Contains(strings.ToLower(t.PredictedStage), "hold") && (!m.AIR || t.AIR["predicted_stage"] == "ok")
+		stageRelease := strings.Contains(strings.ToLower(t.Stage), "release") && (!m.AIR || t.AIR["stage"] == "ok")
+		if predHold || stageRelease {
 			hold++
 		}
 	}
