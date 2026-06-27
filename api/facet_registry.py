@@ -198,3 +198,31 @@ def air_default(resolution: str) -> str:
 def legible_key(facet: str) -> str:
     """The cold-read decoder key for a facet (A6 — ships in-band with every view)."""
     return FACETS.get(facet, {}).get("gloss", facet)
+
+
+def air_allowlist() -> list[str]:
+    """The registry-derived flat on-air allowlist: every attr name that airs (a facet field or an
+    edge ref) MINUS the SENSITIVE deny-set — bodies/envelopes are excluded by construction (they are
+    not in FACET_BY_NAME/EDGES). This REPLACES the hand-maintained _DEFAULT_ALLOW: it airs the
+    structural skeleton (incl. the previously-omitted criticality/freshness/magnitude/gate/… repair)
+    and denies free-text bodies + PII (path/session/subject/label/title/path-like refs). The
+    (domain,attr) homonym is an ENCODER/channel concern, not an AIR one (status airs in both
+    readings), so a flat allowlist is on-air-correct; safety is pinned by test_facet_registry."""
+    names = (set(FACET_BY_NAME) | EDGES) - SENSITIVE
+    return sorted(names)
+
+
+def facets_payload() -> dict:
+    """The SSOT serialized for the in-band /read/facets endpoint (A6: the decoder travels with the
+    artifact). The Go encoder/legend consumes this to map (domain,attr)->facet->channel + air."""
+    return {
+        "facets": FACETS,
+        "citation_order": CITATION_ORDER,
+        "facet_by_name": FACET_BY_NAME,
+        "overrides": [{"domain": d, "attr": a, "facet": f} for (d, a), f in OVERRIDES.items()],
+        "edges": sorted(EDGES),
+        "bodies": sorted(BODIES),
+        "envelopes": sorted(ENVELOPES),
+        "sensitive": sorted(SENSITIVE),
+        "air_allowlist": air_allowlist(),
+    }

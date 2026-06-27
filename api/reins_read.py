@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from fastapi import FastAPI
 
+import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
+
 _ROUTE_BINDING_TAIL_BYTES = 4 * 1024 * 1024
 
 _KIND_SEVERITY = {  # kind -> base severity in [0,1]; escalations rank above routine
@@ -3909,6 +3911,13 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "domains": {"sources": [], "rows": [], "relations": [], "totals": {}, "lifecycle_sources": [], "lifecycles": [], "lifecycle_totals": {}}}
 
+    @app.get("/read/facets")
+    def read_facets() -> dict:
+        # the facet-cut SSOT served in-band (A6: the decoder travels with the artifact) — the 9
+        # facets + their role/channel/gloss/air, the (domain,attr) classification, and the air policy.
+        # The Go cell-grammar encoder + legend consume this; one source, no Go↔Python drift.
+        return facet_registry.facets_payload()
+
     return app
 
 
@@ -4025,7 +4034,11 @@ def instance_config() -> dict:
     elif toml_cfg.get("air_allowlist"):
         allowlist = list(toml_cfg["air_allowlist"])
     else:
-        allowlist = _DEFAULT_ALLOW.split(",")
+        # registry-derived default (operator-approved 2026-06-26): airs the structural skeleton
+        # (incl. the criticality/freshness/magnitude/gate/… repair the flat list omitted), denies
+        # free-text bodies + PII. Proven safe by test_facet_registry. _DEFAULT_ALLOW kept as the
+        # documented prior; env/toml override above still wins. Takes effect on API restart.
+        allowlist = facet_registry.air_allowlist()
 
     port = os.environ.get("REINS_PORT")
     if not port:

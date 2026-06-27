@@ -218,6 +218,25 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
     assert not unexpected, f"registry would newly-air UNVETTED fields vs _DEFAULT_ALLOW: {sorted(unexpected)}"
 
 
+def test_air_allowlist_airs_skeleton_denies_pii_and_bodies():
+    al = set(fr.air_allowlist())
+    # the skeleton repair airs:
+    for ok in ("criticality", "freshness", "prior_stage", "predicted_stage", "rel_count",
+               "magnitude", "gate", "meta", "stage", "owner", "platform"):
+        assert ok in al, f"{ok} should air"
+    # PII + free-text bodies + path-like refs do NOT air:
+    for deny in ("path", "session", "subject", "label", "title", "parent_spec", "evidence_ref",
+                 "route_evidence_ref", "summary", "detail", "missing", "action", "blockers"):
+        assert deny not in al, f"{deny} must NOT air"
+
+
+def test_facets_payload_self_describes():
+    p = fr.facets_payload()
+    assert set(p["facets"]) == set(fr.FACETS) and len(p["facets"]) == 9
+    assert p["air_allowlist"] == fr.air_allowlist()
+    assert {"domain", "attr", "facet"} <= set(p["overrides"][0])
+
+
 def test_registry_is_more_conservative_on_free_text():
     """The registry correctly NEWLY-DENIES free-text the current flat allowlist over-airs
     (detail/missing/action/next_evidence/blockers) — a safety improvement, documented here."""

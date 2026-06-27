@@ -1332,7 +1332,10 @@ def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     assert cfg["hkp_report_root"] == ""
     assert cfg["hkp_bundles"] == []
     assert "kind" in cfg["allowlist"] and "subject" not in cfg["allowlist"]  # conservative on-air default
-    assert cfg["allowlist"] == EXPECTED_DEFAULT_ALLOW
+    # the default AIR allowlist now derives from the facet-cut SSOT (operator-approved 2026-06-26),
+    # which airs the structural skeleton + denies free-text/PII (proven safe by test_facet_registry).
+    import facet_registry
+    assert cfg["allowlist"] == facet_registry.air_allowlist()
 
 
 def test_instance_config_env_overrides(monkeypatch):
