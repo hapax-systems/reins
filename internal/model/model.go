@@ -1646,8 +1646,7 @@ func (m Model) Exec(line string) Model {
 		m = m.switchPage(PageTraces)
 		m.Status = ":traces"
 	case "dispatch":
-		m = m.loadDispatch()
-		m = m.switchPage(PageDispatch)
+		m = m.switchPage(PageDispatch) // switchPage loads the ledger for every PageDispatch entry
 		m.Status = ":dispatch"
 	case "yard":
 		m = m.switchPage(PageYard)
@@ -1812,6 +1811,9 @@ func (m Model) switchPage(page int) Model {
 	}
 	m.WindowSeen[m.Page] = m.windowSig(m.Page) // snapshot the page being left (activity ladder)
 	m.Page = page
+	if page == PageDispatch {
+		m = m.loadDispatch() // load the ledger on EVERY entry path (cycle, D-key, :dispatch) — not stale
+	}
 	m.Mode = ModeNormal
 	m.DoorOpen = false
 	m.SessionDoorOpen = false

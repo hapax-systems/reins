@@ -145,7 +145,7 @@ func RenderMeasurementSummary(s MeasurementSummary) string {
 // reader knows the surface is honest about what it cannot yet measure.
 func RenderDispatchHeader() string {
 	return C("mut", "⇉ capability · route · platform/mode/profile · task · slice · admission · launched · latency · "+
-		C("yel", "cost(0.0 today)")+" · "+C("yel", "quality(asserted)")+" · outcome")
+		C("yel", "cost(UNMEASURED until priced)")+" · "+C("yel", "quality(asserted)")+" · outcome")
 }
 
 // RenderDispatchBlindSpots names — on the surface itself — the dimensions the dispatch ledger cannot
@@ -153,7 +153,7 @@ func RenderDispatchHeader() string {
 // not hidden: a reader sees exactly which signals are real and which are still asserted/absent.
 func RenderDispatchBlindSpots() string {
 	return C("yel", "⚠ blind-spots: ") + C("mut",
-		"cost=0.0 (unwired from LiteLLM _response_cost) · quality=asserted (EDT loop open) · "+
+		"cost=UNMEASURED (unwired from LiteLLM _response_cost) · quality=asserted (EDT loop open) · "+
 			"A/B shadow-pairs absent · workstream-adherence untracked")
 }
 
