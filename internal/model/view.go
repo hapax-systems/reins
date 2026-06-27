@@ -9645,13 +9645,14 @@ func (m Model) sessionEventContextPane(w int) string {
 	failures, successes := 0, 0
 	kinds := map[string]int{}
 	for _, ev := range related {
-		if strings.Contains(strings.ToLower(ev.Kind), "fail") {
+		classOK := !m.AIR || ev.AIR["kind"] == "ok" // on air a denied kind must not be classified — the fail/succeed tally + kinds breakdown disclose it
+		if classOK && strings.Contains(strings.ToLower(ev.Kind), "fail") {
 			failures++
 		}
-		if strings.Contains(strings.ToLower(ev.Kind), "succeed") {
+		if classOK && strings.Contains(strings.ToLower(ev.Kind), "succeed") {
 			successes++
 		}
-		kinds[shortKindForPanel(ev.Kind)]++
+		kinds[grammar.Redact(ev.AIR, "kind", shortKindForPanel(ev.Kind), m.AIR)]++ // per-event AIR: a denied kind aggregates as ▒▒▒, never leaks
 	}
 	var latest grammar.Event
 	if len(related) > 0 {
@@ -9898,16 +9899,21 @@ func (m Model) sessionConstraintPane(w int) string {
 	}
 	claim, stale, off, stalled := 0, 0, 0, 0
 	for _, x := range m.Sessions {
-		if x.Readiness == "claim" {
+		// On air a denied readiness/state/stalled must NOT be classified into the fleet tally — the
+		// per-class count discloses the field (same policy as blockedBreakdown / coordinatorThroughputLine).
+		rdyOK := !m.AIR || x.AIR["readiness"] == "ok"
+		stateOK := !m.AIR || x.AIR["state"] == "ok"
+		stalledOK := !m.AIR || x.AIR["stalled"] == "ok"
+		if rdyOK && x.Readiness == "claim" {
 			claim++
 		}
-		if x.Readiness == "stale" {
+		if rdyOK && x.Readiness == "stale" {
 			stale++
 		}
-		if x.Readiness == "off" || x.Readiness == "offline" || x.State == "offline" {
+		if (rdyOK && (x.Readiness == "off" || x.Readiness == "offline")) || (stateOK && x.State == "offline") {
 			off++
 		}
-		if x.Stalled || x.Readiness == "stall" {
+		if (stalledOK && x.Stalled) || (rdyOK && x.Readiness == "stall") {
 			stalled++
 		}
 	}
@@ -10139,9 +10145,11 @@ func (m Model) sessionRouteBindingSummary() string {
 		if label == "" {
 			label = "unbound"
 		}
-		counts[label]++
-		if strings.TrimSpace(s.RouteID) != "" {
-			routed++
+		if !m.AIR || s.AIR["route_binding_state"] == "ok" {
+			counts[label]++ // a denied binding state must not be tallied on air (class membership leak)
+		}
+		if strings.TrimSpace(s.RouteID) != "" && (!m.AIR || s.AIR["route_id"] == "ok") {
+			routed++ // route_id presence is a disclosure — gate it on air
 		}
 	}
 	if len(counts) == 0 {
@@ -10197,27 +10205,31 @@ func countWarnToken(n int) string {
 
 func sessionConstraints(s grammar.Session, air bool) []string {
 	var out []string
-	if strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
+	// A constraint DERIVED from a denied field must not air — its mere PRESENCE would disclose the
+	// redacted readiness/state/blocker/stalled value through the back door (derived-channel leak).
+	denied := func(field string) bool { return air && s.AIR[field] != "ok" }
+	if strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" && !denied("blocker") {
 		out = append(out, grammar.C("red", "blocked")+
 			grammar.C("mut", " · "+sessionFieldValueForAir(s, "blocker", air)))
 	}
-	if s.Readiness == "claim" {
+	if s.Readiness == "claim" && !denied("readiness") {
 		out = append(out, grammar.C("grn", "claim-ready")+
 			grammar.C("mut", " · needs governed resume/claim route"))
 	}
-	if s.Readiness == "stale" || s.RelayAgeS > 3600 {
+	if (s.Readiness == "stale" && !denied("readiness")) || (s.RelayAgeS > 3600 && !denied("relay_age_s")) {
 		out = append(out, grammar.C("yel", "stale relay")+
 			grammar.C("mut", " · verify before resume"))
 	}
-	if s.State == "offline" || s.Readiness == "off" || s.Readiness == "offline" {
+	if (s.State == "offline" && !denied("state")) ||
+		((s.Readiness == "off" || s.Readiness == "offline") && !denied("readiness")) {
 		out = append(out, grammar.C("red", "offline")+
 			grammar.C("mut", " · no live session surface"))
 	}
-	if s.Stalled || s.Readiness == "stall" {
+	if (s.Stalled && !denied("stalled")) || (s.Readiness == "stall" && !denied("readiness")) {
 		out = append(out, grammar.C("red", "stalled")+
 			grammar.C("mut", " · needs operator attention"))
 	}
-	if strings.TrimSpace(s.ClaimedTask) == "" {
+	if strings.TrimSpace(s.ClaimedTask) == "" && !denied("claimed_task") {
 		out = append(out, grammar.C("mut", "no claimed task in current read model"))
 	}
 	if len(out) == 0 {
@@ -11762,12 +11774,16 @@ func (m Model) taskSlackRows(w int) []string {
 func (m Model) sessionSlackRows(w int) []string {
 	claim, stale, off := 0, 0, 0
 	for _, s := range m.Sessions {
+		// On air a denied readiness/state must not be classified into the fleet tally — the count
+		// discloses the field's class membership (same leak class as the throughput held tally).
+		readyOK := !m.AIR || s.AIR["readiness"] == "ok"
+		stateOK := !m.AIR || s.AIR["state"] == "ok"
 		switch {
-		case s.Readiness == "claim":
+		case s.Readiness == "claim" && readyOK:
 			claim++
-		case s.Readiness == "stale":
+		case s.Readiness == "stale" && readyOK:
 			stale++
-		case s.Readiness == "off" || s.Readiness == "offline" || s.State == "offline":
+		case (readyOK && (s.Readiness == "off" || s.Readiness == "offline")) || (stateOK && s.State == "offline"):
 			off++
 		}
 	}
