@@ -3718,6 +3718,13 @@ func (m Model) renderYardCockpit(w int) string {
 	b.WriteString(m.renderYardRailTopology(w) + "\n")
 	b.WriteString(rule + "\n")
 
+	// The rail topology, DRAWN: the octolinear SDLC metro-map. The textual RAIL TOPOLOGY above is
+	// its legend; this is the map itself — state in shape+position (gates ►▷■✖◌, train physics,
+	// blocked→siding, WITNESS terminus), color a redundant amplifier.
+	b.WriteString(" " + grammar.C("brt", "TRAINYARD MAP") + grammar.C("mut", " — the rail topology drawn (octolinear; reads in grayscale)") + "\n")
+	b.WriteString(grammar.RenderTrainyard(grammar.Trainyard{Tasks: m.Tasks}, w) + "\n")
+	b.WriteString(rule + "\n")
+
 	b.WriteString(" " + grammar.C("brt", "LADDER") + grammar.C("mut", " — lifecycle shape, not a task table") + "\n")
 	stageCounts, hiddenStages, unstaged := m.yardStageCounts()
 	parts := make([]string, 0, len(stageCounts))
