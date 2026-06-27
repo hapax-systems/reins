@@ -645,7 +645,11 @@ func (m Model) lifecycleRowCount() int {
 func (m Model) composesViaAlgebra() bool {
 	switch m.Page {
 	case PageEvents:
-		return !m.EventsDark
+		// Unconditionally algebra-owned — even when dark. composePage() returns nil for dark events so
+		// they render the dark-hint body (bodyForPage), but the legacy session-frozen split must NEVER
+		// re-engage (which would also re-bind templates/yank to the session source via
+		// commandSelectionPage). The dark fall-through is handled in bodyFor, gated on this predicate.
+		return true
 	}
 	return false
 }
@@ -2545,6 +2549,13 @@ func (m Model) updateGlobal(v tea.KeyMsg) (Model, tea.Cmd, bool) {
 		nm, cmd := m.flash(state)
 		return nm, cmd, true
 	case "|":
+		if m.composesViaAlgebra() {
+			// an algebra-owned page is ALREADY split (emergent, only-split); the legacy [|] toggle is
+			// meaningless here — don't lie about "queued: need N columns".
+			m.Status = "this page is page-composed (always split); the legacy split toggle does not apply"
+			nm, cmd := m.flash(m.Status)
+			return nm, cmd, true
+		}
 		m.SplitContext = !m.SplitContext
 		state := "split context off"
 		if m.SplitContext {

@@ -481,7 +481,9 @@ func (m Model) viewVital(w int) string {
 	splitChip := ""
 	if m.splitContextActive() {
 		splitChip = grammar.C("mut", "  │  ") + grammar.C("yel", "split:ctx")
-	} else if m.SplitContext {
+	} else if m.SplitContext && !m.composesViaAlgebra() {
+		// only show the queued-split chip on non-migrated pages; an algebra-owned page is ALREADY split,
+		// so "split:wide" (legacy split queued) would be a lie.
 		splitChip = grammar.C("mut", "  │  ") + grammar.C("mut", "split:wide")
 	}
 	r1 := " " + mode + grammar.C("mut", "  │  tasks ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Tasks))) +
@@ -546,7 +548,10 @@ func (m Model) bodyFor(w, h int) string {
 	if spec := m.composePage(w, h); spec != nil {
 		return layout.Render(spec, w, h)
 	}
-	if m.SplitContext && w >= splitContextMinWidth {
+	// An algebra-owned page that returns a nil spec (e.g. dark events) must NOT fall back into the
+	// legacy session-frozen split — it renders its own dark-hint/single-pane body. Only genuinely
+	// non-migrated pages take the legacy split path.
+	if !m.composesViaAlgebra() && m.SplitContext && w >= splitContextMinWidth {
 		return m.splitContextBody(w, h)
 	}
 	return m.bodyForPage(w, h)
