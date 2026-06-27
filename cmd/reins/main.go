@@ -412,6 +412,64 @@ func main() {
 				return
 			}
 		}
+		// --probe encode: render the cell-grammar channel-typing table (framework §1 Layer-2). Each
+		// facet binds to ONE cell channel (Bertin-for-monospace), shown with a sample-encoded cell.
+		// Uses the live /read/facets registry as the SSOT binding when reachable, else the built-in
+		// default table. [--air] shows the bimodal on-air picture: skeleton facets air; the PII-bearing
+		// facets (identity = label/title/subject, place = path/session) redact. Proves color is a
+		// redundant amplifier — the table still reads with hue stripped (grayscale / freeze-frame).
+		for _, a := range os.Args[2:] {
+			if a == "encode" {
+				air := false
+				for _, b := range os.Args[2:] {
+					if b == "--air" {
+						air = true
+					}
+				}
+				reg, dark, _ := api.FetchFacets(cfg.APIURL)
+				src := "registry SSOT (/read/facets)"
+				if dark || len(reg.Facets) == 0 {
+					src = "built-in default table (API dark)"
+				}
+				order := reg.CitationOrder
+				if len(order) == 0 { // offline citation order (decreasing concreteness)
+					order = []string{"identity", "ownership", "place", "action", "posture", "qualifier", "measure", "time", "provenance"}
+				}
+				samples := map[string]grammar.CellValue{
+					"identity":   {Text: "task-4284", Width: 12},
+					"ownership":  {Text: "alpha", Width: 8},
+					"place":      {Text: "podium", Width: 8},
+					"action":     {Text: "implement", Width: 10},
+					"posture":    {Text: "crit", Width: 6},
+					"qualifier":  {Text: "opus·fast", Width: 10},
+					"measure":    {Magnitude: 0.72, Text: "0.72", Width: 5},
+					"time":       {Magnitude: 0.85, Text: "2m", Width: 4},
+					"provenance": {Text: "inferred", Width: 9},
+				}
+				denyOnAir := map[string]bool{"identity": true, "place": true} // PII-bearing facets
+				fmt.Println("CELL GRAMMAR ENCODER — Bertin-for-monospace (framework §1 Layer-2)")
+				fmt.Println("each facet binds to ONE cell channel; color is a redundant amplifier (reads in grayscale)")
+				fmt.Println()
+				fmt.Printf("  %-11s %-16s %s\n", "FACET", "CHANNEL", "SAMPLE CELL")
+				for _, f := range order {
+					v, ok := samples[f]
+					if !ok {
+						continue
+					}
+					if air && denyOnAir[f] {
+						v.Denied = true
+					}
+					cell := grammar.EncodeCell(reg, f, v, air)
+					fmt.Printf("  %-11s %-16s %s\n", f, cell.Channel.String(), cell.Rendered)
+				}
+				airNote := ""
+				if air {
+					airNote = " · ON AIR: identity/place redact (PII); skeleton facets air"
+				}
+				fmt.Printf("\n%d facets · binding from %s%s\n", len(samples), src, airNote)
+				return
+			}
+		}
 		evs, ed, evErr := api.FetchEvents(cfg.APIURL)
 		ts, td, taskErr := api.FetchTasks(cfg.APIURL)
 		dg, dd, dynErr := api.FetchDynamics(cfg.APIURL)
