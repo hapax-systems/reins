@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/api"
 	"github.com/hapax-systems/reins/internal/config"
+	"github.com/hapax-systems/reins/internal/dispatch"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/graph"
 	"github.com/hapax-systems/reins/internal/imgpreview"
@@ -429,15 +430,21 @@ func main() {
 						air = true
 					}
 				}
-				cost := 0.0123
-				pass := "pass"
-				done := "succeeded"
-				records := []grammar.DispatchRecord{
-					{TS: "2026-06-27T20:50:01Z", Capability: "glm-via-cc", RouteID: "claude.full", Platform: "claude", Mode: "fast", Profile: "full", CCTask: "cc-task-capdispatch-surface-20260627", SliceKind: "impl", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 1180, SessionRole: "dev2"},
-					{TS: "2026-06-27T20:42:14Z", Capability: "codex.full", RouteID: "codex.spark.full", Platform: "codex", Mode: "spark", Profile: "full", CCTask: "cc-task-edt-scorer-20260627", SliceKind: "review", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 940, CostUSD: &cost, QualitySignal: &pass, Outcome: &done, SessionRole: "dev3"},
-					{TS: "2026-06-27T20:31:09Z", Capability: "fugu", RouteID: "—", Platform: "—", Mode: "—", Profile: "—", CCTask: "cc-task-routedef", SliceKind: "impl", AdmissionAction: "fail_closed", Launched: false, DispatchLatencyMs: 12, SessionRole: "dev2"},
-				}
 				routable := []string{"glm-via-cc", "codex.full", "claude.fast", "claude.interactive", "agy", "api.provider_gateway", "fugu", "fugu-ultra", "glmcp-worker", "sakana"}
+				// LIVE first: read the real ledger the dev2 lane (cc-dispatch) appends to. Empty →
+				// fall back to the fixture (the read-projection-ahead) with an honest note.
+				records, _ := dispatch.Read(dispatch.LedgerPath(), 50)
+				if len(records) == 0 {
+					cost := 0.0123
+					pass := "pass"
+					done := "succeeded"
+					records = []grammar.DispatchRecord{
+						{TS: "2026-06-27T20:50:01Z", Capability: "glm-via-cc", RouteID: "claude.full", Platform: "claude", Mode: "fast", Profile: "full", CCTask: "cc-task-capdispatch-surface-20260627", SliceKind: "impl", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 1180, SessionRole: "dev2"},
+						{TS: "2026-06-27T20:42:14Z", Capability: "codex.full", RouteID: "codex.spark.full", Platform: "codex", Mode: "spark", Profile: "full", CCTask: "cc-task-edt-scorer-20260627", SliceKind: "review", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 940, CostUSD: &cost, QualitySignal: &pass, Outcome: &done, SessionRole: "dev3"},
+						{TS: "2026-06-27T20:31:09Z", Capability: "fugu", RouteID: "—", Platform: "—", Mode: "—", Profile: "—", CCTask: "cc-task-routedef", SliceKind: "impl", AdmissionAction: "fail_closed", Launched: false, DispatchLatencyMs: 12, SessionRole: "dev2"},
+					}
+					fmt.Println(grammar.C("yel", "(fixture — no live ledger at ~/.cache/hapax/sdlc-routing/dispatch-events.jsonl yet)"))
+				}
 				fmt.Println(grammar.RenderDispatchLedger(records, air))
 				fmt.Println()
 				fmt.Println(grammar.RenderUtilization(grammar.Utilization(records, routable)))
