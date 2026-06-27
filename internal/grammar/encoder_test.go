@@ -177,3 +177,45 @@ func TestEncodeCellReportsChannelAndFacet(t *testing.T) {
 		t.Fatalf("channel must name itself, got %q", c.Channel.String())
 	}
 }
+
+// RenderFacetRow composes a row from faceted cells via the encoder — the generalization of the
+// per-kind RenderXxxRow strips to ANY faceted entity. Cells render in the given order, every value
+// carried, grayscale-safe (no live-pane behavior change; purely additive).
+func TestRenderFacetRowComposesCellsInOrder(t *testing.T) {
+	row := ansi.Strip(RenderFacetRow(FacetRegistry{}, []FacetCell{
+		{Facet: "identity", Value: CellValue{Text: "task-4284", Width: 12}},
+		{Facet: "posture", Value: CellValue{Text: "warn", Width: 6}},
+		{Facet: "ownership", Value: CellValue{Text: "alpha", Width: 8}},
+	}, false))
+	iIdx, pIdx, oIdx := strings.Index(row, "task-4284"), strings.Index(row, "warn"), strings.Index(row, "alpha")
+	if iIdx < 0 || pIdx < 0 || oIdx < 0 {
+		t.Fatalf("row dropped a cell value: %q", row)
+	}
+	if !(iIdx < pIdx && pIdx < oIdx) {
+		t.Fatalf("cells must render in the given order: %q", row)
+	}
+}
+
+// AIR is per-cell in a composed row: a denied cell redacts while its neighbors still render on air.
+func TestRenderFacetRowAIRRedactsPerCell(t *testing.T) {
+	row := ansi.Strip(RenderFacetRow(FacetRegistry{}, []FacetCell{
+		{Facet: "ownership", Value: CellValue{Text: "alpha", Width: 8}},
+		{Facet: "identity", Value: CellValue{Text: "SECRET-PATH", Denied: true, Width: 12}},
+	}, true))
+	if strings.Contains(row, "SECRET-PATH") {
+		t.Fatalf("a denied cell leaked in a composed on-air row: %q", row)
+	}
+	if !strings.Contains(row, "alpha") {
+		t.Fatalf("an allowed cell must still air alongside a denied one: %q", row)
+	}
+	if !strings.Contains(row, "▒") {
+		t.Fatalf("the denied cell must show the redaction token: %q", row)
+	}
+}
+
+// An empty cell list yields an empty row (no spurious gutters).
+func TestRenderFacetRowEmpty(t *testing.T) {
+	if got := RenderFacetRow(FacetRegistry{}, nil, false); got != "" {
+		t.Fatalf("empty row must be empty, got %q", got)
+	}
+}

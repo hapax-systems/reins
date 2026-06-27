@@ -451,6 +451,7 @@ func main() {
 				fmt.Println("each facet binds to ONE cell channel; color is a redundant amplifier (reads in grayscale)")
 				fmt.Println()
 				fmt.Printf("  %-11s %-16s %s\n", "FACET", "CHANNEL", "SAMPLE CELL")
+				var rowCells []grammar.FacetCell
 				for _, f := range order {
 					v, ok := samples[f]
 					if !ok {
@@ -461,7 +462,13 @@ func main() {
 					}
 					cell := grammar.EncodeCell(reg, f, v, air)
 					fmt.Printf("  %-11s %-16s %s\n", f, cell.Channel.String(), cell.Rendered)
+					rowCells = append(rowCells, grammar.FacetCell{Facet: f, Value: v})
 				}
+				// the same cells COMPOSED into one row — the generalization of RenderTaskRow to any
+				// faceted entity ("every pane renders the same way", framework §1 Layer-2).
+				fmt.Println()
+				fmt.Println("  SAMPLE ROW (one faceted entity, composed via the encoder):")
+				fmt.Println("  " + grammar.RenderFacetRow(reg, rowCells, air))
 				airNote := ""
 				if air {
 					airNote = " · ON AIR: identity/place redact (PII); skeleton facets air"

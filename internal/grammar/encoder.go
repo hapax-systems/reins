@@ -141,6 +141,25 @@ func EncodeCell(reg FacetRegistry, facet string, v CellValue, airOn bool) Cell {
 	return Cell{Rendered: renderChannel(ch, v, airOn), Channel: ch, Facet: facet}
 }
 
+// FacetCell pairs a facet with its value for row composition.
+type FacetCell struct {
+	Facet string
+	Value CellValue
+}
+
+// RenderFacetRow composes a row from faceted cells via the encoder — the generalization of the per-
+// kind RenderXxxRow strips (RenderTaskRow's 7-dim lifecycle sentence, etc.) to ANY faceted entity
+// (framework §1 Layer-2: "every pane renders the same way"). Cells encode in the given order and join
+// by a single space (the cell gutter); column widths come from each CellValue.Width. AIR is per-cell.
+// Additive — a new render PATH, wired into no live pane (the row-renderer swap stays operator-vetted).
+func RenderFacetRow(reg FacetRegistry, cells []FacetCell, airOn bool) string {
+	parts := make([]string, 0, len(cells))
+	for _, c := range cells {
+		parts = append(parts, EncodeCell(reg, c.Facet, c.Value, airOn).Rendered)
+	}
+	return strings.Join(parts, " ")
+}
+
 func renderChannel(ch Channel, v CellValue, airOn bool) string {
 	denied := airOn && v.Denied
 	switch ch {
