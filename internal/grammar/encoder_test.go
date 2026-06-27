@@ -250,6 +250,17 @@ func TestEncodeCellWidthStableAcrossStates(t *testing.T) {
 	}
 }
 
+// An empty text/family cell at Width>0 renders structured-silence dots (the grid reads "nothing here"
+// rather than a jarring blank — the dotsOr convention, made a property of the encoder).
+func TestEncodeCellTextEmptyIsStructuredSilence(t *testing.T) {
+	for _, facet := range []string{"identity", "action", "variant", "ownership", "place"} {
+		out := ansi.Strip(EncodeCell(FacetRegistry{}, facet, CellValue{Text: "", Width: 6}, false).Rendered)
+		if !strings.Contains(out, "······") {
+			t.Errorf("facet %q empty cell must be structured-silence dots, got %q", facet, out)
+		}
+	}
+}
+
 // An unrecognized channel prose (a future re-wording of the registry) must resolve to ChannelUnknown
 // — an explicit sentinel — never silently to text. The three real text facets still resolve to text.
 func TestChannelFromProseUnknownIsExplicit(t *testing.T) {

@@ -267,9 +267,11 @@ func TestRenderTaskRowSevenDims(t *testing.T) {
 		Owner: "cc-seg", Freshness: 0.9, Criticality: "crit",
 		AIR: map[string]string{"task_id": "ok", "stage": "ok", "prior_stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok", "freshness": "ok"}}
 	got := RenderTaskRow(tk, false)
-	for _, want := range []string{critGlyph["crit"], "x-1", "S5", "S4", "hold", "cc-seg", critBar("crit")} {
+	// the posture cell now carries criticality as glyph+WORD (the redundant bar is dropped — posture
+	// is one channel); plus id · stage · ◀prior · →predicted · owner.
+	for _, want := range []string{critGlyph["crit"], "crit", "x-1", "S5", "S4", "hold", "cc-seg"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("7-dim row missing %q:\n%q", want, got)
+			t.Fatalf("faceted task row missing %q:\n%q", want, got)
 		}
 	}
 }

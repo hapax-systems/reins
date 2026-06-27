@@ -488,68 +488,6 @@ func main() {
 				return
 			}
 		}
-		// --probe tasks-ab: the row-renderer SWAP vet artifact (framework §7.2 — migrate incrementally
-		// and VETTED, never a big-bang on the freeze-frame-legible task strip). Renders sample tasks BOTH
-		// ways — the live bespoke RenderTaskRow vs the encoder-composed faceted row — for a screenshot
-		// compare before any live swap. The faceted row is LEANER: it drops the redundant criticality BAR
-		// (posture already carries criticality) and the ●N relations cell moves to the edge layer (§3, not
-		// a facet). OFFLINE fixture; honors the same per-field AIR. [--air] shows the on-air redaction.
-		for _, a := range os.Args[2:] {
-			if a == "tasks-ab" {
-				air := false
-				for _, b := range os.Args[2:] {
-					if b == "--air" {
-						air = true
-					}
-				}
-				reg, _, _ := api.FetchFacets(cfg.APIURL) // SSOT binding if reachable; else built-in defaults
-				sk := func(denied ...string) map[string]string {
-					m := map[string]string{"task_id": "ok", "stage": "ok", "prior_stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok", "freshness": "ok", "rel_count": "ok"}
-					for _, d := range denied {
-						m[d] = "deny"
-					}
-					return m
-				}
-				tasks := []grammar.Task{
-					{TaskID: "cc-reins-encoder", Stage: "S6_build", PriorStage: "S5_design", PredictedStage: "ship", Owner: "cc-reins", Criticality: "ok", Freshness: 0.92, RelCount: 3, AIR: sk()},
-					{TaskID: "caprouting-4296", Stage: "S7_release", PriorStage: "S6_build", PredictedStage: "hold", Owner: "dev2", Criticality: "crit", Freshness: 0.40, RelCount: 5, AIR: sk()},
-					{TaskID: "segprep-eval-4278", Stage: "S5_review", PriorStage: "S4_impl", PredictedStage: "S6", Owner: "alpha", Criticality: "warn", Freshness: 0.15, RelCount: 2, AIR: sk("owner")},
-				}
-				taskFacets := func(t grammar.Task) []grammar.FacetCell {
-					prior, pred := t.PriorStage, t.PredictedStage
-					if strings.TrimSpace(prior) != "" {
-						prior += "◀"
-					}
-					if strings.TrimSpace(pred) != "" {
-						pred = "→" + pred
-					}
-					d := func(field string) bool { return t.AIR[field] != "ok" }
-					return []grammar.FacetCell{
-						{Facet: "posture", Value: grammar.CellValue{Text: t.Criticality, Denied: d("criticality"), Width: 5}},
-						{Facet: "identity", Value: grammar.CellValue{Text: t.TaskID, Denied: d("task_id"), Width: 20}},
-						{Facet: "action", Value: grammar.CellValue{Text: t.Stage, Denied: d("stage"), Width: 9}},
-						{Facet: "action", Value: grammar.CellValue{Text: prior, Denied: d("prior_stage"), Width: 9}},
-						{Facet: "action", Value: grammar.CellValue{Text: pred, Denied: d("predicted_stage"), Width: 6}},
-						{Facet: "ownership", Value: grammar.CellValue{Text: t.Owner, Denied: d("owner"), Width: 8}},
-						{Facet: "time", Value: grammar.CellValue{Magnitude: t.Freshness, Denied: d("freshness")}},
-					}
-				}
-				fmt.Println("ROW-RENDERER A/B — the live bespoke strip vs the encoder-composed faceted row (framework §7.2 vet)")
-				fmt.Println("the faceted row drops the redundant criticality BAR + the ●N relations cell (→ edge layer §3)")
-				fmt.Println()
-				fmt.Println("  LIVE  RenderTaskRow — 9 cells (s · rel · id · stg · was◀ · →next · who · critbar · fr)")
-				fmt.Println("  " + grammar.RenderTaskHeader())
-				for _, t := range tasks {
-					fmt.Println("  " + grammar.RenderTaskRow(t, air))
-				}
-				fmt.Println()
-				fmt.Println("  FACET RenderFacetRow — 7 facet cells (posture · id · stg · was · next · who · fresh), one uniform grammar")
-				for _, t := range tasks {
-					fmt.Println("  " + grammar.RenderFacetRow(reg, taskFacets(t), air))
-				}
-				return
-			}
-		}
 		evs, ed, evErr := api.FetchEvents(cfg.APIURL)
 		ts, td, taskErr := api.FetchTasks(cfg.APIURL)
 		dg, dd, dynErr := api.FetchDynamics(cfg.APIURL)

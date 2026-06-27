@@ -421,10 +421,11 @@ type Task struct {
 	AIR            map[string]string `json:"air"`
 }
 
-// RenderTaskHeader: the seven-dimension column header.
+// RenderTaskHeader: the column header for the encoder-composed task row (posture carries criticality
+// as glyph+word, so there is no separate state/crit column anymore; relations stay as the edge cell).
 func RenderTaskHeader() string {
-	return C("mut", fmt.Sprintf(" %-1s %-3s %-22s %-4s %-5s %-5s %-8s %-4s %s",
-		"s", "rel", "TASK", "STG", "was◀", "→next", "who", "crit", "fr"))
+	return C("mut", fmt.Sprintf("%-7s %-3s %-22s %-4s %-5s %-5s %-8s %s",
+		"state", "rel", "TASK", "STG", "was◀", "→next", "who", "fr"))
 }
 
 // dotsOr: structured-silence — an empty cell is dots at full width (the grid never jitters).
@@ -473,81 +474,58 @@ func freshGlyph(f float64) (string, string) {
 	return string(bars[i]), "mut"
 }
 
-// RenderTaskRow: the SEVEN-DIMENSION cell strip — state · relations · id · stage · ◀was · now→next ·
-// who · criticality · freshness. Each cell colored by meaning; empties are structured-silence dots;
-// denied (on-air) cells redact in place. The literal answer to "every item is flat".
+// relCell: the relations edge SUMMARY cell (●N) — NOT a facet (a relation is a property of a PAIR, the
+// edge layer §3), kept in the row alongside the facet cells; blue, count-bearing, redacts under AIR.
+func relCell(n int, denied, airOn bool) string {
+	if airOn && denied {
+		return C("mut", pad("▒▒▒", 3))
+	}
+	if n > 0 {
+		return C("blu", pad(fmt.Sprintf("●%d", n), 3))
+	}
+	return C("mut", pad("●0", 3))
+}
+
+// RenderTaskRow: the task roster row, now COMPOSED THROUGH THE ENCODER (framework §1 Layer-2 —
+// "every pane renders the same way"). Each facet cell (posture · id · stage · ◀was · →next · who ·
+// freshness) is the encoder's uniform channel grammar — the SAME grammar every kind uses — plus the
+// relations edge cell (●N). The old hand-rolled per-cell strip is dissolved into EncodeCell; the
+// redundant criticality BAR is dropped (posture already carries criticality as glyph+word+hue, and
+// "blocked" reads from the posture cell, not a colored predicted-stage). Empties are structured-
+// silence dots; denied cells redact in place — both now properties of the encoder, not this renderer.
 func RenderTaskRow(t Task, airOn bool) string {
 	crit := t.Criticality
 	if crit == "" {
 		crit = "ok"
 	}
-	ctok := DimSeverityToken(crit, t.Freshness)
-	critVisible := !airOn || t.AIR["criticality"] == "ok"
-	if !critVisible {
-		ctok = "mut"
+	reg := FacetRegistry{} // built-in default binding (the row renderer has no live registry handle)
+	d := func(field string) bool { return t.AIR[field] != "ok" }
+	// the ◀ travels WITH the prior-stage value (self-distinguishing even if the header is cropped).
+	prior := shortStage(t.PriorStage)
+	if strings.TrimSpace(prior) != "" {
+		prior += "◀"
 	}
-
-	g := critGlyph[crit]
-	if g == "" {
-		g = "·"
-	}
-	if !critVisible {
-		g = "▒"
-	}
-	st := C(ctok, g)
-
-	rel := C("mut", pad("●0", 3)) // relations always ●N (·  was an overload of structured-silence)
-	if t.RelCount > 0 {
-		rel = C("blu", pad(fmt.Sprintf("●%d", t.RelCount), 3))
-	}
-	if airOn && t.AIR["rel_count"] != "ok" {
-		rel = C("mut", pad("▒▒▒", 3))
-	}
-
-	idTok := "pri"
-	if critVisible && crit == "crit" {
-		idTok = "brt"
-	}
-	id := C(idTok, dotsOr(redact(t.AIR, "task_id", t.TaskID, airOn), 22))
-	stg := C(ctok, dotsOr(redact(t.AIR, "stage", shortStage(t.Stage), airOn), 4))
-	// the ◀ travels WITH the prior-stage value (self-distinguishing from the current stage even if
-	// the column header is cropped — the freeze-frame role-expressiveness rule).
-	wasV := shortStage(t.PriorStage)
-	if strings.TrimSpace(wasV) != "" {
-		wasV += "◀"
-	}
-	was := C("mut", dotsOr(redact(t.AIR, "prior_stage", wasV, airOn), 5))
-
-	nxtRaw, ntok := t.PredictedStage, "grn" // now→next predicted chip
-	switch t.PredictedStage {
-	case "hold":
-		nxtRaw, ntok = "→hold", "red"
-	case "ship":
-		nxtRaw = "·ship"
-	case "":
-		ntok = "mut"
+	pred := t.PredictedStage // the →next chip ("·ship" = terminal/arrived; "→X" = pending move)
+	switch pred {
+	case "", "ship":
+		if pred == "ship" {
+			pred = "·ship"
+		}
 	default:
-		nxtRaw = "→" + t.PredictedStage
+		pred = "→" + pred
 	}
-	if airOn && t.AIR["predicted_stage"] != "ok" {
-		ntok = "mut"
+	cell := func(facet, text string, field string, width int) string {
+		return EncodeCell(reg, facet, CellValue{Text: text, Denied: d(field), Width: width}, airOn).Rendered
 	}
-	nxt := C(ntok, dotsOr(redact(t.AIR, "predicted_stage", nxtRaw, airOn), 5))
-	whoTok := LaneToken(t.Owner)
-	if airOn && t.AIR["owner"] != "ok" {
-		whoTok = "mut"
-	}
-	who := C(whoTok, dotsOr(redact(t.AIR, "owner", t.Owner, airOn), 8))
-
-	bar := critBar(crit)
-	if airOn && t.AIR["criticality"] != "ok" {
-		bar = "▒▒▒▒"
-	}
-	fg, ftok := freshGlyph(t.Freshness)
-	if airOn && t.AIR["freshness"] != "ok" {
-		fg, ftok = "▒", "mut"
-	}
-	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s", st, rel, id, stg, was, nxt, who, C(ctok, bar), C(ftok, fg))
+	posture := cell("posture", crit, "criticality", 5)
+	rel := relCell(t.RelCount, d("rel_count"), airOn)
+	id := cell("identity", t.TaskID, "task_id", 22)
+	stg := cell("action", shortStage(t.Stage), "stage", 4)
+	was := cell("action", prior, "prior_stage", 5)
+	nxt := cell("action", pred, "predicted_stage", 5)
+	who := cell("ownership", t.Owner, "owner", 8)
+	fr := EncodeCell(reg, "time", CellValue{Magnitude: t.Freshness, Denied: d("freshness")}, airOn).Rendered
+	return strings.Join([]string{posture, rel, id, stg, was, nxt, who, fr}, " ")
 }
 
 // Session is the unified-API READ contract for one live agent/session lane. It is deliberately a

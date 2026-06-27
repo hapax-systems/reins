@@ -154,6 +154,15 @@ func padTo(s string, n int) string {
 	return pad(s, n)
 }
 
+// padSilent pads to n, but an EMPTY value becomes structured-silence dots — the grid reads "nothing
+// here" rather than a jarring blank (the dotsOr convention, made a property of the text/family cells).
+func padSilent(s string, n int) string {
+	if strings.TrimSpace(s) == "" && n > 0 {
+		return strings.Repeat("·", n)
+	}
+	return padTo(s, n)
+}
+
 // glyphCell renders a glyph-led cell: a leading mark + a space + the value, used by every glyph-bearing
 // channel (criticality / freshness / magnitude / provenance, and their redaction). When width>0 the
 // value slot is ALWAYS padded — so the column holds one stable width across visible / empty-label /
@@ -212,6 +221,9 @@ func renderChannel(ch Channel, v CellValue, airOn bool) string {
 		if denied {
 			return C("mut", padTo(redactToken, v.Width))
 		}
+		if strings.TrimSpace(v.Text) == "" { // empty owner/place -> structured silence, not a colored blank
+			return C("mut", padSilent(v.Text, v.Width))
+		}
 		return C(LaneToken(v.Text), padTo(v.Text, v.Width))
 
 	case ChannelFreshnessDim:
@@ -241,6 +253,9 @@ func renderChannel(ch Channel, v CellValue, airOn bool) string {
 	default: // ChannelText (identity / action / variant) + the ChannelUnknown safety fallback
 		if denied {
 			return C("mut", padTo(redactToken, v.Width))
+		}
+		if strings.TrimSpace(v.Text) == "" {
+			return C("mut", padSilent(v.Text, v.Width)) // structured silence, dimmed
 		}
 		return C("pri", padTo(v.Text, v.Width))
 	}
