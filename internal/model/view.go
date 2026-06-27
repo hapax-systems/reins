@@ -635,7 +635,7 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	if m.Mode == ModeCoordChat {
 		prompt += m.CoordChatInput + "▌"
 	} else {
-		prompt += grammar.C("mut", "[c] coordinate the selected lane (send gated · CapabilityIO #4296)")
+		prompt += grammar.C("mut", "[c] coordinate the selected lane (send gated · CapabilityIO session backend)")
 	}
 	b.WriteString(clipRunes(grammar.C("pri", prompt), maxVisible(8, w)) + "\n")
 	return strings.TrimRight(b.String(), "\n")
@@ -657,10 +657,10 @@ func (m Model) coordinatorChatTurns() []grammar.Turn {
 	}
 	for _, msg := range m.CoordChatLog {
 		turns = append(turns, grammar.Turn{Role: "operator", Kind: "user", Summary: msg, AIR: sk})
-		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "refusal", Summary: "coordination dispatch gated on CapabilityIO (#4296)", AIR: sk})
+		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "refusal", Summary: "queued · live dispatch awaits the CapabilityIO session backend (Phase-1 capture-output)", AIR: sk})
 	}
 	if len(m.CoordChatLog) == 0 {
-		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "chat is transclude + input ready; live dispatch gated on CapabilityIO (#4296)", AIR: sk})
+		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "chat is transclude + input ready; live dispatch awaits the CapabilityIO session backend (#4296 precondition merged)", AIR: sk})
 	}
 	return turns
 }
@@ -704,9 +704,27 @@ func (m Model) coordinatorLensPane(w, h int) string {
 		}
 	}
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
-	crumb := fmt.Sprintf("▶ path  Z0▸zone tasks ▸ Z2▸row %d/%d   ·   [j/k] move · [Z] coordinator", m.Focus+1, len(tasks))
+	// the lattice breadcrumb descends one more rank (Z3 = the focused row's facets) so the part shows
+	// its place in the whole — zone → row → field, the Miller-column descent made legible.
+	z3 := "—"
+	if t, ok := m.FocusedTask(); ok {
+		crit := t.Criticality
+		if crit == "" {
+			crit = "ok"
+		}
+		z3 = fmt.Sprintf("%s·%s·%s", crit, dashOr(t.Stage), dashOr(grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)))
+	}
+	crumb := fmt.Sprintf("▶ path  Z0▸tasks ▸ Z2▸row %d/%d ▸ Z3▸[%s]   ·   [j/k] row · [c] chat", m.Focus+1, len(tasks), z3)
 	b.WriteString(" " + grammar.C("mut", clipRunes(crumb, maxVisible(8, w-1))) + "\n")
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// dashOr returns "—" for an empty value (compact structured silence in one-line summaries).
+func dashOr(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return s
 }
 
 // coordinatorContextPane: the Yard Coordinator's RIGHT pane — the coordinator context the lens

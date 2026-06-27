@@ -384,7 +384,7 @@ type Model struct {
 	WindowSeen          map[int]string  // per-window state signature at last visit (activity ladder)
 	Sel                 Selection       // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	CoordChatInput      string          // the Yard Coordinator chat input buffer (ModeCoordChat)
-	CoordChatLog        []string        // the operator's local coordination messages (send gated · CapabilityIO #4296)
+	CoordChatLog        []string        // the operator's local coordination messages (send gated · CapabilityIO session backend)
 	Filter              string          // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string          // active criticality-class filter (ok|warn|major|crit) — a selected count
 	IntakeSourceFilter  string          // active :intake source filter; empty means all sources
@@ -1904,7 +1904,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c": // Yard Coordinator: open the chat input to coordinate over the lens selection
 			if m.Page == PageCoordinator {
 				m.Mode, m.CoordChatInput = ModeCoordChat, ""
-				m.Status = "coordinate: type a message · [Enter] queue (send gated · #4296) · [Esc] cancel"
+				m.Status = "coordinate: type a message · [Enter] queue (send gated · CapabilityIO session backend) · [Esc] cancel"
 				return m, nil
 			}
 		case "f": // hint teleport — labels bloom on visible rows; type one to jump (by looking)
@@ -2559,14 +2559,14 @@ func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateCoordChat handles the Yard Coordinator chat input (ModeCoordChat). Printable runes append to
 // the buffer; [Enter] QUEUES the message into the local CoordChatLog (it mints no authority and
-// dispatches nothing — live agent SEND is gated on CapabilityIO #4296); [Esc] cancels. The lens
+// dispatches nothing — live agent SEND awaits the CapabilityIO session backend (#4296 precondition merged)); [Esc] cancels. The lens
 // selection it coordinates over is transcluded into the chat by coordinatorChatTurns (reference-not-copy).
 func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.Type {
 	case tea.KeyEnter:
 		if msg := strings.TrimSpace(m.CoordChatInput); msg != "" {
 			m.CoordChatLog = append(m.CoordChatLog, msg)
-			m.Status = "coordinate: queued locally (send gated · CapabilityIO #4296)"
+			m.Status = "coordinate: queued locally (live dispatch awaits the CapabilityIO session backend)"
 		}
 		m.Mode, m.CoordChatInput = ModeNormal, ""
 	case tea.KeyEsc:
