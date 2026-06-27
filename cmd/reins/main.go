@@ -12,6 +12,7 @@ import (
 	"github.com/hapax-systems/reins/internal/api"
 	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/grammar"
+	"github.com/hapax-systems/reins/internal/graph"
 	"github.com/hapax-systems/reins/internal/model"
 )
 
@@ -310,6 +311,37 @@ func main() {
 	// --probe: headless acceptance — fetch read surfaces, fold, print one frame, exit.
 	// Args: --probe [page|cmd:<verb>|split|size:WxH|--air]  (page defaults to events)
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
+		// --probe loops: run the A5 Tier-1 graph primitive over the LIVE :dynamics map (read-only
+		// fetch) — detect feedback loops + classify Reinforcing/Balancing by negative-sign parity,
+		// NO simulation. Demonstrates the qualitative systems-dynamics layer on real data.
+		for _, a := range os.Args[2:] {
+			if a == "loops" {
+				dg, dark, err := api.FetchDynamics(cfg.APIURL)
+				if err != nil || dark {
+					fmt.Printf("loops: :dynamics dark/unreachable (%v)\n", err)
+					return
+				}
+				tg := graph.New()
+				for _, e := range dg.Edges {
+					tg.Add(graph.Relation{Src: e.Source, Dst: e.Target, Type: e.Relation})
+				}
+				loops := tg.CausalLoops()
+				fmt.Printf("CAUSAL LOOPS over :dynamics (%d nodes · %d edges) — A5 Tier-1, computed no-sim\n",
+					len(tg.Nodes()), len(dg.Edges))
+				badge := map[graph.LoopKind]string{graph.Reinforcing: "⟲R", graph.Balancing: "⟳B", graph.Indeterminate: "⟲?"}
+				if len(loops) == 0 {
+					fmt.Println("  (no feedback loops in the current map — it is largely a DAG)")
+				}
+				for _, lp := range loops {
+					d := ""
+					if lp.HasDelay {
+						d = " ‖delay"
+					}
+					fmt.Printf("  %s%s  %s\n", badge[lp.Kind], d, strings.Join(lp.Nodes, " → "))
+				}
+				return
+			}
+		}
 		// --probe turns: OFFLINE fixture render of the session-pane turn grammar (§9 step-1 read-
 		// projection; CapabilityIO SESSION-kind is sequenced behind #4296, so no live backend yet).
 		// Demonstrates the turn-ladder + its livestream-safe AIR collapse for the operator vetting loop.
