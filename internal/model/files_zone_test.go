@@ -10,7 +10,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/files"
-	"github.com/hapax-systems/reins/internal/imgpreview"
 )
 
 // The coordinator [z] toggle enters/leaves the filebrowser zone; while active, j/k/l/h drive the
@@ -73,15 +72,21 @@ func TestCoordinatorFilePreviewImageOffAirOnAir(t *testing.T) {
 	m.FilesCwd = dir
 	m.FilesEntries = []files.Entry{{Name: "pic.png", Size: 200, Ext: "png"}}
 
-	// Off air: the operator sees the real image. On a half-block-capable terminal the render
-	// carries pixels (▀); everywhere it is at least a non-empty preview.
+	// Off air: the operator sees the real image, rendered as higher-res braille dot-matrix.
 	m.AIR = false
 	off := m.coordinatorFilePreview(60, 24)
 	if strings.TrimSpace(off) == "" {
 		t.Fatal("off-air image preview must not be empty")
 	}
-	if imgpreview.DetectProtocol(os.Getenv) == imgpreview.ProtoHalfBlock && !strings.Contains(off, "▀") {
-		t.Fatalf("a half-block-capable terminal must render real pixels off air:\n%s", off)
+	braille := false
+	for _, r := range off {
+		if r >= 0x2800 && r <= 0x28FF {
+			braille = true
+			break
+		}
+	}
+	if !braille {
+		t.Fatalf("off-air preview should render the image as braille dot-matrix:\n%s", off)
 	}
 
 	// On air: shape-only — no pixels, filename redacted, the withheld note shown.

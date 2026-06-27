@@ -85,6 +85,21 @@ func humanSize(n int64) string {
 	}
 }
 
+// RenderFileBraille previews an image file as a higher-resolution braille (2×4 dots/cell) grid —
+// the dot-matrix mode. Decode failure falls back to the pixel-free Metadata line.
+func RenderFileBraille(path string, cols, rows int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Metadata(path), err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return Metadata(path), nil
+	}
+	return RenderBraille(img, cols, rows), nil
+}
+
 // RenderFile previews an image file within cols×rows cells for the chosen protocol. ProtoHalfBlock
 // and ProtoKitty decode + render the half-block grid (kitty placeholders are a follow-up that will
 // upgrade ProtoKitty in place); ProtoMetadataOnly — and any decode failure — falls back to the

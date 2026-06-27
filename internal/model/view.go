@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -865,14 +864,14 @@ func (m Model) coordinatorFilePreview(w, h int) string {
 			b.WriteString("  " + grammar.C("yel", "image · shape-only · pixels and filename withheld on air"))
 			return b.String()
 		}
-		// Off air (the operator's present-at-hand frame): render the ACTUAL image. A metadata-only
-		// terminal falls back to a name+dims line — fine off air, in the operator's own frame.
+		// Off air (the operator's present-at-hand frame): render the ACTUAL image at higher resolution
+		// via braille dot-matrix (2×4 dots/cell ≈ 4× the half-block); decode failure folds to metadata.
 		cols := maxVisible(8, w-2)
 		rows := h - 4
 		if rows < 2 {
 			rows = 2
 		}
-		out, _ := imgpreview.RenderFile(filepath.Join(m.FilesCwd, e.Name), cols, rows, imgpreview.DetectProtocol(os.Getenv))
+		out, _ := imgpreview.RenderFileBraille(filepath.Join(m.FilesCwd, e.Name), cols, rows)
 		b.WriteString(out)
 		return b.String()
 	}

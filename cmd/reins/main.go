@@ -525,10 +525,15 @@ func main() {
 				// operator's off-air present-at-hand frame) so the filebrowser's image preview can be
 				// eyeballed headlessly. Run in a real terminal to SEE the picture.
 				path := ""
+				braille := false
 				w, h := 80, 40
 				for _, b := range os.Args[2:] {
 					if pw, ph, ok := parseProbeSize(b); ok {
 						w, h = pw, ph
+						continue
+					}
+					if b == "braille" {
+						braille = true
 						continue
 					}
 					if b != "image" && !strings.HasPrefix(b, "--") {
@@ -536,12 +541,19 @@ func main() {
 					}
 				}
 				if path == "" {
-					fmt.Println("usage: reins --probe image <path> [size:WxH]")
+					fmt.Println("usage: reins --probe image <path> [size:WxH] [braille]")
 					return
 				}
-				proto := imgpreview.DetectProtocol(os.Getenv)
-				fmt.Printf("IMAGE PREVIEW — %s · protocol=%s (%dx%d cells)\n\n", path, proto, w, h)
-				out, err := imgpreview.RenderFile(path, w, h, proto)
+				var out string
+				var err error
+				if braille {
+					fmt.Printf("IMAGE PREVIEW — %s · braille dot-matrix 2×4 dots/cell (%dx%d cells)\n\n", path, w, h)
+					out, err = imgpreview.RenderFileBraille(path, w, h)
+				} else {
+					proto := imgpreview.DetectProtocol(os.Getenv)
+					fmt.Printf("IMAGE PREVIEW — %s · half-block %s (%dx%d cells)\n\n", path, proto, w, h)
+					out, err = imgpreview.RenderFile(path, w, h, proto)
+				}
 				if err != nil {
 					fmt.Println("error:", err)
 				}
