@@ -9563,7 +9563,7 @@ func (m Model) eventContextPane(w int) string {
 		if strings.Contains(strings.ToLower(x.Kind), "succeed") {
 			successes++
 		}
-		kinds[shortKindForPanel(x.Kind)]++
+		kinds[grammar.Redact(x.AIR, "kind", shortKindForPanel(x.Kind), m.AIR)]++ // per-event AIR: a denied kind aggregates as ▒▒▒, never leaks
 	}
 	stateTok := "grn"
 	state := "routine"
