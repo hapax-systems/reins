@@ -540,8 +540,10 @@ func (m Model) blockedBreakdown(indices []int) (hold, risk int) {
 
 // Z2a — the main pane body: the active page, rendered by the cell grammar.
 func (m Model) bodyFor(w, h int) string {
-	if m.Page == PageCoordinator { // the Yard Coordinator is INHERENTLY a composed split (lens │ coordinator)
-		return m.coordinatorBody(w, h)
+	// The view-algebra entry: a migrated page composes as a layout.Spec (only-split). Pages not yet
+	// migrated fall through to the legacy split / single-pane codepaths, which retire at Increment 5.
+	if spec := m.composePage(w, h); spec != nil {
+		return layout.Render(spec, w, h)
 	}
 	if m.SplitContext && w >= splitContextMinWidth {
 		return m.splitContextBody(w, h)
@@ -574,19 +576,28 @@ func hconcatCols(div string, h int, cols ...[]string) string {
 // drives (framework §5: the Yard-Coordinator + Hapax-chat adjacency): LENS │ COORDINATOR │ CHAT, an
 // HConcat of page-owned panes (no session-source assumptions leak in). Width-responsive: 3 columns
 // when wide, lens │ coordinator when medium, coordinator-only when narrow.
-func (m Model) coordinatorBody(w, h int) string {
-	// The flagship STANDING-EMERGENT split, composed through the view-algebra (only-split): LENS is
-	// the single driving locus; COORDINATOR and CHAT are transcluded from its selection. The
-	// connector relation is EMERGENT (relate.Derive over the selection), not an authored banner.
+// composePage is the SINGLE view-algebra entry (only-split): a page → its layout.Spec, rendered by
+// the one pure fold. As cohorts migrate it covers more pages; once total, bodyFor collapses to
+// layout.Render(composePage(...)) and the legacy split codepaths are deleted. nil = not-yet-migrated
+// (bodyFor falls through to the legacy path for that page).
+func (m Model) composePage(w, h int) *layout.Spec {
+	switch m.Page {
+	case PageCoordinator:
+		return m.specCoordinator()
+	}
+	return nil
+}
+
+// specCoordinator is the flagship STANDING-EMERGENT split: LENS │ (COORDINATOR │ CHAT). The lens is
+// the single driving locus; coordinator+chat are transcluded from its selection. The root connector
+// relation is EMERGENT (relate.Derive); the inner one is ambient (no authored join → no header).
+func (m Model) specCoordinator() *layout.Spec {
 	div := grammar.C("border", "│")
 	lens := &layout.Pane{MinW: 28, Render: func(pw, ph int) string { return m.coordinatorLensPane(pw, ph) }}
 	coord := &layout.Pane{MinW: 22, Render: func(pw, ph int) string { return m.coordinatorContextPane(pw, ph) }}
 	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
-	// LENS │ (COORDINATOR │ CHAT): the lens drives both; coordinator+chat have no authored join
-	// between them (ambient), so their connector asserts nothing.
 	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
-	spec := layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
-	return layout.Render(spec, w, h)
+	return layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
 }
 
 // coordinatorEmergentRelation derives the connector's relationship from the lens selection to the
@@ -604,7 +615,13 @@ func (m Model) coordinatorEmergentRelation() string {
 		}
 		others = append(others, taskEntity(t))
 	}
-	return m.airRelationLabel(relate.Derive(taskEntity(focused), others, nil))
+	return m.emergentRelation(taskEntity(focused), others, nil)
+}
+
+// emergentRelation derives a pane-to-pane connector relation (relate.Derive) and renders it
+// AIR-aware — the one helper every migrated page's connector reuses.
+func (m Model) emergentRelation(anchor relate.Entity, others []relate.Entity, edges []relate.Edge) string {
+	return m.airRelationLabel(relate.Derive(anchor, others, edges))
 }
 
 func taskEntity(t grammar.Task) relate.Entity {
