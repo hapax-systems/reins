@@ -415,6 +415,35 @@ func main() {
 				return
 			}
 		}
+		// --probe dispatch: OFFLINE fixture render of the dispatch-observability surface (the
+		// cc-task-capdispatch-surface-20260627 ledger — records emitted by the dev2 lane, SURFACED here).
+		// Read-projection AHEAD of the feed (mirrors --probe turns): proves the measurement-first honesty —
+		// a null cost renders UNMEASURED (never $0.00), quality renders asserted (never a fake score),
+		// outcome renders in-flight — plus the latent-resource utilization rollup. [--air] redacts the
+		// cc_task id + session role; routing + measurement stay (no false confidentiality).
+		for _, a := range os.Args[2:] {
+			if a == "dispatch" {
+				air := false
+				for _, b := range os.Args[2:] {
+					if b == "--air" {
+						air = true
+					}
+				}
+				cost := 0.0123
+				pass := "pass"
+				done := "succeeded"
+				records := []grammar.DispatchRecord{
+					{TS: "2026-06-27T20:50:01Z", Capability: "glm-via-cc", RouteID: "claude.full", Platform: "claude", Mode: "fast", Profile: "full", CCTask: "cc-task-capdispatch-surface-20260627", SliceKind: "impl", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 1180, SessionRole: "dev2"},
+					{TS: "2026-06-27T20:42:14Z", Capability: "codex.full", RouteID: "codex.spark.full", Platform: "codex", Mode: "spark", Profile: "full", CCTask: "cc-task-edt-scorer-20260627", SliceKind: "review", AdmissionAction: "admitted", Launched: true, DispatchLatencyMs: 940, CostUSD: &cost, QualitySignal: &pass, Outcome: &done, SessionRole: "dev3"},
+					{TS: "2026-06-27T20:31:09Z", Capability: "fugu", RouteID: "—", Platform: "—", Mode: "—", Profile: "—", CCTask: "cc-task-routedef", SliceKind: "impl", AdmissionAction: "fail_closed", Launched: false, DispatchLatencyMs: 12, SessionRole: "dev2"},
+				}
+				routable := []string{"glm-via-cc", "codex.full", "claude.fast", "claude.interactive", "agy", "api.provider_gateway", "fugu", "fugu-ultra", "glmcp-worker", "sakana"}
+				fmt.Println(grammar.RenderDispatchLedger(records, air))
+				fmt.Println()
+				fmt.Println(grammar.RenderUtilization(grammar.Utilization(records, routable)))
+				return
+			}
+		}
 		// --probe encode: render the cell-grammar channel-typing table (framework §1 Layer-2). Each
 		// facet binds to ONE cell channel (Bertin-for-monospace), shown with a sample-encoded cell.
 		// Uses the live /read/facets registry as the SSOT binding when reachable, else the built-in
