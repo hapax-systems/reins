@@ -1,0 +1,221 @@
+{
+  "pack_id": "hapax-domain-pack-20260625",
+  "authority_case": "support_non_authoritative",
+  "generated_at": "2026-06-25T16:16:39Z",
+  "default_lens": "lifecycle",
+  "domains": [
+    {
+      "domain_id": "sdlc-trainyard",
+      "label": "Trainyard",
+      "lifecycle": "SDLC",
+      "terrain": "field",
+      "depth": "core",
+      "scope": "instance",
+      "state": "source-backed",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["yard", "tasks", "sessions", "readiness"],
+      "surfaces": ["trainyard-cockpit", "gate-stack", "split-context", "session-detail", "read-dark"],
+      "parity": "dispatch-first SDLC aperture; event-folded rails map; consume-dont-rederive",
+      "source_refs": ["trainyard-exemplary-design", "trainyard-rails-map-spec", "trainyard-request-hardening"]
+    },
+    {
+      "domain_id": "rdlc-labrack",
+      "label": "Labrack",
+      "lifecycle": "RDLC",
+      "terrain": "bedrock",
+      "depth": "stratum",
+      "scope": "instance",
+      "state": "dark-specified",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["domains", "dynamics", "intake"],
+      "surfaces": ["labrack-lens", "wide-context", "read-dark"],
+      "parity": "custody, assay, freeze, publish, convert",
+      "blocker": "face remains dark until RDLC model and validity gates are source-backed",
+      "source_refs": ["rdlc-research-log", "hapax-constitution-rdlc"]
+    },
+    {
+      "domain_id": "section-figure-presence",
+      "label": "Section-Figure Presence Plane",
+      "lifecycle": "binder",
+      "terrain": "horizon",
+      "depth": "core",
+      "scope": "instance",
+      "state": "design-ratified",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["domains", "windows", "surfaces"],
+      "surfaces": ["section-figure-lens", "air-lens", "split-context"],
+      "parity": "figure-ground global section over open lifecycle set",
+      "source_refs": ["rdlc-instantiation-positioning", "logos-trainyard-labrack-reorientation"]
+    },
+    {
+      "domain_id": "intake-observations",
+      "label": "Intake Observations",
+      "lifecycle": "SDLC",
+      "terrain": "horizon",
+      "depth": "stratum",
+      "scope": "instance",
+      "state": "observed",
+      "authority_ceiling": "metadata-only",
+      "claim_ceiling": "navigation",
+      "windows": ["intake", "events", "tasks"],
+      "surfaces": ["observation-feed", "filter", "read-dark"],
+      "parity": "request, P0, security, and Obsidian metadata snapshots",
+      "source_refs": ["sdlc-intake-claim-audit", "p0-incident-intake", "obsidian-sync-state"]
+    },
+    {
+      "domain_id": "logos-awareness",
+      "label": "Logos Awareness",
+      "lifecycle": "awareness",
+      "terrain": "bedrock",
+      "depth": "stratum",
+      "scope": "instance",
+      "state": "retired-runtime-salvage-source",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["surfaces", "domains", "capabilities"],
+      "surfaces": ["signal-pips", "terrain-depth", "severity-freshness"],
+      "parity": "terrain regions, signal grammar, presence functions; Tauri not revived",
+      "source_refs": ["logos-ui-reference", "logos-design-language", "hapax-logos-readme"]
+    },
+    {
+      "domain_id": "source-acquisition-routing",
+      "label": "Source Acquisition Routing",
+      "lifecycle": "SDLC",
+      "terrain": "horizon",
+      "depth": "stratum",
+      "scope": "instance",
+      "state": "admission-incomplete",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["capabilities", "domains", "intake"],
+      "surfaces": ["source-acquisition-router", "tool-capability-inventory", "read-dark"],
+      "parity": "Tavily, Perplexity, Context7, Drive/GitHub, and source-query connectors remain receipt-gated support capabilities",
+      "source_refs": ["capability-surface-discovery-20260625", "source-acquisition-subrouter"]
+    },
+    {
+      "domain_id": "verifier-floor-routing",
+      "label": "Verifier Floor Routing",
+      "lifecycle": "SDLC",
+      "terrain": "bedrock",
+      "depth": "core",
+      "scope": "instance",
+      "state": "preview-only",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["capabilities", "readiness", "domains"],
+      "surfaces": ["verifier-floor", "gate-stack", "read-dark"],
+      "parity": "Semgrep, Codecov, CodeQL, deterministic tests, runtime witnesses, and failure classifiers are verifier floors",
+      "source_refs": ["capability-surface-discovery-20260625", "worker-failure-witness"]
+    },
+    {
+      "domain_id": "provider-gateway-routing",
+      "label": "Provider Gateway Routing",
+      "lifecycle": "SDLC",
+      "terrain": "watershed",
+      "depth": "core",
+      "scope": "instance",
+      "state": "spend-forbidden",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["capabilities", "domains", "intent"],
+      "surfaces": ["provider-gateway", "tool-capability-inventory", "read-dark"],
+      "parity": "LiteLLM, OpenRouter, Hugging Face, Cohere, and local inference require explicit spend/control receipts",
+      "source_refs": ["capability-surface-discovery-20260625", "provider-gateway-policy"]
+    },
+    {
+      "domain_id": "publication-media-egress",
+      "label": "Publication and Media Egress",
+      "lifecycle": "SDLC",
+      "terrain": "horizon",
+      "depth": "core",
+      "scope": "instance",
+      "state": "admission-incomplete",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["capabilities", "domains", "intent"],
+      "surfaces": ["publication-egress", "audio-avsdlc", "air-lens"],
+      "parity": "research deposit, public social, Google/YouTube, audio generation, media recognition, and copyright gates",
+      "source_refs": ["capability-surface-discovery-20260625", "publication-egress-policy"]
+    },
+    {
+      "domain_id": "infrastructure-control",
+      "label": "Infrastructure Control",
+      "lifecycle": "ops",
+      "terrain": "bedrock",
+      "depth": "core",
+      "scope": "instance",
+      "state": "read-missing",
+      "authority_ceiling": "support_non_authoritative",
+      "claim_ceiling": "navigation",
+      "windows": ["capabilities", "domains", "intent"],
+      "surfaces": ["infra-control", "read-dark", "air-lens"],
+      "parity": "Backblaze, MinIO, Synology, restic, Tailscale, and network/admin surfaces require target, rollback, and destructive-preflight receipts",
+      "source_refs": ["capability-surface-discovery-20260625", "infra-authority-policy"]
+    }
+  ],
+  "relations": [
+    {
+      "source": "sdlc-trainyard",
+      "target": "sdlc-work",
+      "relation": "extends",
+      "source_refs": ["trainyard-exemplary-design"]
+    },
+    {
+      "source": "rdlc-labrack",
+      "target": "research-rdlc",
+      "relation": "extends",
+      "source_refs": ["rdlc-research-log"]
+    },
+    {
+      "source": "rdlc-labrack",
+      "target": "sdlc-trainyard",
+      "relation": "handoff_requires_sdlc_admission",
+      "source_refs": ["logos-trainyard-labrack-reorientation"]
+    },
+    {
+      "source": "logos-awareness",
+      "target": "section-figure-presence",
+      "relation": "salvages_into",
+      "source_refs": ["logos-ui-reference", "logos-design-language"]
+    },
+    {
+      "source": "intake-observations",
+      "target": "sdlc-trainyard",
+      "relation": "feeds",
+      "source_refs": ["sdlc-intake-claim-audit"]
+    },
+    {
+      "source": "source-acquisition-routing",
+      "target": "capability-routing",
+      "relation": "specializes",
+      "source_refs": ["capability-surface-discovery-20260625"]
+    },
+    {
+      "source": "verifier-floor-routing",
+      "target": "governance-readiness",
+      "relation": "feeds",
+      "source_refs": ["capability-surface-discovery-20260625"]
+    },
+    {
+      "source": "provider-gateway-routing",
+      "target": "capability-routing",
+      "relation": "spend_gated_by",
+      "source_refs": ["capability-surface-discovery-20260625"]
+    },
+    {
+      "source": "publication-media-egress",
+      "target": "governance-safety",
+      "relation": "egress_gated_by",
+      "source_refs": ["capability-surface-discovery-20260625"]
+    },
+    {
+      "source": "infrastructure-control",
+      "target": "governance-safety",
+      "relation": "operator_authority_required",
+      "source_refs": ["capability-surface-discovery-20260625"]
+    }
+  ]
+}
