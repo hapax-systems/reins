@@ -742,6 +742,27 @@ func TestCoordinatorChatInputQueuesLocally(t *testing.T) {
 	}
 }
 
+// The [v] object-verb menu: opens the focused task's STATE-LEGAL verbs; a legal pick pre-seeds the
+// governed COMMAND preview (mints nothing); illegal verbs are inert. Verbs attach to objects.
+func TestObjectVerbMenuPreviewsLegalVerb(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{
+		{TaskID: "rel-task", Stage: "S7", PredictedStage: "hold", AIR: map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok"}},
+	}, false)
+	m.Width, m.Height, m.Page = 200, 30, PageTasks
+	send := func(m Model, v tea.KeyMsg) Model { nm, _ := m.Update(v); return nm.(Model) }
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	if m.Mode != ModeVerbMenu {
+		t.Fatalf("[v] must open the object-verb menu, got mode %d", m.Mode)
+	}
+	if !strings.Contains(ansi.Strip(m.viewFloor(m.Width)), "[a]") {
+		t.Fatalf("the verb menu must light the legal verb arm:\n%s", ansi.Strip(m.viewFloor(m.Width)))
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.Mode != ModeCommand || m.Input != "arm rel-task" {
+		t.Fatalf("picking [a] must pre-seed the governed preview, got mode %d input %q", m.Mode, m.Input)
+	}
+}
+
 func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 	base := New("REINS").
 		Fold([]grammar.Event{{

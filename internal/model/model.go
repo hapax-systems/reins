@@ -39,6 +39,7 @@ const (
 	ModeHint      = 3 // hint-teleport: labels on visible rows, type one to jump (navigate by looking)
 	ModeFilter    = 4 // the filter input is focused — narrows the selectable rows by id substring
 	ModeCoordChat = 5 // the Yard Coordinator chat input is focused (coordinate over the lens selection)
+	ModeVerbMenu  = 6 // the object-verb menu — the focused task's STATE-LEGAL governed verbs (the [v] menu)
 )
 
 const splitContextMinWidth = 160
@@ -1881,6 +1882,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeCoordChat {
 			return m.updateCoordChat(v)
 		}
+		if m.Mode == ModeVerbMenu {
+			return m.updateVerbMenu(v)
+		}
 		if nm, cmd, ok := m.updateGlobal(v); ok {
 			return nm, cmd
 		}
@@ -1905,6 +1909,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageCoordinator {
 				m.Mode, m.CoordChatInput = ModeCoordChat, ""
 				m.Status = "coordinate: type a message · [Enter] queue (send gated · CapabilityIO session backend) · [Esc] cancel"
+				return m, nil
+			}
+		case "v": // object-verb menu — the focused task's STATE-LEGAL governed verbs (verbs attach to objects)
+			if _, ok := m.FocusedTask(); ok && (m.Page == PageTasks || m.Page == PageCoordinator) {
+				m.Mode = ModeVerbMenu
+				m.Status = "verbs on the focused task — legal only; pick one to preview, [Esc] cancels"
 				return m, nil
 			}
 		case "f": // hint teleport — labels bloom on visible rows; type one to jump (by looking)
@@ -2580,6 +2590,35 @@ func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.CoordChatInput += " "
 	case tea.KeyRunes:
 		m.CoordChatInput += string(v.Runes)
+	}
+	return m, nil
+}
+
+// updateVerbMenu handles the object-verb menu (ModeVerbMenu): a verb key pre-seeds the governed COMMAND
+// preview for the focused task IF that verb is state-legal (illegal verbs are inert — verbs attach to
+// objects, not to memory). [Esc] dismisses. It mints nothing; it only opens the preview path.
+func (m Model) updateVerbMenu(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if keyName(v) == "esc" {
+		m.Mode = ModeNormal
+		return m, nil
+	}
+	t, ok := m.FocusedTask()
+	if !ok {
+		m.Mode = ModeNormal
+		return m, nil
+	}
+	if v.Type == tea.KeyRunes && len(v.Runes) == 1 {
+		for _, vb := range grammar.TaskVerbs(t) {
+			if vb.Key == string(v.Runes) {
+				if !vb.Legal {
+					m.Status = vb.Name + ": not legal for this task's stage"
+					return m, nil
+				}
+				m.Mode, m.Input, m.CompIdx = ModeCommand, vb.Name+" "+t.TaskID, 0
+				m.Status = "preview " + vb.Name + " " + t.TaskID + " — routes through governed COMMAND; mints nothing"
+				return m, nil
+			}
+		}
 	}
 	return m, nil
 }

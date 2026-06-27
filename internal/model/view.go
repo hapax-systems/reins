@@ -10707,6 +10707,28 @@ func (m Model) sessionRail(w int) string {
 // Z3 — command/status floor: row1 = bezel + keys + lens; row2 = the command-as-effect line.
 // In command mode the floor is given over to the completion experience: row1 = the prompt + input
 // (with the navigation legend), row2 = the navigable candidate strip.
+// verbMenuFloor renders the object-verb menu (ModeVerbMenu): the focused task's verbs — legal ones lit
+// + pickable, illegal ones dimmed. Verbs attach to the OBJECT (state-legal only), never to memory; a
+// pick pre-seeds the governed COMMAND preview (the cockpit never mints authority).
+func (m Model) verbMenuFloor(w int) string {
+	t, ok := m.FocusedTask()
+	if !ok {
+		return grammar.C("mut", " no focused task") + "\n"
+	}
+	id := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR)
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "VERBS") + grammar.C("mut", " on ") + grammar.C("pri", clipRunes(id, 28)) +
+		grammar.C("mut", "  (legal only · pick to preview · [Esc])") + "  ")
+	for _, vb := range grammar.TaskVerbs(t) {
+		if vb.Legal {
+			b.WriteString(grammar.C("yel", "["+vb.Key+"]") + grammar.C("pri", " "+vb.Name+"  "))
+		} else {
+			b.WriteString(grammar.C("mut", " "+vb.Name+"  "))
+		}
+	}
+	return clipRunes(b.String(), w) + "\n" + grammar.C("mut", " verbs route through the governed COMMAND surface — the cockpit never mints authority")
+}
+
 func (m Model) viewFloor(w int) string {
 	if m.Mode == ModeCommand {
 		prompt := inputPromptLine(":", m.commandInputDisplay(), "[Tab/↓]next · [→]fill · [↵]accept · [Esc]cancel", w)
@@ -10715,6 +10737,9 @@ func (m Model) viewFloor(w int) string {
 	if m.Mode == ModeFilter { // same fish-style candidate strip as the command line
 		prompt := inputPromptLine("/", m.Filter, fmt.Sprintf("%d match · [Tab/↓]ids · [→]fill · [↵]keep · [Esc]clear", len(m.visibleTasks())), w)
 		return prompt + "\n" + m.completionStrip(w)
+	}
+	if m.Mode == ModeVerbMenu { // the object-verb menu — state-legal governed verbs on the focused task
+		return m.verbMenuFloor(w)
 	}
 	lens := grammar.C("pri", "LOCAL")
 	if m.AIR {

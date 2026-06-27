@@ -1315,6 +1315,7 @@ func RenderHelp() string {
 		"  [/] filter         id substring filter; completion offers visible ids",
 		"  [f] hint/select    row letters, O/W/M/C class filters, 1/2 Act-jumps",
 		"  [V] class-select   select visible siblings with the same criticality; [Esc] clears",
+		"  [v] verbs         object-verb menu: the focused task's STATE-LEGAL governed verbs (mints nothing)",
 		"",
 		"EVENTS",
 		"  [j/k]/[g/G]        move the event cursor",

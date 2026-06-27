@@ -193,27 +193,37 @@ func whoisAuthorizationLines(t Task, w int, airOn bool) []string {
 	return out
 }
 
-func whoisVerbDock(w int, t Task, stage int) string {
+// TaskVerb is one governed action on a task with its current state-legality. The /whois verb dock AND
+// the [v] object-verb menu read the SAME legality (verbs attach to OBJECTS, not to memory) — one source.
+type TaskVerb struct {
+	Key, Name string
+	Legal     bool
+}
+
+// TaskVerbs returns the governed verbs for a task with their SDLC-stage-gated legality. A done task
+// offers none; an S7-hold task offers arm/rework. They route through the governed COMMAND surface — the
+// cockpit never mints authority; the [v] menu only pre-seeds the preview.
+func TaskVerbs(t Task) []TaskVerb {
 	pred := strings.ToLower(strings.TrimSpace(t.PredictedStage))
-	verbs := []struct {
-		key   string
-		name  string
-		legal bool
-	}{
-		{key: "a", name: "arm", legal: stage >= 7 && pred == "hold"},
-		{key: "r", name: "rework", legal: pred == "hold"},
-		{key: "f", name: "refute", legal: stage >= 5},
-		{key: "c", name: "close", legal: pred == "ship"},
+	stage := whoisStageIndex(t.Stage)
+	return []TaskVerb{
+		{Key: "a", Name: "arm", Legal: stage >= 7 && pred == "hold"},
+		{Key: "r", Name: "rework", Legal: pred == "hold"},
+		{Key: "f", Name: "refute", Legal: stage >= 5},
+		{Key: "c", Name: "close", Legal: pred == "ship"},
 	}
+}
+
+func whoisVerbDock(w int, t Task, stage int) string {
 	segs := []whoisSeg{{"mut", "VERB DOCK: "}}
-	for i, v := range verbs {
+	for i, v := range TaskVerbs(t) {
 		if i > 0 {
 			segs = append(segs, whoisSeg{"mut", " "})
 		}
-		if v.legal {
-			segs = append(segs, whoisSeg{"yel", "[" + v.key + "]"}, whoisSeg{"pri", " " + v.name})
+		if v.Legal {
+			segs = append(segs, whoisSeg{"yel", "[" + v.Key + "]"}, whoisSeg{"pri", " " + v.Name})
 		} else {
-			segs = append(segs, whoisSeg{"mut", " " + v.name + " "})
+			segs = append(segs, whoisSeg{"mut", " " + v.Name + " "})
 		}
 	}
 	return whoisLine(w, segs...)
