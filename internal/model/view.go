@@ -748,17 +748,21 @@ func (m Model) coordinatorContextPane(w, h int) string {
 func (m Model) coordinatorThroughputLine(w int) string {
 	wip := len(m.Tasks)
 	held, hot := 0, 0
+	fresh := make([]float64, 0, len(m.Tasks))
 	for _, t := range m.Tasks {
 		if t.Criticality == "crit" || t.Criticality == "major" || t.PredictedStage == "hold" {
 			held++
 		}
+		fresh = append(fresh, t.Freshness)
 	}
 	for _, s := range m.Sessions {
 		if s.Attention >= 0.5 {
 			hot++
 		}
 	}
-	msg := fmt.Sprintf("THROUGHPUT  WIP %d · limiting %d held/blocked · %d hot lanes · speed/provider/fanout = DERIVED", wip, held, hot)
+	sort.Slice(fresh, func(i, j int) bool { return fresh[i] > fresh[j] }) // the freshness PROFILE, fresh→stale
+	spark := grammar.Sparkline(fresh, 24)
+	msg := fmt.Sprintf("THROUGHPUT  WIP %d · limiting %d held · %d hot · fresh %s · speed/provider = DERIVED", wip, held, hot, spark)
 	return " " + grammar.C("2nd", clipRunes(msg, maxVisible(8, w-1)))
 }
 
