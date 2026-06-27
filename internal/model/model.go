@@ -1878,6 +1878,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeFilter {
 			return m.updateFilter(v)
 		}
+		if m.Mode == ModeCoordChat {
+			return m.updateCoordChat(v)
+		}
 		if nm, cmd, ok := m.updateGlobal(v); ok {
 			return nm, cmd
 		}
@@ -1898,6 +1901,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Status = "filter: :tasks only"
 			}
 			return m, nil
+		case "c": // Yard Coordinator: open the chat input to coordinate over the lens selection
+			if m.Page == PageCoordinator {
+				m.Mode, m.CoordChatInput = ModeCoordChat, ""
+				m.Status = "coordinate: type a message · [Enter] queue (send gated · #4296) · [Esc] cancel"
+				return m, nil
+			}
 		case "f": // hint teleport — labels bloom on visible rows; type one to jump (by looking)
 			switch {
 			case m.Page != PageTasks:
@@ -2544,6 +2553,33 @@ func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		m.Filter, m.Focus, m.CompIdx = m.Filter+string(v.Runes), 0, 0
 		m.Sel.Members = nil
+	}
+	return m, nil
+}
+
+// updateCoordChat handles the Yard Coordinator chat input (ModeCoordChat). Printable runes append to
+// the buffer; [Enter] QUEUES the message into the local CoordChatLog (it mints no authority and
+// dispatches nothing — live agent SEND is gated on CapabilityIO #4296); [Esc] cancels. The lens
+// selection it coordinates over is transcluded into the chat by coordinatorChatTurns (reference-not-copy).
+func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch v.Type {
+	case tea.KeyEnter:
+		if msg := strings.TrimSpace(m.CoordChatInput); msg != "" {
+			m.CoordChatLog = append(m.CoordChatLog, msg)
+			m.Status = "coordinate: queued locally (send gated · CapabilityIO #4296)"
+		}
+		m.Mode, m.CoordChatInput = ModeNormal, ""
+	case tea.KeyEsc:
+		m.Mode, m.CoordChatInput = ModeNormal, ""
+		m.Status = ":coordinator"
+	case tea.KeyBackspace:
+		if r := []rune(m.CoordChatInput); len(r) > 0 {
+			m.CoordChatInput = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.CoordChatInput += " "
+	case tea.KeyRunes:
+		m.CoordChatInput += string(v.Runes)
 	}
 	return m, nil
 }

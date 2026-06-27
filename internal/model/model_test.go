@@ -716,6 +716,32 @@ func TestCoordinatorLensDrivesContext(t *testing.T) {
 	}
 }
 
+// The Yard Coordinator chat input: [c] opens it, typing fills the buffer, [Enter] QUEUES the message
+// locally (mints nothing — live dispatch gated on #4296) and it renders as an operator turn.
+func TestCoordinatorChatInputQueuesLocally(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{{TaskID: "alpha-task", AIR: map[string]string{"task_id": "ok"}}}, false)
+	m.Width, m.Height, m.Page = 230, 30, PageCoordinator
+	send := func(m Model, v tea.KeyMsg) Model { nm, _ := m.Update(v); return nm.(Model) }
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.Mode != ModeCoordChat {
+		t.Fatalf("[c] must open the coordinator chat input on PageCoordinator, got mode %d", m.Mode)
+	}
+	for _, r := range "hold release" {
+		if r == ' ' {
+			m = send(m, tea.KeyMsg{Type: tea.KeySpace})
+		} else {
+			m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Mode != ModeNormal || len(m.CoordChatLog) != 1 || m.CoordChatLog[0] != "hold release" {
+		t.Fatalf("[Enter] must queue the message locally, log=%v mode=%d", m.CoordChatLog, m.Mode)
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "hold release") {
+		t.Fatalf("the queued chat message must render as a turn:\n%s", ansi.Strip(m.View()))
+	}
+}
+
 func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 	base := New("REINS").
 		Fold([]grammar.Event{{

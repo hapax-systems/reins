@@ -570,23 +570,46 @@ func hconcatCols(div string, h int, cols ...[]string) string {
 // when wide, lens │ coordinator when medium, coordinator-only when narrow.
 func (m Model) coordinatorBody(w, h int) string {
 	div := grammar.C("border", "│")
-	if w >= 200 { // LENS │ COORDINATOR │ CHAT
+	banner := m.coordinatorRelationBanner(w)
+	ch := h - 1 // the relationship banner owns row 0; the columns fill the rest
+	if ch < 1 {
+		ch = 1
+	}
+	var cols string
+	switch {
+	case w >= 200: // LENS │ COORDINATOR │ CHAT
 		lensW := 72
 		rest := w - lensW - 2
 		coordW := rest / 2
 		chatW := rest - coordW
-		lens := fitBlock(m.coordinatorLensPane(lensW, h), lensW, h)
-		coord := fitBlock(m.coordinatorContextPane(coordW, h), coordW, h)
-		chat := fitBlock(m.coordinatorChatPane(chatW, h), chatW, h)
-		return hconcatCols(div, h, lens, coord, chat)
+		lens := fitBlock(m.coordinatorLensPane(lensW, ch), lensW, ch)
+		coord := fitBlock(m.coordinatorContextPane(coordW, ch), coordW, ch)
+		chat := fitBlock(m.coordinatorChatPane(chatW, ch), chatW, ch)
+		cols = hconcatCols(div, ch, lens, coord, chat)
+	default:
+		leftW, rightW, ok := splitContextWidths(w)
+		if !ok { // narrow: coordinator only (lens + chat fold away)
+			return banner + "\n" + m.coordinatorContextPane(w, h-1)
+		}
+		left := fitBlock(m.coordinatorLensPane(leftW, ch), leftW, ch)
+		right := fitBlock(m.coordinatorContextPane(rightW, ch), rightW, ch)
+		cols = hconcatCols(div, ch, left, right)
 	}
-	leftW, rightW, ok := splitContextWidths(w)
-	if !ok { // narrow: coordinator only (lens + chat fold away)
-		return m.coordinatorContextPane(w, h)
+	return banner + "\n" + cols
+}
+
+// coordinatorRelationBanner names the coordination TYPE + join, always-on (framework §5: "adjacency is
+// never mysterious"). The lens selection drives the coordinator + chat; the SAME selected id echoes
+// across all three panes — the brush made legible. Dual-coded (word + the ⟶ connector glyph).
+func (m Model) coordinatorRelationBanner(w int) string {
+	sel := "—"
+	if t, ok := m.FocusedTask(); ok {
+		if id := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR); strings.TrimSpace(id) != "" {
+			sel = id
+		}
 	}
-	left := fitBlock(m.coordinatorLensPane(leftW, h), leftW, h)
-	right := fitBlock(m.coordinatorContextPane(rightW, h), rightW, h)
-	return hconcatCols(div, h, left, right)
+	msg := fmt.Sprintf("▶ COORDINATION   lens selection ⟶ drives ⟶ coordinator + chat   ·   join: {{sel}} lattice-descent   ·   sel=%s", sel)
+	return " " + grammar.C("2nd", clipRunes(msg, maxVisible(8, w-1)))
 }
 
 // coordinatorChatPane: the Yard Coordinator's CHAT surface (framework §5 — the Hapax-chat adjacency).
