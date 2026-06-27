@@ -585,6 +585,14 @@ func (m Model) composePage(w, h int) *layout.Spec {
 	switch m.Page {
 	case PageCoordinator:
 		return m.specCoordinator()
+	case PageEvents:
+		if m.EventsDark {
+			return nil // dark: fall through to eventsBody (preserves the dark-reason disclosure)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.eventsListBody(pw, ph) }},
+			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.eventContextPane(pw) }},
+			0.65, m.eventsEmergentRelation())
 	case PageDispatch:
 		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
 		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
@@ -687,6 +695,57 @@ func taskEntity(t grammar.Task) relate.Entity {
 		"crit":  t.Criticality,
 		"case":  t.AuthorityCase,
 	}}
+}
+
+// eventEntity / sessionEntity mirror taskEntity — the per-page anchor's facets feed relate.Derive so
+// the connector relation is EMERGENT (strongest shared facet), never authored. Events have no id, so
+// identity is the (ts,kind,subject) composite (used only to skip the anchor from its own others set).
+func eventEntity(e grammar.Event) relate.Entity {
+	return relate.Entity{ID: e.TS + "|" + e.Kind + "|" + e.Subject, Facets: map[string]string{
+		"subject": e.Subject,
+		"actor":   e.Actor,
+		"kind":    shortKindForPanel(e.Kind),
+	}}
+}
+
+func sessionEntity(s grammar.Session) relate.Entity {
+	id := s.Session
+	if id == "" {
+		id = s.Role
+	}
+	return relate.Entity{ID: id, Facets: map[string]string{
+		"role":      s.Role,
+		"task":      s.ClaimedTask,
+		"readiness": s.Readiness,
+	}}
+}
+
+// specListContext is the shared STANDING-ELUCIDATE shape: a list primary │ the focused row's context
+// secondary, joined by the EMERGENT connector relation. Every self-anchored cohort page composes
+// through this — the generalization of specCoordinator's split.
+func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, relation string) *layout.Spec {
+	div := grammar.C("border", "│")
+	return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio,
+		layout.Connector{Glyph: div, Relation: relation})
+}
+
+// eventsEmergentRelation anchors on the focused event; others = the rest of m.Events. AIR-aware via
+// emergentRelation (facet VALUES withheld on air).
+func (m Model) eventsEmergentRelation() string {
+	focused, ok := m.FocusedEvent()
+	if !ok {
+		return ""
+	}
+	anchor := eventEntity(focused)
+	others := make([]relate.Entity, 0, len(m.Events))
+	for _, e := range m.Events {
+		oe := eventEntity(e)
+		if oe.ID == anchor.ID {
+			continue
+		}
+		others = append(others, oe)
+	}
+	return m.emergentRelation(anchor, others, nil)
 }
 
 // airRelationLabel renders an emergent relation, withholding sensitive facet VALUES (owner/case)

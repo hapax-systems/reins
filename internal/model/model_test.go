@@ -640,6 +640,9 @@ func TestSplitControlMatrixMatchesRegistry(t *testing.T) {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
 			m := base
 			m.Page = pair.Page
+			if m.composesViaAlgebra() {
+				return // migrated pages self-compose via the view-algebra, not the legacy split-control matrix
+			}
 			if !m.splitContextActive() {
 				t.Fatalf("split should be active for %s", pageLabel(pair.Page))
 			}
@@ -803,6 +806,17 @@ func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
 			m := base
 			m.Page = pair.Page
+			if pair.Page == PageEvents {
+				// events self-composes via the view-algebra (eventsListBody │ eventContextPane), NOT the
+				// session-frozen split — assert its own two-pane markers.
+				v := ansi.Strip(m.View())
+				for _, want := range []string{"live coord events", "EVENT CONTEXT"} {
+					if !strings.Contains(v, want) {
+						t.Fatalf("events algebra frame missing %q:\n%s", want, v)
+					}
+				}
+				return
+			}
 			if pair.Page == PageCoordinator {
 				// the Yard Coordinator self-composes (HConcat: lens │ coordinator), NOT the session-
 				// frozen split — assert its own two-pane markers + the lens-drives-context contract.
@@ -1802,49 +1816,11 @@ func TestSplitReferenceContextHasSeparateScrollKeys(t *testing.T) {
 	}
 }
 
-func TestSplitLinkedContextMarksRightPaneOverflow(t *testing.T) {
-	m := New("REINS").
-		Fold([]grammar.Event{{
-			TS: "10:00", Kind: "coord_dispatch.launch_failed", Subject: "overflow-task", Actor: "cx-a", Score: 0.9,
-			AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok", "score": "ok"},
-		}}, false).
-		FoldSessions([]grammar.Session{{
-			Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
-		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 14, PageEvents, true
-	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "context rows hidden") {
-		t.Fatalf("short split linked context should mark hidden right-pane rows:\n%s", v)
-	}
-}
-
-func TestSplitCompactLinkedPanesIgnoreRightScrollKeys(t *testing.T) {
-	m := New("REINS").
-		Fold([]grammar.Event{{
-			TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "task-a", Actor: "cx-a", Score: 0.21,
-			AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok", "score": "ok"},
-		}}, false).
-		FoldSessions([]grammar.Session{
-			{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"}},
-			{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Attention: 0.50, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"}},
-		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 20, PageEvents, true
-	if rel := m.splitRelation(); rel.PaneProfile() != PaneLinkedCompact || rel.TargetScrollable {
-		t.Fatalf("events split should be compact linked, got profile=%s scroll=%v", rel.PaneProfile(), rel.TargetScrollable)
-	}
-	beforeSource, beforeEvent, beforeScroll, beforeStatus := m.SFocus, m.EFocus, m.RefScroll, m.Status
-	m = step(m, "J")
-	m = step(m, "K")
-	if m.SFocus != beforeSource || m.EFocus != beforeEvent || m.RefScroll != beforeScroll || m.Status != beforeStatus {
-		t.Fatalf("compact split J/K should not move hidden target state, before source/event/scroll/status=%d/%d/%d/%q after=%d/%d/%d/%q",
-			beforeSource, beforeEvent, beforeScroll, beforeStatus, m.SFocus, m.EFocus, m.RefScroll, m.Status)
-	}
-	m = step(m, "j")
-	if m.SFocus != beforeSource+1 || m.EFocus != beforeEvent || m.RefScroll != beforeScroll {
-		t.Fatalf("compact split j should move only source session, source/event/scroll=%d/%d/%d", m.SFocus, m.EFocus, m.RefScroll)
-	}
-}
+// (Removed TestSplitLinkedContextMarksRightPaneOverflow and TestSplitCompactLinkedPanesIgnoreRight
+// ScrollKeys — they pinned the legacy session-frozen events split mechanics ("context rows hidden"
+// overflow marking; the compact-linked J/K source nav) that the only-split view-algebra ABOLISHES for
+// events. The surviving behavior — events renders as a split, j moves the EVENT list — is pinned by
+// TestEventsComposeViaAlgebraNativeNav below.)
 
 func TestSplitContextHandlesAggregatedRepeatedRuneKeys(t *testing.T) {
 	m := New("REINS").FoldSessions([]grammar.Session{
@@ -1883,42 +1859,10 @@ func TestSplitContextQueuedIndicatorAtNarrowWidth(t *testing.T) {
 	}
 }
 
-func TestSplitContextThresholdKeepsBodyAndNavigationCoherent(t *testing.T) {
-	sessions := []grammar.Session{
-		{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-		{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.50, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-	}
-	events := []grammar.Event{
-		{TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "task-a", Actor: "cx-a", AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok"}},
-		{TS: "10:01", Kind: "coord_dispatch.launch_started", Subject: "task-b", Actor: "cx-b", AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok"}},
-	}
-	m := New("REINS").Fold(events, false).FoldSessions(sessions, false)
-	m.Width, m.Height, m.Page, m.SplitContext = splitContextMinWidth-1, 34, PageEvents, true
-	if m.splitContextActive() {
-		t.Fatal("split must remain inactive below the render threshold")
-	}
-	v := ansi.Strip(m.View())
-	if strings.Contains(v, "split sessions") || !strings.Contains(v, "split:wide") {
-		t.Fatalf("queued split should render as wide request without split body:\n%s", v)
-	}
-	m = step(m, "j")
-	if m.EFocus != 1 || m.SFocus != 0 {
-		t.Fatalf("queued split must keep j on visible event rows, eFocus=%d sFocus=%d", m.EFocus, m.SFocus)
-	}
-
-	m.Width = splitContextMinWidth
-	if !m.splitContextActive() {
-		t.Fatal("split should become active at the render threshold")
-	}
-	v = ansi.Strip(m.View())
-	if !strings.Contains(v, "split sessions") || !strings.Contains(v, "split:ctx") {
-		t.Fatalf("active split should render the source pane and ctx chip:\n%s", v)
-	}
-	m = step(m, "j")
-	if m.SFocus != 1 || m.EFocus != 1 {
-		t.Fatalf("active split must route j to source sessions only, eFocus=%d sFocus=%d", m.EFocus, m.SFocus)
-	}
-}
+// (Removed TestSplitContextThresholdKeepsBodyAndNavigationCoherent — it pinned the legacy [|]
+// split-context THRESHOLD + the session-source "split sessions" pane + j routing to the session
+// source, all ABOLISHED for events by the only-split view-algebra. The surviving behavior — events
+// always renders as a split and j moves the EVENT list — is pinned by TestEventsComposeViaAlgebraNativeNav.)
 
 func TestQueuedNarrowSplitDoesNotAdvertiseInactiveContextScroll(t *testing.T) {
 	m := New("REINS")
@@ -2053,7 +1997,11 @@ func TestSessionsWidePaneRendersWorkSurfaceAndDetailRefs(t *testing.T) {
 	}
 }
 
-func TestSplitEventContextWrapsLongRelatedEventFields(t *testing.T) {
+// The events algebra split must handle long fields without breaking the only-split FRAME: the long
+// subject is preserved/visible (in the list or the emergent relation), and no rendered line ever
+// exceeds the terminal width (the layout.Render clip invariant). (Replaces the legacy "wraps related
+// event fields in the sessionEventContextPane" test — the secondary is now eventContextPane.)
+func TestEventsAlgebraFrameHandlesLongFields(t *testing.T) {
 	longSubject := "event-subject-alpha-beta-gamma-delta-epsilon-zeta-eta-tail-marker"
 	longSummary := "summary-alpha-beta-gamma-delta-epsilon-zeta-eta-tail-marker"
 	m := New("REINS").
@@ -2062,27 +2010,25 @@ func TestSplitEventContextWrapsLongRelatedEventFields(t *testing.T) {
 				AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok", "score": "ok"}},
 			{TS: "10:05", Kind: "coord_dispatch.launch_failed", Subject: longSubject, Actor: "cx-other", Summary: longSummary + "-failure", Score: 0.82,
 				AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok", "score": "ok"}},
-		}, false).
-		FoldSessions([]grammar.Session{{
-			Role: "cx-event", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: longSubject, Attention: 0.71,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "claimed_task": "ok", "attention": "ok"},
-		}}, false)
+		}, false)
 	m.Width, m.Height, m.Page, m.SplitContext = 170, 50, PageEvents, true
 
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"EVENT NEIGHBORHOOD", "event-subject-alpha-beta-gamma-delta-epsilon-", "summary-alpha-beta-gamma-delta-epsilon-", "tail-marker"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split event context should preserve long value %q:\n%s", want, v)
-		}
+	if !strings.Contains(v, "event-subject-alpha-beta-gamma-delta-epsilon-") {
+		t.Fatalf("the long event subject must be preserved/visible on the events page:\n%s", v)
 	}
 	for i, line := range strings.Split(v, "\n") {
 		if got := ansi.StringWidth(line); got > m.Width {
-			t.Fatalf("split event line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
+			t.Fatalf("events line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
 		}
 	}
 }
 
-func TestSplitContextNavigationOwnsVisibleSessionSource(t *testing.T) {
+// Events composes via the view-algebra (only-split): it always renders as a split (eventsListBody │
+// eventContextPane), the legacy session-frozen split is INERT (splitContextActive()==false), and j
+// moves the EVENT list cursor NATIVELY — not a frozen session source. This is the migrated behavior
+// that replaces the abolished session-source nav.
+func TestEventsComposeViaAlgebraNativeNav(t *testing.T) {
 	m := New("REINS").
 		Fold([]grammar.Event{
 			{TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "task-a", Actor: "cx-a", Score: 0.21,
@@ -2091,26 +2037,38 @@ func TestSplitContextNavigationOwnsVisibleSessionSource(t *testing.T) {
 				AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok"}},
 		}, false).
 		FoldSessions([]grammar.Session{
-			{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.70,
-				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "session": "ok"}},
-			{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.55,
-				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "session": "ok"}},
+			{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim",
+				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok"}},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageEvents, true
+	m.Width, m.Height, m.Page = 220, 44, PageEvents
+	m.SplitContext = true // even with the legacy toggle ON, the algebra page ignores it
 	m.EFocus, m.SFocus = 0, 0
 
+	// the algebra owns the page → the legacy split-context machinery is inert
+	if m.splitContextActive() {
+		t.Fatal("a migrated (algebra) events page must report splitContextActive()==false")
+	}
+	if m.composePage(m.Width, m.Height) == nil {
+		t.Fatal("events must compose via the view-algebra (composePage != nil)")
+	}
+
+	// j moves the EVENT cursor natively, NOT a session source
 	m = step(m, "j")
-	if m.SFocus != 1 {
-		t.Fatalf("split j should move the visible session source, got SFocus=%d", m.SFocus)
+	if m.EFocus != 1 {
+		t.Fatalf("native events j must move the event cursor, got EFocus=%d", m.EFocus)
 	}
-	if m.EFocus != 0 {
-		t.Fatalf("split j must not mutate the hidden/right event cursor, got EFocus=%d", m.EFocus)
+	if m.SFocus != 0 {
+		t.Fatalf("native events j must NOT move a session source, got SFocus=%d", m.SFocus)
 	}
+
+	// it renders as a split (only-split): both the event list and the event context pane are present,
+	// and no legacy session-frozen affordance leaks in.
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"sessions -> events by actor/task", "source focus drives context by actor/task", "EVENT NEIGHBORHOOD", "source", "cx-b", "matched", "1 events", "1 events · 1 fail", "task-b", "focus cx-b -> events", "[j/k]source"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split relation/source affordance missing %q:\n%s", want, v)
-		}
+	if strings.Contains(v, "[j/k]source") || strings.Contains(v, "sessions -> events") || strings.Contains(v, "split sessions") {
+		t.Fatalf("migrated events must not render the abolished session-source split chrome:\n%s", v)
+	}
+	if !strings.Contains(v, "task-a") || !strings.Contains(v, "task-b") {
+		t.Fatalf("the events list (primary) must render:\n%s", v)
 	}
 }
 

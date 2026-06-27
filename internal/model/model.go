@@ -633,9 +633,29 @@ func (m Model) lifecycleRowCount() int {
 	return len(registeredLifecycleFallbacks())
 }
 
+// composesViaAlgebra reports whether the current page renders through the view-algebra (composePage)
+// rather than the legacy split / single-pane path. Migrated pages own their own navigation (native
+// row nav) and rendering (the layout.Spec fold), so the legacy SplitContext machinery must NOT engage
+// for them — this predicate is the single switch that keeps the ~45 splitContextActive() sites
+// consistent with composePage as cohorts migrate. It mirrors composePage's per-page logic (incl. the
+// events dark fall-through, where the page reverts to the legacy dark-hint body). Crucially, flipping
+// splitContextActive() false for events makes commandSelectionPage() return PageEvents (not the
+// session source), so {{focus}}/{{sel.*}}/yank/paste bind to the focused EVENT natively — no separate
+// wiring needed.
+func (m Model) composesViaAlgebra() bool {
+	switch m.Page {
+	case PageEvents:
+		return !m.EventsDark
+	}
+	return false
+}
+
 func (m Model) splitContextActive() bool {
 	if !m.SplitContext {
 		return false
+	}
+	if m.composesViaAlgebra() {
+		return false // the algebra owns this page; the legacy split-context nav/render must not engage
 	}
 	if m.Width < splitContextMinWidth {
 		return false

@@ -137,7 +137,10 @@ func TestSessionTemplateHonorsAir(t *testing.T) {
 	}
 }
 
-func TestSplitContextTemplatesBindToSessionSource(t *testing.T) {
+// Post-migration, events composes via the view-algebra → splitContextActive()==false →
+// commandSelectionPage() returns PageEvents, so {{focus}}/{{sel.*}}/intent bind to the focused EVENT
+// natively. The session-source binding was purely an artifact of the (abolished) legacy split.
+func TestEventsTemplatesBindToEventFocusNatively(t *testing.T) {
 	m := New("REINS").
 		FoldTasks([]grammar.Task{{TaskID: "hidden-task", AIR: map[string]string{"task_id": "ok"}}}, false).
 		Fold([]grammar.Event{{
@@ -151,22 +154,21 @@ func TestSplitContextTemplatesBindToSessionSource(t *testing.T) {
 			},
 		}}, false)
 	m.Width, m.Height, m.Page, m.SplitContext = 170, 40, PageEvents, true
-	if !m.splitContextActive() {
-		t.Fatal("test requires active split context")
+	if m.splitContextActive() {
+		t.Fatal("a migrated events page must not be split-context-active")
 	}
-
-	if got := m.resolveTemplate("{{focus}}"); got != "cx-source" {
-		t.Fatalf("split {{focus}} should bind to visible session source, got %q", got)
+	if got := m.resolveTemplate("{{focus}}"); got != "hidden-event" {
+		t.Fatalf("events {{focus}} must bind to the focused EVENT subject natively, got %q", got)
 	}
-	if got := m.resolveTemplate("{{sel.platform}}"); got != "codex" {
-		t.Fatalf("split {{sel.platform}} should resolve from visible session source, got %q", got)
+	if got := m.resolveTemplate("{{sel.kind}}"); got != "coord_dispatch.launch_started" {
+		t.Fatalf("events {{sel.kind}} must resolve the focused EVENT kind (sessions have no kind), got %q", got)
 	}
-	if out := m.Exec("intent show-route"); out.IntentSubject != "session cx-source" {
-		t.Fatalf("split intent subject should bind to visible session source, got %q", out.IntentSubject)
+	if out := m.Exec("intent show-route"); strings.Contains(out.IntentSubject, "session cx-source") {
+		t.Fatalf("events intent subject must NOT bind to the abolished session source, got %q", out.IntentSubject)
 	}
 }
 
-func TestSplitContextSelectedFieldTemplatesAndPasteUseSessionSource(t *testing.T) {
+func TestEventsSelectedFieldTemplatesAndPasteUseEventRow(t *testing.T) {
 	m := New("REINS").
 		Fold([]grammar.Event{{
 			TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "hidden-event", Actor: "cx-source",
@@ -177,15 +179,15 @@ func TestSplitContextSelectedFieldTemplatesAndPasteUseSessionSource(t *testing.T
 			AIR: map[string]string{"role": "ok", "session": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
 	m.Width, m.Height, m.Page, m.SplitContext = 170, 40, PageEvents, true
-	m.Sel.Rank, m.Sel.Field = RankField, "platform"
+	m.Sel.Rank, m.Sel.Field = RankField, "actor" // an EVENT field, not a session field
 
-	if got := m.resolveTemplate("{{sel.field}}={{sel.value}}"); got != "platform=codex" {
-		t.Fatalf("split selected field template should use session field, got %q", got)
+	if got := m.resolveTemplate("{{sel.field}}={{sel.value}}"); got != "actor=cx-source" {
+		t.Fatalf("events selected-field template must use the focused EVENT field, got %q", got)
 	}
 	m.Mode, m.Input = ModeCommand, "paste"
 	cands := m.completionTree()
-	if len(cands) == 0 || cands[0].Label != pastePrefix+"platform" || cands[0].Value != "codex" {
-		t.Fatalf("split paste candidate should lead with selected session field, got %+v", cands)
+	if len(cands) == 0 || cands[0].Label != pastePrefix+"actor" || cands[0].Value != "cx-source" {
+		t.Fatalf("events paste candidate should lead with the selected EVENT field, got %+v", cands)
 	}
 }
 
