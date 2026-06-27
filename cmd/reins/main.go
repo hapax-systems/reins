@@ -324,6 +324,23 @@ func main() {
 				sk := func() map[string]string {
 					return map[string]string{"ts": "ok", "kind": "ok", "role": "ok", "model": "ok", "route": "ok", "gate": "ok", "magnitude": "ok"}
 				}
+				detail := false
+				for _, b := range os.Args[2:] {
+					if b == "--detail" {
+						detail = true
+					}
+				}
+				if detail { // expanded single-turn tree (progressive-disclosure summon view)
+					hdr := grammar.Turn{TS: "2026-06-26T18:40:07Z", Role: "cc-reins", Kind: "assistant", Summary: "fix the flaky trace test", Magnitude: 0.5, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass", AIR: sk()}
+					blks := []grammar.TurnBlock{
+						{Kind: "reasoning", Summary: "widen the 3s timeout; inject a fake clock", Magnitude: 0.4, AIR: map[string]string{"kind": "ok"}},
+						{Kind: "tool_call", Summary: "go test ./... -run Trace", Magnitude: 0.5, Meta: "Bash", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
+						{Kind: "tool_result", Summary: "ok  internal/grammar  0.004s", Magnitude: 0.6, Meta: "exit 0 · 42 lines", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
+						{Kind: "diff", Summary: "grammar_test.go @@ -3 +6", Magnitude: 0.3, Meta: "+6 -2", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
+					}
+					fmt.Print(grammar.RenderTurnDetail(hdr, blks, air))
+					return
+				}
 				fix := []grammar.Turn{
 					{TS: "2026-06-26T18:40:01Z", Role: "operator", Kind: "user", Summary: "fix the flaky trace test and open a PR", Magnitude: 0.2, Model: "—", Route: "operator.input", AIR: sk()},
 					{TS: "2026-06-26T18:40:02Z", Role: "cc-reins", Kind: "reasoning", Summary: "the test asserts on a 3s timeout; widen and stub the clock", Magnitude: 0.4, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},

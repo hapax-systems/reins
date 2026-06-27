@@ -417,6 +417,47 @@ func TestTurnGlyphsAreSingleRune(t *testing.T) {
 	}
 }
 
+func sampleTurnBlocks() []TurnBlock {
+	ok := func() map[string]string { return map[string]string{"kind": "ok", "meta": "ok"} }
+	return []TurnBlock{
+		{Kind: "reasoning", Summary: "widen the timeout, stub the clock", Magnitude: 0.4, AIR: map[string]string{"kind": "ok"}},
+		{Kind: "tool_call", Summary: "go test ./... -run Trace", Magnitude: 0.5, Meta: "Bash", AIR: ok()},
+		{Kind: "tool_result", Summary: "ok internal/grammar 0.004s", Magnitude: 0.6, Meta: "exit 0 · 42 lines", AIR: ok()},
+		{Kind: "diff", Summary: "grammar_test.go hunk", Magnitude: 0.3, Meta: "+6 -2", AIR: ok()},
+	}
+}
+
+func TestRenderTurnDetailLocal(t *testing.T) {
+	got := RenderTurnDetail(sampleTurn(), sampleTurnBlocks(), false)
+	for _, want := range []string{turnGlyph["tool_call"], "Bash", "go test", "exit 0", "+6 -2", turnGlyph["diff"]} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("turn detail missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderTurnDetailAIRRedactsBodiesKeepsMeta(t *testing.T) {
+	got := RenderTurnDetail(sampleTurn(), sampleTurnBlocks(), true)
+	if strings.Contains(got, "go test ./... -run Trace") {
+		t.Fatalf("AIR must redact block bodies:\n%s", got)
+	}
+	if !strings.Contains(got, "▒") {
+		t.Fatalf("AIR detail must show the redaction glyph:\n%s", got)
+	}
+	for _, want := range []string{"Bash", "exit 0", turnGlyph["tool_call"]} { // meta + glyph are air-safe skeleton
+		if !strings.Contains(got, want) {
+			t.Fatalf("AIR detail dropped air-safe meta %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderTurnDetailIsTree(t *testing.T) {
+	got := RenderTurnDetail(sampleTurn(), sampleTurnBlocks(), false)
+	if !strings.Contains(got, "├─") || !strings.Contains(got, "└─") {
+		t.Fatalf("turn detail must render an ASCII tree (├─ … └─):\n%s", got)
+	}
+}
+
 func TestRenderTraceHeaderAligns(t *testing.T) {
 	got := RenderTraceHeader()
 	for _, want := range []string{"TIME", "LATENCY", "TRACE", "MODEL", "TOKENS", "COST"} {

@@ -367,6 +367,45 @@ func RenderTurnRow(t Turn, airOn bool) string {
 	return fmt.Sprintf("%s %s%s %s %s %s %s", ts, bar, glyph, who, model, gate, what)
 }
 
+// TurnBlock is one sub-unit inside a turn (reasoning / tool_call / tool_result / diff / …) — the
+// expanded-detail granularity of the normalized turn-receipt. BIMODAL AIR holds per block: META
+// (exit code · line count · tool name · model — operational skeleton) airs; the BODY default-denies.
+type TurnBlock struct {
+	Kind      string            `json:"kind"`      // sub-unit turn-kind (key into turnGlyph)
+	Summary   string            `json:"summary"`   // the BODY — default-deny on air
+	Magnitude float64           `json:"magnitude"` // normalized 0..1 size -> ScoreBar
+	Meta      string            `json:"meta"`      // air-safe skeleton (exit/lines/tool/model)
+	AIR       map[string]string `json:"air"`
+}
+
+// RenderTurnDetail: the EXPANDED (summoned / present-at-hand) projection of one turn — its header
+// row plus an indented ASCII tree of its blocks. The complement of RenderTurnRow's receded one-liner
+// (progressive disclosure: recede -> summon). LAYOUT-AGNOSTIC by construction: it returns a standalone
+// string; WHERE it mounts (inline unfold vs detail pane vs split) is the cockpit-LAYOUT concern and is
+// deliberately NOT decided here (the operator's split-screen / Yard-coordinator strategy owns that).
+func RenderTurnDetail(t Turn, blocks []TurnBlock, airOn bool) string {
+	var b strings.Builder
+	b.WriteString(RenderTurnRow(t, airOn) + "\n")
+	for i, blk := range blocks {
+		conn := "├─"
+		if i == len(blocks)-1 {
+			conn = "└─"
+		}
+		glyph := turnGlyphOr(blk.Kind)
+		if airOn && blk.AIR["kind"] != "ok" {
+			glyph = "▒"
+		}
+		bar := C("mut", ScoreBar(blk.Magnitude))
+		meta := ""
+		if blk.Meta != "" {
+			meta = C("mut", redact(blk.AIR, "meta", blk.Meta, airOn)) + "  "
+		}
+		body := C("mut", redact(blk.AIR, "summary", blk.Summary, airOn))
+		b.WriteString("   " + C("border", conn) + " " + bar + C("mut", glyph) + " " + meta + body + "\n")
+	}
+	return b.String()
+}
+
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
 type Task struct {
 	TaskID         string            `json:"task_id"`
