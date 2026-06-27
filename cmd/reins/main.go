@@ -310,6 +310,38 @@ func main() {
 	// --probe: headless acceptance — fetch read surfaces, fold, print one frame, exit.
 	// Args: --probe [page|cmd:<verb>|split|size:WxH|--air]  (page defaults to events)
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
+		// --probe turns: OFFLINE fixture render of the session-pane turn grammar (§9 step-1 read-
+		// projection; CapabilityIO SESSION-kind is sequenced behind #4296, so no live backend yet).
+		// Demonstrates the turn-ladder + its livestream-safe AIR collapse for the operator vetting loop.
+		for _, a := range os.Args[2:] {
+			if a == "turns" || a == "session-turns" {
+				air := false
+				for _, b := range os.Args[2:] {
+					if b == "--air" {
+						air = true
+					}
+				}
+				sk := func() map[string]string {
+					return map[string]string{"ts": "ok", "kind": "ok", "role": "ok", "model": "ok", "route": "ok", "gate": "ok", "magnitude": "ok"}
+				}
+				fix := []grammar.Turn{
+					{TS: "2026-06-26T18:40:01Z", Role: "operator", Kind: "user", Summary: "fix the flaky trace test and open a PR", Magnitude: 0.2, Model: "—", Route: "operator.input", AIR: sk()},
+					{TS: "2026-06-26T18:40:02Z", Role: "cc-reins", Kind: "reasoning", Summary: "the test asserts on a 3s timeout; widen and stub the clock", Magnitude: 0.4, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
+					{TS: "2026-06-26T18:40:05Z", Role: "cc-reins", Kind: "assistant", Summary: "I'll widen the timeout and inject a fake clock.", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
+					{TS: "2026-06-26T18:40:07Z", Role: "cc-reins", Kind: "tool_call", Summary: "Bash(go test ./... -run Trace)", Magnitude: 0.5, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass", AIR: sk()},
+					{TS: "2026-06-26T18:40:12Z", Role: "cc-reins", Kind: "tool_result", Summary: "ok  internal/grammar  0.004s (42 lines)", Magnitude: 0.6, Model: "—", Route: "claude.code.full", Gate: "pass", AIR: sk()},
+					{TS: "2026-06-26T18:40:20Z", Role: "cc-reins", Kind: "diff", Summary: "grammar_test.go +6 -2", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pending", AIR: sk()},
+					{TS: "2026-06-26T18:40:21Z", Role: "cc-reins", Kind: "approval", Summary: "apply edit to grammar_test.go?", Magnitude: 0.2, Model: "—", Route: "claude.code.full", Gate: "pending", AIR: sk()},
+					{TS: "2026-06-26T18:40:30Z", Role: "lane-beta", Kind: "dispatch", Summary: "dispatched: open PR for the trace fix", Magnitude: 0.4, Model: "codex", Route: "codex.spark.full", Gate: "pass", AIR: sk()},
+					{TS: "2026-06-26T18:40:45Z", Role: "lane-beta", Kind: "refusal", Summary: "push blocked: authorization-packet-validator", Magnitude: 0.5, Model: "codex", Route: "codex.spark.full", Gate: "deny", AIR: sk()},
+				}
+				fmt.Println(grammar.RenderTurnHeader())
+				for _, t := range fix {
+					fmt.Println(grammar.RenderTurnRow(t, air))
+				}
+				return
+			}
+		}
 		evs, ed, evErr := api.FetchEvents(cfg.APIURL)
 		ts, td, taskErr := api.FetchTasks(cfg.APIURL)
 		dg, dd, dynErr := api.FetchDynamics(cfg.APIURL)

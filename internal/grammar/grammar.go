@@ -259,6 +259,114 @@ func RenderTraceRow(tr Trace, airOn bool) string {
 	return fmt.Sprintf("%s %s %s %s %s %s", ts, lat, id, model, tok, cost)
 }
 
+// --- session-pane turn grammar (§9 step-1: the row-level projection of a CapabilityIO turn-receipt;
+// reins-design-ref). A turn is NOT a text blob — it is a typed, provenance-
+// tagged unit normalized across Claude Code / Codex / Agy. This row is the RECEDED (turn-ladder)
+// projection; the expanded block-tree is a later increment. ---
+
+// Turn is the unified-API READ contract for one session-turn row. BIMODAL AIR (the governing rule):
+// the SKELETON (ts/kind/role/model/route/gate/magnitude — operational metadata, the "x via y"
+// provenance) airs; the BODY (summary — the turn content: operator free-text, model prose, tool
+// output) DEFAULT-DENIES — so on air a turn collapses to its structurally-intact redacted skeleton
+// (the Trace-row livestream-safe pattern generalized to a conversation turn).
+type Turn struct {
+	TS        string            `json:"ts"`
+	Role      string            `json:"role"`      // lane/actor — LaneToken identity (skeleton)
+	Kind      string            `json:"kind"`      // turn-kind key into turnGlyph (skeleton)
+	Summary   string            `json:"summary"`   // the BODY — default-deny on air
+	Magnitude float64           `json:"magnitude"` // normalized 0..1 size (tokens/lines) -> ScoreBar
+	Model     string            `json:"model"`     // served model ("x via y") (skeleton)
+	Route     string            `json:"route"`     // route_id (skeleton)
+	Gate      string            `json:"gate"`      // pass|deny|pending|"" — gate_output result (skeleton)
+	AIR       map[string]string `json:"air"`
+}
+
+// turnGlyph: the closed turn-kind alphabet (one width-1 mark per turn-primitive, normalized across
+// the three harnesses). PROVISIONAL marks — the operator vets the aesthetic on stream; the legend
+// (RenderLegend) decodes every one (class-closure: TestLegendCoversTurnGlyphs). Some marks
+// intentionally echo the event/criticality alphabet (◆ · ); the legend situates each reading.
+var turnGlyph = map[string]string{
+	"user": "❯", "assistant": "✦", "reasoning": "⟂",
+	"tool_call": "◆", "tool_result": "⎿", "diff": "±",
+	"plan": "⊞", "todo": "▢", "approval": "⊜",
+	"dispatch": "⇉", "interrupt": "⊘", "refusal": "⊗",
+	"status": "·", "mcp": "⊕", "web": "⊙",
+}
+
+var turnKindOrder = []string{"user", "assistant", "reasoning", "tool_call", "tool_result",
+	"diff", "plan", "todo", "approval", "dispatch", "interrupt", "refusal", "status", "mcp", "web"}
+
+var turnKindGloss = map[string]string{
+	"user": "operator prompt (free-text — denied on air)", "assistant": "agent message",
+	"reasoning": "thinking / reasoning (denied on air)", "tool_call": "tool invoked (name + args)",
+	"tool_result": "tool output (stdout/exit — body denied on air)", "diff": "file change (hunks)",
+	"plan": "plan — review before execute", "todo": "task / checklist item",
+	"approval": "approval / gate awaiting decision", "dispatch": "dispatched to a lane",
+	"interrupt": "interrupted / cancelled", "refusal": "refused (with category)",
+	"status": "status / heartbeat", "mcp": "MCP tool (external — untrusted)",
+	"web": "web / search result (external)",
+}
+
+func turnGlyphOr(kind string) string {
+	if g, ok := turnGlyph[kind]; ok {
+		return g
+	}
+	return "✶" // generic turn (legended under EVENTS)
+}
+
+// gateSeverity maps a gate_output result to a criticality word so a denied gate reads as critical
+// (gate is genuinely a criticality-bearing state, so it legitimately rides the hue channel).
+func gateSeverity(gate string) string {
+	switch gate {
+	case "deny":
+		return "crit"
+	case "pending":
+		return "warn"
+	case "pass":
+		return "ok"
+	}
+	return ""
+}
+
+// RenderTurnHeader: the column header that SITUATES the turn-ladder (k = magnitude-bar + kind glyph).
+func RenderTurnHeader() string {
+	return C("mut", fmt.Sprintf(" %-8s %-2s %-10s %-14s %-9s %s", "TIME", "k", "WHO", "MODEL", "GATE", "WHAT"))
+}
+
+// RenderTurnRow: one self-explaining session-turn row — TIME · magnitude-bar · kind-glyph · WHO(lane)
+// · MODEL(x-via-y) · GATE · WHAT(body). The body default-denies on air; the skeleton stays legible —
+// the structurally-intact, redacted, livestream-safe projection of a turn. Magnitude is SHAPE (bar),
+// never hue; the kind is SHAPE (glyph), never hue; only GATE rides the criticality hue (it is a state).
+func RenderTurnRow(t Turn, airOn bool) string {
+	ts := compactTS(t.TS)
+	if airOn && t.AIR["ts"] != "ok" {
+		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	}
+	bar := ScoreBar(t.Magnitude)
+	if airOn && t.AIR["magnitude"] != "ok" {
+		bar = "▒"
+	}
+	bar = C("mut", bar)
+	glyph := turnGlyphOr(t.Kind)
+	if airOn && t.AIR["kind"] != "ok" {
+		glyph = "▒"
+	}
+	glyph = C("mut", glyph) // turn-kind is SHAPE, not a meaning-channel hue
+	who := C(LaneToken(t.Role), dotsOr(redact(t.AIR, "role", t.Role, airOn), 10))
+	model := C("mut", dotsOr(redact(t.AIR, "model", t.Model, airOn), 14))
+	gate := pad("", 9)
+	if t.Gate != "" {
+		g := redact(t.AIR, "gate", t.Gate, airOn)
+		if sev := gateSeverity(t.Gate); sev != "" && !(airOn && t.AIR["gate"] != "ok") {
+			gate = C(SeverityToken(sev), pad("["+g+"]", 9))
+		} else {
+			gate = C("mut", pad("["+g+"]", 9))
+		}
+	}
+	what := C("mut", redact(t.AIR, "summary", t.Summary, airOn))
+	return fmt.Sprintf("%s %s%s %s %s %s %s", ts, bar, glyph, who, model, gate, what)
+}
+
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
 type Task struct {
 	TaskID         string            `json:"task_id"`
@@ -1296,8 +1404,24 @@ func RenderLegend() string {
 		row(C(SeverityToken(k), critGlyph[k]+" "+pad(k, 6)), critStateGloss[k])
 	}
 	hd("EVENTS  (leading glyph by kind — :events rows)")
-	for _, e := range eventGlyphLegend {
-		row(C("mut", pad(e.glyph, 2)), e.gloss)
+	{ // compact, wrapped: keeps the core legend one-screen-with-slack; class-closure guarded.
+		var parts []string
+		for _, e := range eventGlyphLegend {
+			parts = append(parts, e.glyph+" "+legendShort(e.gloss))
+		}
+		for _, ln := range wrapMarks(parts, 10) {
+			b.WriteString("   " + C("mut", ln) + "\n")
+		}
+	}
+	hd("SESSION TURNS  (turn-kind glyph — session-pane rows)")
+	{
+		var parts []string
+		for _, k := range turnKindOrder {
+			parts = append(parts, turnGlyph[k]+" "+legendShort(turnKindGloss[k]))
+		}
+		for _, ln := range wrapMarks(parts, 8) {
+			b.WriteString("   " + C("mut", ln) + "\n")
+		}
 	}
 	hd("CRITICALITY BAR  (more fill = worse)")
 	for _, k := range critOrder {
@@ -1341,4 +1465,28 @@ func pad(s string, n int) string {
 		return string(r[:n])
 	}
 	return s + strings.Repeat(" ", n-len(r))
+}
+
+// legendShort: the compact label for a dense legend line — the gloss up to its first qualifier
+// (so a one-screen legend can list a whole glyph alphabet without one row per mark).
+func legendShort(gloss string) string {
+	for _, sep := range []string{" (", " ·", " —", " /"} {
+		if i := strings.Index(gloss, sep); i > 0 {
+			return gloss[:i]
+		}
+	}
+	return gloss
+}
+
+// wrapMarks: pack "glyph label" parts into at most n-per-line for a compact, scannable decoder block.
+func wrapMarks(parts []string, n int) []string {
+	var out []string
+	for i := 0; i < len(parts); i += n {
+		end := i + n
+		if end > len(parts) {
+			end = len(parts)
+		}
+		out = append(out, strings.Join(parts[i:end], "  "))
+	}
+	return out
 }

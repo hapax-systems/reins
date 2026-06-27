@@ -350,6 +350,73 @@ func TestTraceGlyphsAreMonochromeSafe(t *testing.T) {
 	}
 }
 
+// --- session-pane turn grammar (§9 step-1 read-projection scaffold) ---
+
+func sampleTurn() Turn {
+	return Turn{
+		TS: "2026-06-26T12:00:00Z", Role: "cc-reins", Kind: "assistant",
+		Summary: "proposed edit to grammar.go", Magnitude: 0.6,
+		Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass",
+		// SKELETON airs (allowlisted); the BODY (summary) is omitted => default-deny on air.
+		AIR: map[string]string{"ts": "ok", "kind": "ok", "role": "ok", "model": "ok", "route": "ok", "gate": "ok", "magnitude": "ok"},
+	}
+}
+
+func TestRenderTurnRowLocal(t *testing.T) {
+	got := RenderTurnRow(sampleTurn(), false)
+	for _, want := range []string{turnGlyph["assistant"], "cc-reins", "claude-opus-4", "proposed edit"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("turn row missing %q:\n%q", want, got)
+		}
+	}
+}
+
+func TestRenderTurnRowAIRRedactsBodyKeepsSkeleton(t *testing.T) {
+	got := RenderTurnRow(sampleTurn(), true)
+	// the body default-denies...
+	if strings.Contains(got, "proposed edit") {
+		t.Fatalf("AIR must redact the turn body:\n%q", got)
+	}
+	if !strings.Contains(got, "▒") {
+		t.Fatalf("AIR turn row must show the redaction glyph for the denied body:\n%q", got)
+	}
+	// ...while the air-safe skeleton survives (the livestream-safe projection of a turn).
+	for _, want := range []string{turnGlyph["assistant"], "cc-reins", "claude-opus-4"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AIR turn row dropped air-safe skeleton %q:\n%q", want, got)
+		}
+	}
+}
+
+func TestRenderTurnRowOperatorFreeTextNeverAirs(t *testing.T) {
+	tk := sampleTurn()
+	tk.Kind, tk.Summary = "user", "my private prompt text"
+	// operator free-text: body has no "summary":"ok" => deny-by-default on air, ALWAYS.
+	got := RenderTurnRow(tk, true)
+	if strings.Contains(got, "private prompt") {
+		t.Fatalf("operator free-text must never air:\n%q", got)
+	}
+}
+
+func TestLegendCoversTurnGlyphs(t *testing.T) {
+	leg := RenderLegend()
+	for kind, g := range turnGlyph {
+		if !strings.Contains(leg, g) || turnKindGloss[kind] == "" {
+			t.Fatalf("legend missing turn glyph %q for kind %q (or its gloss)", g, kind)
+		}
+	}
+}
+
+func TestTurnGlyphsAreSingleRune(t *testing.T) {
+	// width-determinism guard: a multi-rune glyph (ZWJ/combining/emoji-presentation) desyncs the
+	// cell grid on-air and under tmux — a correctness hazard, not aesthetics.
+	for kind, g := range turnGlyph {
+		if r := []rune(g); len(r) != 1 {
+			t.Fatalf("turn glyph for %q must be a single rune: %q (%d runes)", kind, g, len(r))
+		}
+	}
+}
+
 func TestRenderTraceHeaderAligns(t *testing.T) {
 	got := RenderTraceHeader()
 	for _, want := range []string{"TIME", "LATENCY", "TRACE", "MODEL", "TOKENS", "COST"} {
