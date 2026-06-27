@@ -10376,7 +10376,7 @@ func (m Model) taskWorkDomainPane(w int) string {
 	line("next", next, nextToken(t.PredictedStage))
 	line("crit", taskFieldValueForAir(t, "criticality", m.AIR), ctok)
 	line("owner", taskFieldValueForAir(t, "owner", m.AIR), grammar.LaneToken(t.Owner))
-	line("freshness", fmt.Sprintf("%.2f", t.Freshness), freshnessToken(t.Freshness))
+	line("freshness", grammar.Redact(t.AIR, "freshness", fmt.Sprintf("%.2f", t.Freshness), m.AIR), freshnessToken(t.Freshness))
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "authority") + "\n")
 	line("case", grammar.Redact(t.AIR, "authority_case", t.AuthorityCase, m.AIR), "2nd")
@@ -10389,12 +10389,12 @@ func (m Model) taskWorkDomainPane(w int) string {
 	}
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "constraints") + "\n")
-	for _, c := range taskConstraints(t) {
+	for _, c := range taskConstraints(t, m.AIR) {
 		b.WriteString(" " + c + "\n")
 	}
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "relationships") + "\n")
-	line("task edges", fmt.Sprintf("●%d", t.RelCount), relToken(t.RelCount))
+	line("task edges", grammar.Redact(t.AIR, "rel_count", fmt.Sprintf("●%d", t.RelCount), m.AIR), relToken(t.RelCount))
 	if t.RelCount == 0 {
 		b.WriteString(" " + grammar.C("mut", "task-edge source absent; do not infer graph neighborhood") + "\n")
 	}
@@ -10452,27 +10452,32 @@ func splitAuthPlain(noGo string) []string {
 	return out
 }
 
-func taskConstraints(t grammar.Task) []string {
+func taskConstraints(t grammar.Task, airOn bool) []string {
 	var out []string
-	if t.PredictedStage == "hold" {
+	// A constraint DERIVED from a denied field must not air — it would disclose the redacted value
+	// (criticality / predicted_stage / freshness) through the back door (the derived-channel leak class).
+	denied := func(field string) bool { return airOn && t.AIR[field] != "ok" }
+	if t.PredictedStage == "hold" && !denied("predicted_stage") {
 		out = append(out, grammar.C("red", "release blocked")+
 			grammar.C("mut", " · predicted next stage is hold"))
 	}
-	switch t.Criticality {
-	case "crit":
-		out = append(out, grammar.C("red", "critical exception")+
-			grammar.C("mut", " · inspect evidence before acting"))
-	case "major":
-		out = append(out, grammar.C("org", "major issue")+
-			grammar.C("mut", " · prioritize review"))
-	case "warn":
-		out = append(out, grammar.C("yel", "watch")+
-			grammar.C("mut", " · non-calm task state"))
+	if !denied("criticality") {
+		switch t.Criticality {
+		case "crit":
+			out = append(out, grammar.C("red", "critical exception")+
+				grammar.C("mut", " · inspect evidence before acting"))
+		case "major":
+			out = append(out, grammar.C("org", "major issue")+
+				grammar.C("mut", " · prioritize review"))
+		case "warn":
+			out = append(out, grammar.C("yel", "watch")+
+				grammar.C("mut", " · non-calm task state"))
+		}
 	}
-	if t.Freshness <= 0.20 {
+	if t.Freshness <= 0.20 && !denied("freshness") {
 		out = append(out, grammar.C("mut", "stale/absent event freshness"))
 	}
-	if strings.TrimSpace(t.AuthorityCase) == "" {
+	if strings.TrimSpace(t.AuthorityCase) == "" && !denied("authority_case") {
 		out = append(out, grammar.C("mut", "authority case absent in task row"))
 	}
 	if len(out) == 0 {
