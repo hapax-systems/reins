@@ -311,6 +311,21 @@ func main() {
 	// --probe: headless acceptance — fetch read surfaces, fold, print one frame, exit.
 	// Args: --probe [page|cmd:<verb>|split|size:WxH|--air]  (page defaults to events)
 	if len(os.Args) > 1 && os.Args[1] == "--probe" {
+		// --probe facets: fetch the facet-registry SSOT (/read/facets) and render the cold-read facet
+		// legend (A6: the decoder travels in-band; the Go side consumes the registry, never re-derives).
+		for _, a := range os.Args[2:] {
+			if a == "facets" {
+				reg, dark, err := api.FetchFacets(cfg.APIURL)
+				if dark || err != nil {
+					fmt.Printf("facets: dark/unreachable (%v)\n", err)
+					return
+				}
+				fmt.Print(grammar.RenderFacetLegend(reg))
+				fmt.Printf("\n%d facets · %d fields air on-stream (registry SSOT).\n",
+					len(reg.Facets), len(reg.AirAllowlist))
+				return
+			}
+		}
 		// --probe loops: run the A5 Tier-1 graph primitive over the LIVE :dynamics map (read-only
 		// fetch) — detect feedback loops + classify Reinforcing/Balancing by negative-sign parity,
 		// NO simulation. Demonstrates the qualitative systems-dynamics layer on real data.

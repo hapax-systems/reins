@@ -100,6 +100,24 @@ type dynamicsResp struct {
 }
 
 // FetchDynamics GETs the system-dynamics map. Returns (graph, dark, err).
+// FetchFacets fetches the facet-registry SSOT (/read/facets returns the payload directly, unwrapped).
+func FetchFacets(url string) (grammar.FacetRegistry, bool, error) {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(url + "/read/facets")
+	if err != nil {
+		return grammar.FacetRegistry{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/facets"); err != nil {
+		return grammar.FacetRegistry{}, true, err
+	}
+	var r grammar.FacetRegistry
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return grammar.FacetRegistry{}, true, err
+	}
+	return r, false, nil
+}
+
 func FetchDynamics(url string) (grammar.Graph, bool, error) {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Get(url + "/read/dynamics")
