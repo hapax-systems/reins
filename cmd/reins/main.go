@@ -315,7 +315,7 @@ func main() {
 		// fetch) — detect feedback loops + classify Reinforcing/Balancing by negative-sign parity,
 		// NO simulation. Demonstrates the qualitative systems-dynamics layer on real data.
 		for _, a := range os.Args[2:] {
-			if a == "loops" {
+			if a == "loops" || a == "matrix" {
 				dg, dark, err := api.FetchDynamics(cfg.APIURL)
 				if err != nil || dark {
 					fmt.Printf("loops: :dynamics dark/unreachable (%v)\n", err)
@@ -324,6 +324,12 @@ func main() {
 				tg := graph.New()
 				for _, e := range dg.Edges {
 					tg.Add(graph.Relation{Src: e.Source, Dst: e.Target, Type: e.Relation})
+				}
+				if a == "matrix" {
+					for _, ln := range tg.AdjacencyMatrix() {
+						fmt.Println(ln)
+					}
+					return
 				}
 				loops := tg.CausalLoops()
 				fmt.Printf("CAUSAL LOOPS over :dynamics (%d nodes · %d edges) — A5 Tier-1, computed no-sim\n",
