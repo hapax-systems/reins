@@ -543,36 +543,103 @@ func (m Model) bodyFor(w, h int) string {
 	return m.bodyForPage(w, h)
 }
 
-// hconcatBlocks is the HConcat composition primitive (framework §1 Layer-3 seed): join two fitted
-// blocks (each h lines tall) side-by-side with a divider column. The view-algebra's split = HConcat;
-// the Yard Coordinator is its first instance, composing its OWN left + right rather than inheriting
-// the session-frozen global split (dissolving the "left always frozen to sessions" anti-pattern).
-func hconcatBlocks(left []string, div string, right []string, h int) string {
+// hconcatCols is the HConcat composition primitive (framework §1 Layer-3 seed): join N fitted columns
+// (each h lines tall) side-by-side with a divider between them. The view-algebra's split = HConcat; the
+// Yard Coordinator composes its OWN columns this way rather than inheriting the session-frozen global
+// split (dissolving the "left always frozen to sessions" anti-pattern).
+func hconcatCols(div string, h int, cols ...[]string) string {
 	out := make([]string, 0, h)
 	for i := 0; i < h; i++ {
-		l, r := "", ""
-		if i < len(left) {
-			l = left[i]
+		var row strings.Builder
+		for c, col := range cols {
+			if c > 0 {
+				row.WriteString(div)
+			}
+			if i < len(col) {
+				row.WriteString(col[i])
+			}
 		}
-		if i < len(right) {
-			r = right[i]
-		}
-		out = append(out, l+div+r)
+		out = append(out, row.String())
 	}
 	return strings.Join(out, "\n")
 }
 
-// coordinatorBody composes the Yard Coordinator: LEFT = the Miller-column lens over the selection
-// lattice, RIGHT = the coordinator context the lens selection drives (framework §5). HConcat of two
-// page-owned panes — no session-source assumptions leak in. Narrow terminals drop the lens column.
+// coordinatorBody composes the Yard Coordinator as up to THREE coordinated surfaces the lens selection
+// drives (framework §5: the Yard-Coordinator + Hapax-chat adjacency): LENS │ COORDINATOR │ CHAT, an
+// HConcat of page-owned panes (no session-source assumptions leak in). Width-responsive: 3 columns
+// when wide, lens │ coordinator when medium, coordinator-only when narrow.
 func (m Model) coordinatorBody(w, h int) string {
+	div := grammar.C("border", "│")
+	if w >= 200 { // LENS │ COORDINATOR │ CHAT
+		lensW := 72
+		rest := w - lensW - 2
+		coordW := rest / 2
+		chatW := rest - coordW
+		lens := fitBlock(m.coordinatorLensPane(lensW, h), lensW, h)
+		coord := fitBlock(m.coordinatorContextPane(coordW, h), coordW, h)
+		chat := fitBlock(m.coordinatorChatPane(chatW, h), chatW, h)
+		return hconcatCols(div, h, lens, coord, chat)
+	}
 	leftW, rightW, ok := splitContextWidths(w)
-	if !ok {
+	if !ok { // narrow: coordinator only (lens + chat fold away)
 		return m.coordinatorContextPane(w, h)
 	}
 	left := fitBlock(m.coordinatorLensPane(leftW, h), leftW, h)
 	right := fitBlock(m.coordinatorContextPane(rightW, h), rightW, h)
-	return hconcatBlocks(left, grammar.C("border", "│"), right, h)
+	return hconcatCols(div, h, left, right)
+}
+
+// coordinatorChatPane: the Yard Coordinator's CHAT surface (framework §5 — the Hapax-chat adjacency).
+// The lens selection TRANSCLUDES into the chat as the grounding context turn ({{sel}}); the
+// conversation renders turn-shaped (the session pane's grammar, integrated); an input affordance sits
+// at the foot. Live agent dispatch is gated on CapabilityIO (#4296), so SEND is a governed stub — the
+// pane is render + transclude + input integrated, AIR-safe (free-text turn summaries redact on air).
+func (m Model) coordinatorChatPane(w, h int) string {
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "CHAT") + grammar.C("mut", " · coordinate over the selection") + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	marks := map[string]string{"operator": "›", "hapax": "‹", "lens": "·"}
+	for _, t := range m.coordinatorChatTurns() {
+		mark := marks[t.Role]
+		if mark == "" {
+			mark = "·"
+		}
+		sum := grammar.Redact(t.AIR, "summary", t.Summary, m.AIR)
+		line := grammar.C(grammar.LaneToken(t.Role), fmt.Sprintf(" %s %-8s ", mark, t.Role)) + grammar.C("pri", sum)
+		b.WriteString(clipRunes(line, w) + "\n")
+	}
+	prompt := " › "
+	if m.Mode == ModeCoordChat {
+		prompt += m.CoordChatInput + "▌"
+	} else {
+		prompt += grammar.C("mut", "[c] coordinate the selected lane (send gated · CapabilityIO #4296)")
+	}
+	b.WriteString(clipRunes(grammar.C("pri", prompt), maxVisible(8, w)) + "\n")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// coordinatorChatTurns seeds the chat from the lens selection (the {{sel}} transclusion) + the
+// operator's local coordination log. Free-text summaries carry no "summary":"ok" so they redact on air.
+func (m Model) coordinatorChatTurns() []grammar.Turn {
+	sk := map[string]string{"ts": "ok", "kind": "ok", "role": "ok"}
+	var turns []grammar.Turn
+	if t, ok := m.FocusedTask(); ok {
+		crit := t.Criticality
+		if crit == "" {
+			crit = "ok"
+		}
+		ctx := fmt.Sprintf("{{sel}} %s · stage %s · %s · %d ties",
+			grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR), t.Stage, crit, t.RelCount)
+		turns = append(turns, grammar.Turn{Role: "lens", Kind: "reasoning", Summary: ctx, AIR: sk})
+	}
+	for _, msg := range m.CoordChatLog {
+		turns = append(turns, grammar.Turn{Role: "operator", Kind: "user", Summary: msg, AIR: sk})
+		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "refusal", Summary: "coordination dispatch gated on CapabilityIO (#4296)", AIR: sk})
+	}
+	if len(m.CoordChatLog) == 0 {
+		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "chat is transclude + input ready; live dispatch gated on CapabilityIO (#4296)", AIR: sk})
+	}
+	return turns
 }
 
 // coordinatorLensPane: the Yard Coordinator's LEFT pane — a Miller-column lens over the selection

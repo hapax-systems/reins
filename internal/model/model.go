@@ -33,11 +33,12 @@ const (
 )
 
 const (
-	ModeNormal  = 0 // hotkeys + page navigation
-	ModeCommand = 1 // the command line is focused (typing a verb)
-	ModeYank    = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
-	ModeHint    = 3 // hint-teleport: labels on visible rows, type one to jump (navigate by looking)
-	ModeFilter  = 4 // the filter input is focused — narrows the selectable rows by id substring
+	ModeNormal    = 0 // hotkeys + page navigation
+	ModeCommand   = 1 // the command line is focused (typing a verb)
+	ModeYank      = 2 // a field-pick sub-state on the focused row (the copy-paste killer)
+	ModeHint      = 3 // hint-teleport: labels on visible rows, type one to jump (navigate by looking)
+	ModeFilter    = 4 // the filter input is focused — narrows the selectable rows by id substring
+	ModeCoordChat = 5 // the Yard Coordinator chat input is focused (coordinate over the lens selection)
 )
 
 const splitContextMinWidth = 160
@@ -382,6 +383,8 @@ type Model struct {
 	LastlogPaging       bool            // a /lastlog backward-page fetch is in flight
 	WindowSeen          map[int]string  // per-window state signature at last visit (activity ladder)
 	Sel                 Selection       // the cursor-of-attention's rank/field/type (row index stays in Focus)
+	CoordChatInput      string          // the Yard Coordinator chat input buffer (ModeCoordChat)
+	CoordChatLog        []string        // the operator's local coordination messages (send gated · CapabilityIO #4296)
 	Filter              string          // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string          // active criticality-class filter (ok|warn|major|crit) — a selected count
 	IntakeSourceFilter  string          // active :intake source filter; empty means all sources
