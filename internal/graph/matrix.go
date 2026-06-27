@@ -12,9 +12,9 @@ import (
 //
 // Cell marks (sign-aware, grayscale/on-air safe — color is a later redundant amplifier):
 //
-//	+  positive link (src→dst move together)    -  negative link (oppose)
-//	·  unsigned link                            ╲  the diagonal (self position)
-//	(space) no edge
+//   - positive link (src→dst move together)    -  negative link (oppose)
+//     ·  unsigned link                            ╲  the diagonal (self position)
+//     (space) no edge
 //
 // Returns monospace lines: an index→id legend, a column-index header, then one row per source.
 func (g *TypedGraph) AdjacencyMatrix() []string {

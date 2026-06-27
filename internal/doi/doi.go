@@ -51,7 +51,7 @@ type Tier int
 const (
 	Full       Tier = iota // the focal rows: full cell grammar
 	Collapsed              // mid rows: a one-line glyph + magnitude summary
-	Aggregated            // the tail: folded into a single inspectable "+N" cell
+	Aggregated             // the tail: folded into a single inspectable "+N" cell
 )
 
 // Placement is the fold result for one visible row.

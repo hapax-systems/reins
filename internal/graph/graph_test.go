@@ -39,7 +39,7 @@ func TestAssertedSignNotOverwritten(t *testing.T) {
 
 func TestReinforcingLoop(t *testing.T) {
 	g := New()
-	g.Add(Relation{Src: "A", Dst: "B", Type: "feeds"})   // +
+	g.Add(Relation{Src: "A", Dst: "B", Type: "feeds"})    // +
 	g.Add(Relation{Src: "B", Dst: "A", Type: "produces"}) // +
 	loops := g.CausalLoops()
 	if len(loops) != 1 {
@@ -77,7 +77,7 @@ func TestThreeCycleAndParity(t *testing.T) {
 func TestTwoDistinctLoops(t *testing.T) {
 	g := New()
 	g.Add(Relation{Src: "A", Dst: "B", Type: "feeds"})
-	g.Add(Relation{Src: "B", Dst: "A", Type: "feeds"})  // R
+	g.Add(Relation{Src: "B", Dst: "A", Type: "feeds"}) // R
 	g.Add(Relation{Src: "C", Dst: "D", Type: "feeds"})
 	g.Add(Relation{Src: "D", Dst: "C", Type: "blocks"}) // B
 	loops := g.CausalLoops()
