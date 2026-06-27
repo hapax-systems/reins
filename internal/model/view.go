@@ -318,7 +318,8 @@ func (m Model) windowSignal(page int) (string, string) {
 		if m.TasksDark {
 			return "DARK", "red"
 		}
-		n, blocked := len(m.Tasks), len(m.blockedIndices())
+		vis, _ := m.yardBlockedIndices() // AIR-aware blocked count — never tally a denied-gated task on air
+		n, blocked := len(m.Tasks), len(vis)
 		if blocked > 0 {
 			return fmt.Sprintf("%d!%d", n, blocked), "red"
 		}
@@ -330,13 +331,8 @@ func (m Model) windowSignal(page int) (string, string) {
 			return "DARK", "red"
 		}
 		if n := len(m.Sessions); n > 0 {
-			hot := 0
-			for _, s := range m.Sessions {
-				if s.Attention >= 0.50 || (s.Blocker != "" && s.Blocker != "none") || s.Readiness == "claim" || s.Readiness == "stall" || s.Readiness == "stale" {
-					hot++
-				}
-			}
-			if hot > 0 {
+			hotIdx, _ := m.yardHotSessionIndices() // AIR-aware: a denied attention/blocker/readiness never tallies on air
+			if hot := len(hotIdx); hot > 0 {
 				return fmt.Sprintf("%d!%d", n, hot), "yel"
 			}
 			return fmt.Sprintf("%d", n), "mut"
@@ -345,7 +341,8 @@ func (m Model) windowSignal(page int) (string, string) {
 		if m.TasksDark && m.SessionsDark && m.EventsDark {
 			return "DARK", "red"
 		}
-		blocked := len(m.blockedIndices())
+		vis, _ := m.yardBlockedIndices()
+		blocked := len(vis)
 		if blocked > 0 {
 			return fmt.Sprintf("%d!%d", len(m.Tasks), blocked), "red"
 		}
@@ -356,10 +353,12 @@ func (m Model) windowSignal(page int) (string, string) {
 		if m.TasksDark && m.SessionsDark {
 			return "DARK", "red"
 		}
-		holds := len(m.blockedIndices())
+		visHolds, _ := m.yardBlockedIndices()
+		holds := len(visHolds)
 		hot := 0
 		for _, s := range m.Sessions {
-			if s.Blocker != "" && s.Blocker != "none" {
+			// a denied blocker must not push a session into the readiness hot count (presence leak)
+			if s.Blocker != "" && s.Blocker != "none" && (!m.AIR || s.AIR["blocker"] == "ok") {
 				hot++
 			}
 		}
@@ -464,7 +463,7 @@ func (m Model) viewVital(w int) string {
 			ok++
 		}
 	}
-	blocked := m.blockedIndices() // the Act strip's contents — also a cross-cutting selectable
+	blocked, _ := m.yardBlockedIndices() // AIR-aware: on air, exclude tasks gated solely by a denied stage/predicted_stage/criticality (off air == blockedIndices()). Feeds the count, Act-strip ids, and blockedBreakdown consistently.
 	dot := grammar.C("mut", " · ")
 	lbl := func(c string) string { // counts are SELECTABLE in hint mode (cross-cutting: a count = a class)
 		if m.Mode == ModeHint {
@@ -528,8 +527,8 @@ func (m Model) blockedBreakdown(indices []int) (hold, risk int) {
 			continue
 		}
 		t := m.Tasks[idx]
-		if m.AIR && t.AIR["predicted_stage"] != "ok" {
-			continue // on air a denied predicted_stage must not be classified — the hold·risk split discloses it
+		if m.AIR && (t.AIR["predicted_stage"] != "ok" || t.AIR["criticality"] != "ok") {
+			continue // on air a denied predicted_stage OR criticality must not be classified — the hold·risk split (and crit/major membership) discloses it
 		}
 		if strings.EqualFold(t.PredictedStage, "hold") {
 			hold++
@@ -657,12 +656,13 @@ func (m Model) airRelationLabel(r relate.Relation) string {
 	}
 }
 
-// airSafeFacet allowlists the STRUCTURAL facets whose VALUE is safe to air (stage/criticality/score
-// carry no PII). Default-deny: every other facet's value — owner, case, actor, subject, role, kind,
-// or any unknown/newly-added facet — is withheld on air, so a sensitive facet can never leak.
+// airSafeFacet allowlists the STRUCTURAL facets whose VALUE is safe to air (stage/score carry no
+// PII). Default-deny: every other facet's value — criticality, owner, case, actor, subject, role,
+// kind, or any unknown/newly-added facet — is withheld on air (a shared-criticality facet airs as
+// "shares crit (N)", the structural shape, value withheld), so a sensitive facet can never leak.
 func airSafeFacet(f string) bool {
 	switch f {
-	case "stage", "crit", "score":
+	case "stage", "score":
 		return true
 	}
 	return false
@@ -813,7 +813,7 @@ func (m Model) coordinatorLensPane(w, h int) string {
 		if crit == "" {
 			crit = "ok"
 		}
-		z3 = fmt.Sprintf("%s·%s·%s", crit, dashOr(t.Stage), dashOr(grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)))
+		z3 = fmt.Sprintf("%s·%s·%s", grammar.Redact(t.AIR, "criticality", crit, m.AIR), dashOr(t.Stage), dashOr(grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)))
 	}
 	crumb := fmt.Sprintf("▶ path  Z0▸tasks ▸ Z2▸row %d/%d ▸ Z3▸[%s]   ·   [j/k] row · [c] chat", m.Focus+1, len(tasks), z3)
 	b.WriteString(" " + grammar.C("mut", clipRunes(crumb, maxVisible(8, w-1))) + "\n")
@@ -927,7 +927,9 @@ func (m Model) coordinatorThroughputLine(w int) string {
 		}
 	}
 	for _, s := range m.Sessions {
-		if s.Attention >= 0.5 {
+		// on air a denied attention must not be classified into the hot tally — the aggregate
+		// discloses the per-session field the session row redacts.
+		if (!m.AIR || s.AIR["attention"] == "ok") && s.Attention >= 0.5 {
 			hot++
 		}
 	}
