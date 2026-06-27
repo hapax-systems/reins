@@ -158,3 +158,72 @@ def test_bodies_default_deny():
     for domain, attr in [("Event", "summary"), ("Node", "context"), ("IntakeRow", "detail")]:
         assert fr.classify(domain, attr) == "body"
         assert fr.air_default("body") == "deny"
+
+
+# Mirrors reins_read._DEFAULT_ALLOW (keep in sync; the safety parity test below depends on it).
+CURRENT_ALLOW = frozenset((
+    "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res,role,platform,"
+    "state,alive,idle,stalled,output_age_s,relay_age_s,readiness,blocker,attention,evidence_count,"
+    "resume_ready,evidence_summary,by_kind,transcript_roots_observed,transcript_roots_missing,truncated,"
+    "count,age_bucket,coverage,task_link_state,severity,privacy,raw_access,exists,capability_id,"
+    "capability_class,surface_family,spend_model,egress_class,receipt_requirement,route_count,ok_count,"
+    "blocked_count,hkp_posture,source_refs,source_ref_labels,route_id,mode,profile,model_id,effort,"
+    "context_mode,fast_mode,quantization,capacity_pool,demand_vector,hardening,eval_plane,review_obligation,"
+    "learning_eligibility,benchmark_coverage,fixed_overhead,route_state,authority_ceiling,freshness_ok,"
+    "quota_state,receipt_count,blockers,authority,route_binding_state,tool_id,available,authority_use,"
+    "observed_at,stale_after,schema_version,row_id,family,subject_kind,subject_ref,posture,map_kind,map_id,"
+    "map_source,map_target,map_relation,gate_id,domain,evidence,missing,action,detail,generated_at,"
+    "package_hash,default_lens,domain_id,lifecycle,terrain,depth,scope,claim_ceiling,windows,surfaces,"
+    "parity,lifecycle_id,owner,plant,maturity,adapter_id,claim_surface,mutation_surface,dark_policy,"
+    "freshness_policy,air_class,commands,receipt_contracts,next_evidence").split(","))
+
+
+def test_safety_registry_never_airs_a_body():
+    """SAFETY INVARIANT (on-air egress, highest blast radius): no free-text BODY field may air under
+    the registry's per-attribute AIR policy — bodies are default-deny, always."""
+    leaks = []
+    for domain, attrs in INVENTORY.items():
+        for attr in attrs:
+            if fr.classify(domain, attr) == "body" and fr.air_policy(domain, attr) != "deny":
+                leaks.append(f"{domain}.{attr}")
+    assert not leaks, f"registry would AIR a free-text body (PII risk): {leaks}"
+
+
+def test_safety_newly_aired_fields_are_only_safe_structural():
+    """vs the live _DEFAULT_ALLOW, the registry may NEWLY-AIR only safe structural/operational fields
+    (the documented skeleton repair + structured identity/ownership/qualifier) — NEVER a free-text or
+    PII-bearing field. Pins that adopting the registry as the live allowlist cannot leak."""
+    # VETTED safe newly-aired set (each eyeballed: structural/operational, NO PII/free-text). A NEW
+    # field that newly-airs trips this test for re-vetting (drift guard) — the safety review is pinned.
+    VETTED_NEWLY_AIR = {
+        # the skeleton repair (were denied, operational metadata):
+        "criticality", "freshness", "prior_stage", "predicted_stage", "rel_count",
+        "magnitude", "gate", "meta",
+        # Trace LLM-metadata repair (numbers, no PII) — the flat list also omitted these:
+        "cost", "latency_ms", "prompt_tok", "completion_tok", "total_tok", "size", "total",
+        # recency timestamps (Time facet):
+        "activity_age_s", "mtime", "updated_at",
+        # structured identity/ownership/action/qualifier (ids, lane names, verbs — not free-text):
+        "actor", "assigned_to", "model", "trace_id", "intent", "ready", "attached",
+        "lens", "inquiry_mode", "audience_mode", "explanation_path",
+        # edge ref IDs (task/node/route ids — safe; path-like refs are SENSITIVE-denied):
+        "claimed_task", "route", "focus_node_ids", "focus_edge_ids", "selection_group", "selection_id",
+    }
+    newly_aired = set()
+    for domain, attrs in INVENTORY.items():
+        for attr in attrs:
+            if attr not in CURRENT_ALLOW and fr.air_policy(domain, attr) == "air":
+                newly_aired.add(attr)
+    unexpected = newly_aired - VETTED_NEWLY_AIR
+    assert not unexpected, f"registry would newly-air UNVETTED fields vs _DEFAULT_ALLOW: {sorted(unexpected)}"
+
+
+def test_registry_is_more_conservative_on_free_text():
+    """The registry correctly NEWLY-DENIES free-text the current flat allowlist over-airs
+    (detail/missing/action/next_evidence/blockers) — a safety improvement, documented here."""
+    newly_denied_freetext = set()
+    for domain, attrs in INVENTORY.items():
+        for attr in attrs:
+            if attr in CURRENT_ALLOW and fr.classify(domain, attr) == "body":
+                newly_denied_freetext.add(attr)
+    assert {"detail", "missing", "action", "next_evidence", "blockers"} <= newly_denied_freetext

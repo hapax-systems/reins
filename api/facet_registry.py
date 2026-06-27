@@ -165,7 +165,11 @@ def classify(domain: str, attr: str) -> str:
 # Per-attribute AIR overrides: facet says how a KIND of fact airs, but specific attributes carry
 # PII regardless of facet (filesystem paths, tmux session names) and DENY on air. (framework: AIR is
 # per-attribute, not only per-facet.)
-SENSITIVE: set[str] = {"path", "session"}
+SENSITIVE: set[str] = {
+    "path", "session",          # filesystem / tmux PII
+    "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
+    "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
+}
 
 
 def air_policy(domain: str, attr: str) -> str:
