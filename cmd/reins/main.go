@@ -447,6 +447,17 @@ func main() {
 					"provenance": {Text: "inferred", Width: 9},
 				}
 				denyOnAir := map[string]bool{"identity": true, "place": true} // PII-bearing facets
+				if !dark && len(reg.Facets) > 0 {                             // surface SSOT drift at runtime (re-worded prose the parser can't bind)
+					var drift []string
+					for f := range reg.Facets {
+						if grammar.ChannelFromProse(reg.Facets[f].Channel) == grammar.ChannelUnknown {
+							drift = append(drift, f)
+						}
+					}
+					if len(drift) > 0 {
+						fmt.Printf("  ⚠ WARN: registry channel prose unrecognized for %s — fell back to the name default (possible SSOT drift)\n\n", strings.Join(drift, ", "))
+					}
+				}
 				fmt.Println("CELL GRAMMAR ENCODER — Bertin-for-monospace (framework §1 Layer-2)")
 				fmt.Println("each facet binds to ONE cell channel; color is a redundant amplifier (reads in grayscale)")
 				fmt.Println()

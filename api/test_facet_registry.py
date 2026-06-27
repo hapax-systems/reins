@@ -104,6 +104,42 @@ def test_each_facet_fully_specified():
             assert f.get(field), f"facet {k} missing {field}"
 
 
+def _channel_kind(prose: str) -> str | None:
+    """Mirror of the Go ChannelFromProse precedence (internal/grammar/encoder.go): the cell-grammar
+    encoder binds on this channel prose, so a re-wording this cannot classify silently drops a meaning
+    channel on air. Keep in lockstep with the Go parser."""
+    p = prose.lower()
+    if "criticality-hue" in p:
+        return "criticality-hue"
+    if "family-hue" in p:
+        return "family-hue"
+    if "block bar" in p or "eighth-block" in p:
+        return "magnitude-bar"
+    if "freshness" in p:
+        return "freshness-dim"
+    if "pip" in p:
+        return "provenance-pip"
+    if "text" in p:
+        return "text"
+    return None
+
+
+def test_every_facet_channel_prose_is_encoder_recognized():
+    """Every facet's channel prose must bind to exactly one cell channel — the Go encoder reads THIS
+    prose as its SSOT, so an unrecognized re-wording would drop a channel on air (Gate-13). The
+    Go-side cross-language counterpart is TestChannelBindingMatchesPythonRegistry."""
+    expected = {
+        "identity": "text", "posture": "criticality-hue", "action": "text",
+        "ownership": "family-hue", "place": "family-hue", "time": "freshness-dim",
+        "provenance": "provenance-pip", "measure": "magnitude-bar", "qualifier": "text",
+    }
+    assert set(expected) == set(fr.FACETS), "the channel-binding expectation must cover exactly the 9 facets"
+    for facet, f in fr.FACETS.items():
+        kind = _channel_kind(f["channel"])
+        assert kind is not None, f"facet {facet} channel {f['channel']!r} is unrecognized by the encoder"
+        assert kind == expected[facet], f"facet {facet} channel {f['channel']!r} -> {kind}, expected {expected[facet]}"
+
+
 def test_air_defaults_are_consistent():
     assert fr.air_default("body") == "deny"           # bodies never air
     assert fr.air_default("provenance") == "gate"      # provenance gates

@@ -1,11 +1,16 @@
 package grammar
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
 )
+
+func runeW(s string) int { return len([]rune(ansi.Strip(s))) }
 
 // canonicalFacetProse mirrors the 9 facet `channel` strings served by /read/facets
 // (api/facet_registry.py FACETS). The encoder's binding is DRIVEN by this prose (the SSOT),
@@ -218,4 +223,118 @@ func TestRenderFacetRowEmpty(t *testing.T) {
 	if got := RenderFacetRow(FacetRegistry{}, nil, false); got != "" {
 		t.Fatalf("empty row must be empty, got %q", got)
 	}
+}
+
+// Every glyph-bearing channel holds a STABLE column width across visible / empty-label / denied
+// states when Width>0 — the freeze-frame "grid never jitters" property (structured-silence). A denied
+// or empty cell that collapses to a narrower width misaligns every column after it on air.
+func TestEncodeCellWidthStableAcrossStates(t *testing.T) {
+	const w = 8
+	for _, facet := range []string{"measure", "time", "posture", "provenance"} {
+		var vis, empty string
+		switch facet {
+		case "measure", "time":
+			vis = EncodeCell(FacetRegistry{}, facet, CellValue{Magnitude: 0.9, Text: "0.90", Width: w}, false).Rendered
+			empty = EncodeCell(FacetRegistry{}, facet, CellValue{Magnitude: 0.9, Width: w}, false).Rendered
+		default:
+			vis = EncodeCell(FacetRegistry{}, facet, CellValue{Text: "crit", Width: w}, false).Rendered
+			empty = EncodeCell(FacetRegistry{}, facet, CellValue{Width: w}, false).Rendered
+		}
+		denied := EncodeCell(FacetRegistry{}, facet, CellValue{Magnitude: 0.9, Text: "0.90", Denied: true, Width: w}, true).Rendered
+		if runeW(vis) != runeW(denied) {
+			t.Errorf("facet %q: visible width %d != denied width %d (on-air grid jitter)", facet, runeW(vis), runeW(denied))
+		}
+		if runeW(vis) != runeW(empty) {
+			t.Errorf("facet %q: visible width %d != empty-label width %d (grid jitter)", facet, runeW(vis), runeW(empty))
+		}
+	}
+}
+
+// An unrecognized channel prose (a future re-wording of the registry) must resolve to ChannelUnknown
+// — an explicit sentinel — never silently to text. The three real text facets still resolve to text.
+func TestChannelFromProseUnknownIsExplicit(t *testing.T) {
+	if ChannelFromProse("magnitude fill") != ChannelUnknown {
+		t.Fatalf("unrecognized prose must be ChannelUnknown, not a silent text downgrade")
+	}
+	for _, p := range []string{"text + selection-shape", "text / view-axis"} {
+		if ChannelFromProse(p) != ChannelText {
+			t.Fatalf("text prose must resolve to ChannelText: %q", p)
+		}
+	}
+}
+
+// When the LIVE registry prose is unrecognized, ChannelForFacet falls back to the NAME-keyed default
+// (stable across channel re-wording) — so the live path never silently drops a meaning channel on air.
+func TestChannelForFacetFallsBackOnUnknownProse(t *testing.T) {
+	reg := FacetRegistry{Facets: map[string]FacetDef{"measure": {Channel: "magnitude fill"}}}
+	if got := ChannelForFacet(reg, "measure"); got != ChannelMagnitudeBar {
+		t.Fatalf("unrecognized prose must fall back to the name default (magnitude-bar), got %v", got)
+	}
+}
+
+// TestChannelBindingMatchesPythonRegistry is the REAL cross-language SSOT pin: it reads the actual
+// api/facet_registry.py (the Python SSOT — pure stdlib, so plain python3 imports it) and asserts every
+// served facet's channel prose parses to the SAME Channel the Go default table holds, and the facet
+// key sets match. This closes the drift the Go-vs-Go guards cannot see (an operator re-wording the
+// registry). It SKIPS (not fails) when no python can import the registry, so a python-less build still
+// passes — but it runs wherever python3 exists.
+func TestChannelBindingMatchesPythonRegistry(t *testing.T) {
+	py := findRegistryPython()
+	if py == "" {
+		t.Skip("no python able to import api/facet_registry; cross-language SSOT guard skipped")
+	}
+	out, err := exec.Command(py, "-c",
+		"import sys,os,json; sys.path.insert(0, os.path.abspath('../../api')); "+
+			"import facet_registry as fr; print(json.dumps(fr.facets_payload()))").Output()
+	if err != nil {
+		t.Skipf("could not dump facet_registry payload: %v", err)
+	}
+	var payload struct {
+		Facets map[string]struct {
+			Channel string `json:"channel"`
+		} `json:"facets"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("registry payload not JSON: %v", err)
+	}
+	if len(payload.Facets) == 0 {
+		t.Fatal("registry served no facets")
+	}
+	for f := range payload.Facets {
+		if _, ok := defaultFacetChannel[f]; !ok {
+			t.Errorf("registry facet %q is absent from the Go default table", f)
+		}
+	}
+	for f := range defaultFacetChannel {
+		if _, ok := payload.Facets[f]; !ok {
+			t.Errorf("Go default table facet %q is absent from the registry", f)
+		}
+	}
+	for f, fd := range payload.Facets {
+		want, ok := defaultFacetChannel[f]
+		if !ok {
+			continue
+		}
+		if got := ChannelFromProse(fd.Channel); got != want {
+			t.Errorf("facet %q: registry prose %q parses to %v, Go default is %v (SSOT DRIFT)", f, fd.Channel, got, want)
+		}
+	}
+}
+
+// findRegistryPython returns a python interpreter that can import api/facet_registry, or "" if none.
+func findRegistryPython() string {
+	for _, c := range []string{os.ExpandEnv("python3"), "python3", "python"} {
+		p, err := exec.LookPath(c)
+		if err != nil {
+			if _, statErr := os.Stat(c); statErr != nil {
+				continue
+			}
+			p = c
+		}
+		if exec.Command(p, "-c",
+			"import sys,os; sys.path.insert(0, os.path.abspath('../../api')); import facet_registry").Run() == nil {
+			return p
+		}
+	}
+	return ""
 }
