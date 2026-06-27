@@ -951,10 +951,17 @@ func (m Model) coordinatorSelectionContext(w int) string {
 	if crit == "" {
 		crit = "ok"
 	}
+	// Renders on the LIVE coordinator: stage/prior/predicted/criticality/rel_count must redact
+	// per-field on air (id + owner already do).
+	stage := grammar.Redact(t.AIR, "stage", t.Stage, m.AIR)
+	prior := grammar.Redact(t.AIR, "prior_stage", t.PriorStage, m.AIR)
+	next := grammar.Redact(t.AIR, "predicted_stage", t.PredictedStage, m.AIR)
+	critV := grammar.Redact(t.AIR, "criticality", crit, m.AIR)
+	rel := grammar.Redact(t.AIR, "rel_count", fmt.Sprintf("%d", t.RelCount), m.AIR)
 	var b strings.Builder
 	b.WriteString(" " + grammar.C("pri", "▶ selection  ") + grammar.C("brt", clipRunes(d(id), maxVisible(8, w-14))) + "\n")
-	ctx := fmt.Sprintf("   stage %s · prior %s · next %s · owner %s · %s · %d ties",
-		d(t.Stage), d(t.PriorStage), d(t.PredictedStage), d(owner), crit, t.RelCount)
+	ctx := fmt.Sprintf("   stage %s · prior %s · next %s · owner %s · %s · %s ties",
+		d(stage), d(prior), d(next), d(owner), critV, rel)
 	b.WriteString(" " + grammar.C("mut", clipRunes(ctx, maxVisible(8, w-1))) + "\n")
 	return b.String()
 }
