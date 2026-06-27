@@ -11,6 +11,61 @@ import (
 // AIR derived-channel leaks found by an independent codex-fugu review (panes the comprehensive audit
 // missed). Each test pins the off-air-includes / on-air-excludes contract.
 
+// On air, [V] class-select must not disclose a denied criticality class (the status named it, and the
+// migration unblocked this native control). It is withheld on air for a denied-criticality task.
+func TestClassSelectWithheldOnAirForDeniedCrit(t *testing.T) {
+	task := grammar.Task{TaskID: "x", Criticality: "crit", AIR: map[string]string{"task_id": "ok", "criticality": "deny"}}
+	m := New("R").FoldTasks([]grammar.Task{task}, false)
+	m.Page = PageTasks
+
+	m.AIR = true
+	on := step(m, "V")
+	if len(on.Sel.Members) != 0 {
+		t.Fatalf("on air [V] must not select the denied class: %v", on.Sel.Members)
+	}
+	if strings.Contains(on.Status, "'crit'") || !strings.Contains(on.Status, "withheld") {
+		t.Fatalf("on air [V] must withhold without naming the class, got %q", on.Status)
+	}
+	m.AIR = false
+	if off := step(m, "V"); len(off.Sel.Members) == 0 {
+		t.Fatalf("off air [V] selects the criticality class")
+	}
+}
+
+// sessionConstraintPane is the migrated PageSessions secondary; it renders the lane readiness, route
+// binding, freshness, AND the inline session work surface (SessionDetail). Every value + derived hue
+// must honor AIR (regression for the codex-fugu tasks/sessions review: attention/route-binding/ages
+// rendered raw, and the work-surface AIR coverage was lost when the legacy wide-body test was deleted).
+func TestSessionConstraintPaneIsAirSafe(t *testing.T) {
+	s := grammar.Session{
+		Role: "cx-session", Session: "tmux-secret", Platform: "codex", State: "active",
+		Readiness: "claim", RouteID: "r1", RouteBindingState: "policy_only", Attention: 0.88,
+		OutputAgeS: 5, RelayAgeS: 9999,
+		AIR: map[string]string{
+			"role": "ok", "session": "deny", "platform": "ok", "state": "ok", "readiness": "ok",
+			"attention": "deny", "route_id": "ok", "route_binding_state": "deny",
+			"output_age_s": "deny", "relay_age_s": "deny", "blocker": "ok", "claimed_task": "ok",
+		},
+	}
+	m := New("R").FoldSessions([]grammar.Session{s}, false).
+		FoldSessionDetail(grammar.SessionDetail{
+			Role:         "cx-session",
+			Task:         grammar.SessionTaskDetail{TaskID: "task-1", Status: "claimed", AuthorityCase: "SECRET-CASE", ParentSpec: "SECRET-PARENT", MutationSurface: "source"},
+			EvidenceRefs: []grammar.EvidenceRef{{Kind: "cc_task_note", Path: "/secret/task.md", Size: 12}},
+			AIR:          map[string]string{"task_id": "ok", "status": "ok", "mutation_surface": "ok", "authority_case": "deny", "parent_spec": "deny", "path": "deny"},
+		}, false)
+	m.AIR = true
+	out := ansi.Strip(m.sessionConstraintPane(120))
+	for _, leak := range []string{"SECRET-CASE", "SECRET-PARENT", "tmux-secret", "/secret/task.md", "0.88", "9999"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("sessionConstraintPane leaked %q on air:\n%s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "LANE READINESS") || !strings.Contains(out, "▒▒▒") {
+		t.Fatalf("the pane should keep structure with redaction:\n%s", out)
+	}
+}
+
 // The emergent connector relation must not derive over a DENIED facet: even though airRelationLabel
 // withholds the value, the facet-CHOICE + count ("shares crit (N)") itself discloses that a denied
 // field is shared. AIR-aware entity builders omit denied facets before relate.Derive, so the

@@ -10137,7 +10137,11 @@ func (m Model) sessionConstraintPane(w int) string {
 	b.WriteString(rule + "\n")
 	line("lane", role, grammar.LaneToken(s.Role))
 	line("ready", sessionReadinessLabel(s, m.AIR), rdyTok)
-	line("attention", fmt.Sprintf("%.2f", s.Attention), attentionToken(s.Attention))
+	attnVal, attnTok := fmt.Sprintf("%.2f", s.Attention), attentionToken(s.Attention)
+	if m.AIR && s.AIR["attention"] != "ok" {
+		attnVal, attnTok = "▒▒▒", "mut" // the value AND the heat hue disclose attention
+	}
+	line("attention", attnVal, attnTok)
 	line("blocker", sessionFieldValueForAir(s, "blocker", m.AIR), blockTok)
 	line("state", sessionFieldValueForAir(s, "state", m.AIR), stateTok)
 	line("platform", sessionFieldValueForAir(s, "platform", m.AIR), "2nd")
@@ -10158,15 +10162,26 @@ func (m Model) sessionConstraintPane(w int) string {
 	if strings.TrimSpace(evidenceRef) == "" {
 		evidenceRef = "none"
 	}
-	binding := routeBindingLabel(s.RouteBindingState)
-	line("route", routeID, routeBindingToken(s.RouteBindingState))
-	line("binding", binding, routeBindingToken(s.RouteBindingState))
+	binding, bindTok := routeBindingLabel(s.RouteBindingState), routeBindingToken(s.RouteBindingState)
+	if m.AIR && s.AIR["route_binding_state"] != "ok" {
+		binding, bindTok = "▒▒▒", "mut" // the binding VALUE and its hue disclose route_binding_state
+	}
+	line("route", routeID, bindTok)
+	line("binding", binding, bindTok)
 	line("mode/profile", modeProfile, "2nd")
 	line("evidence", evidenceRef, "2nd")
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "freshness") + "\n")
-	line("output age", fmt.Sprintf("%.1fs", s.OutputAgeS), ageToken(s.OutputAgeS))
-	line("relay age", fmt.Sprintf("%.1fs", s.RelayAgeS), ageToken(s.RelayAgeS))
+	outAge, outTok := fmt.Sprintf("%.1fs", s.OutputAgeS), ageToken(s.OutputAgeS)
+	if m.AIR && s.AIR["output_age_s"] != "ok" {
+		outAge, outTok = "▒▒▒", "mut"
+	}
+	relAge, relTok := fmt.Sprintf("%.1fs", s.RelayAgeS), ageToken(s.RelayAgeS)
+	if m.AIR && s.AIR["relay_age_s"] != "ok" {
+		relAge, relTok = "▒▒▒", "mut"
+	}
+	line("output age", outAge, outTok)
+	line("relay age", relAge, relTok)
 	line("tmux", sessionFieldValueForAir(s, "session", m.AIR), "pri")
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "fleet context") + "\n")

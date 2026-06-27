@@ -2131,6 +2131,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if t, ok := m.FocusedTask(); ok {
+				if m.AIR && t.AIR["criticality"] != "ok" {
+					// class-select would disclose the denied criticality class + its membership count on
+					// air (via the status). Withhold it — the operator can still select off air.
+					m.Status = "class-select withheld on air (criticality redacted)"
+					return m, nil
+				}
 				vt := m.visibleTasks()
 				var mem []int
 				for i, x := range vt {
