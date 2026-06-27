@@ -13,6 +13,18 @@ import (
 	"github.com/hapax-systems/reins/internal/imgpreview"
 )
 
+// The filebrowser opens in the operator's screenshots dir by default — pickFilesDir returns the first
+// existing candidate (screenshots → home → cwd), else the fallback.
+func TestPickFilesDirPrefersFirstExisting(t *testing.T) {
+	real := t.TempDir()
+	if got := pickFilesDir([]string{"/no/such/dir", real, "/another"}, "."); got != real {
+		t.Fatalf("want the first existing dir %q, got %q", real, got)
+	}
+	if got := pickFilesDir([]string{"/no/such/dir", ""}, "fallback"); got != "fallback" {
+		t.Fatalf("want the fallback when no candidate exists, got %q", got)
+	}
+}
+
 // The coordinator [z] toggle enters/leaves the filebrowser zone; while active, j/k/l/h drive the
 // FILES cursor (not the task focus), and the lens pane renders the listing. (Runs against the
 // package directory, which `go test` makes the cwd — so the listing is non-empty.)

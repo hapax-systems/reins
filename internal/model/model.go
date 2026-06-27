@@ -1243,17 +1243,33 @@ func (m Model) toggleFilesZone() Model {
 	}
 	m.LensZone = "files"
 	if strings.TrimSpace(m.FilesCwd) == "" {
-		if wd, err := os.Getwd(); err == nil {
-			m.FilesCwd = wd
-		} else if home, err := os.UserHomeDir(); err == nil {
-			m.FilesCwd = home
-		} else {
-			m.FilesCwd = "."
+		home, _ := os.UserHomeDir()
+		wd, _ := os.Getwd()
+		shots := ""
+		if home != "" {
+			shots = filepath.Join(home, "Pictures", "Screenshots")
 		}
+		// Default to the operator's screenshots dir — the common case is dropping a screenshot into
+		// coordinator/chat context — falling back to home then cwd if it is absent.
+		m.FilesCwd = pickFilesDir([]string{shots, home, wd}, ".")
 	}
 	m = m.loadFiles()
 	m.Status = ":coordinator · lens → files · [j/k] move · [l/⏎] enter dir · [h] up · [z] back to tasks"
 	return m
+}
+
+// pickFilesDir returns the first candidate that is an existing directory, else the fallback. Empty
+// candidates are skipped so a failed home/cwd lookup falls through cleanly.
+func pickFilesDir(candidates []string, fallback string) string {
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if fi, err := os.Stat(c); err == nil && fi.IsDir() {
+			return c
+		}
+	}
+	return fallback
 }
 
 // loadFiles reads FilesCwd into FilesEntries, clamping the cursor and recording any error honestly.
