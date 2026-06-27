@@ -698,9 +698,9 @@ func (m Model) coordinatorEmergentRelation() string {
 		if t.TaskID == focused.TaskID {
 			continue
 		}
-		others = append(others, taskEntity(t))
+		others = append(others, taskEntity(t, m.AIR))
 	}
-	return m.emergentRelation(taskEntity(focused), others, nil)
+	return m.emergentRelation(taskEntity(focused, m.AIR), others, nil)
 }
 
 // emergentRelation derives a pane-to-pane connector relation (relate.Derive) and renders it
@@ -709,36 +709,57 @@ func (m Model) emergentRelation(anchor relate.Entity, others []relate.Entity, ed
 	return m.airRelationLabel(relate.Derive(anchor, others, edges))
 }
 
-func taskEntity(t grammar.Task) relate.Entity {
-	return relate.Entity{ID: t.TaskID, Facets: map[string]string{
-		"owner": t.Owner,
-		"stage": shortStage2(t.Stage),
-		"crit":  t.Criticality,
-		"case":  t.AuthorityCase,
-	}}
+// taskEntity (and eventEntity/sessionEntity) feed relate.Derive so the connector relation is EMERGENT
+// (strongest shared facet), never authored. AIR-AWARE: on air a facet whose source field is DENIED is
+// OMITTED entirely — so relate.Derive can never pick it, and the connector never discloses "shares
+// crit (N)" over a redacted criticality (the facet-CHOICE + count is itself a derived-channel leak).
+func taskEntity(t grammar.Task, airOn bool) relate.Entity {
+	facets := map[string]string{}
+	put := func(facet, field, val string) {
+		if val == "" || (airOn && t.AIR[field] != "ok") {
+			return
+		}
+		facets[facet] = val
+	}
+	put("owner", "owner", t.Owner)
+	put("stage", "stage", shortStage2(t.Stage))
+	put("crit", "criticality", t.Criticality)
+	put("case", "authority_case", t.AuthorityCase)
+	return relate.Entity{ID: t.TaskID, Facets: facets}
 }
 
-// eventEntity / sessionEntity mirror taskEntity — the per-page anchor's facets feed relate.Derive so
-// the connector relation is EMERGENT (strongest shared facet), never authored. Events have no id, so
-// identity is the (ts,kind,subject) composite (used only to skip the anchor from its own others set).
-func eventEntity(e grammar.Event) relate.Entity {
-	return relate.Entity{ID: e.TS + "|" + e.Kind + "|" + e.Subject, Facets: map[string]string{
-		"subject": e.Subject,
-		"actor":   e.Actor,
-		"kind":    shortKindForPanel(e.Kind),
-	}}
+// Events have no id, so identity is the (ts,kind,subject) composite (used only to skip the anchor
+// from its own others set — never rendered).
+func eventEntity(e grammar.Event, airOn bool) relate.Entity {
+	facets := map[string]string{}
+	put := func(facet, field, val string) {
+		if val == "" || (airOn && e.AIR[field] != "ok") {
+			return
+		}
+		facets[facet] = val
+	}
+	put("subject", "subject", e.Subject)
+	put("actor", "actor", e.Actor)
+	put("kind", "kind", shortKindForPanel(e.Kind))
+	return relate.Entity{ID: e.TS + "|" + e.Kind + "|" + e.Subject, Facets: facets}
 }
 
-func sessionEntity(s grammar.Session) relate.Entity {
+func sessionEntity(s grammar.Session, airOn bool) relate.Entity {
 	id := s.Session
 	if id == "" {
 		id = s.Role
 	}
-	return relate.Entity{ID: id, Facets: map[string]string{
-		"role":      s.Role,
-		"task":      s.ClaimedTask,
-		"readiness": s.Readiness,
-	}}
+	facets := map[string]string{}
+	put := func(facet, field, val string) {
+		if val == "" || (airOn && s.AIR[field] != "ok") {
+			return
+		}
+		facets[facet] = val
+	}
+	put("role", "role", s.Role)
+	put("task", "claimed_task", s.ClaimedTask)
+	put("readiness", "readiness", s.Readiness)
+	return relate.Entity{ID: id, Facets: facets}
 }
 
 // specListContext is the shared STANDING-ELUCIDATE shape: a list primary │ the focused row's context
@@ -757,10 +778,10 @@ func (m Model) eventsEmergentRelation() string {
 	if !ok {
 		return ""
 	}
-	anchor := eventEntity(focused)
+	anchor := eventEntity(focused, m.AIR)
 	others := make([]relate.Entity, 0, len(m.Events))
 	for _, e := range m.Events {
-		oe := eventEntity(e)
+		oe := eventEntity(e, m.AIR)
 		if oe.ID == anchor.ID {
 			continue
 		}
@@ -781,9 +802,9 @@ func (m Model) tasksEmergentRelation() string {
 		if t.TaskID == focused.TaskID {
 			continue
 		}
-		others = append(others, taskEntity(t))
+		others = append(others, taskEntity(t, m.AIR))
 	}
-	return m.emergentRelation(taskEntity(focused), others, nil)
+	return m.emergentRelation(taskEntity(focused, m.AIR), others, nil)
 }
 
 // sessionsEmergentRelation anchors on the focused session; others = the rest of the fleet.
@@ -792,10 +813,10 @@ func (m Model) sessionsEmergentRelation() string {
 	if !ok {
 		return ""
 	}
-	anchor := sessionEntity(focused)
+	anchor := sessionEntity(focused, m.AIR)
 	others := make([]relate.Entity, 0, len(m.Sessions))
 	for _, s := range m.Sessions {
-		oe := sessionEntity(s)
+		oe := sessionEntity(s, m.AIR)
 		if oe.ID == anchor.ID {
 			continue
 		}

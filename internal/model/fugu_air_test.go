@@ -11,6 +11,26 @@ import (
 // AIR derived-channel leaks found by an independent codex-fugu review (panes the comprehensive audit
 // missed). Each test pins the off-air-includes / on-air-excludes contract.
 
+// The emergent connector relation must not derive over a DENIED facet: even though airRelationLabel
+// withholds the value, the facet-CHOICE + count ("shares crit (N)") itself discloses that a denied
+// field is shared. AIR-aware entity builders omit denied facets before relate.Derive, so the
+// connector can never pick one.
+func TestEmergentRelationOmitsDeniedFacetOnAir(t *testing.T) {
+	a := grammar.Task{TaskID: "a", Criticality: "crit", Stage: "S7", AIR: map[string]string{"task_id": "ok", "criticality": "deny", "stage": "ok"}}
+	b := grammar.Task{TaskID: "b", Criticality: "crit", Stage: "S6", AIR: map[string]string{"task_id": "ok", "criticality": "deny", "stage": "ok"}}
+	m := New("R").FoldTasks([]grammar.Task{a, b}, false)
+	m.Focus = 0
+
+	m.AIR = false
+	if rel := ansi.Strip(m.tasksEmergentRelation()); !strings.Contains(rel, "crit") {
+		t.Fatalf("off air the shared (denied-on-air) criticality IS the strongest relation: %q", rel)
+	}
+	m.AIR = true
+	if rel := ansi.Strip(m.tasksEmergentRelation()); strings.Contains(rel, "crit") {
+		t.Fatalf("on air a denied criticality must not appear in the emergent connector relation: %q", rel)
+	}
+}
+
 // eventSlackRows classifies events by kind into fail/succeed/other — a denied kind must not classify,
 // nor inflate the "other" denominator.
 func TestEventSlackRowsIsAirSafe(t *testing.T) {
