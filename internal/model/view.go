@@ -619,7 +619,9 @@ func (m Model) coordinatorRelationBanner(w int) string {
 // pane is render + transclude + input integrated, AIR-safe (free-text turn summaries redact on air).
 func (m Model) coordinatorChatPane(w, h int) string {
 	var b strings.Builder
-	b.WriteString(" " + grammar.C("brt", "CHAT") + grammar.C("mut", " · coordinate over the selection") + "\n")
+	// the chat STEERS DIRECTION only (priority · hold · scope · accept/reject) — never speed/provider/
+	// fanout; those are DERIVED by the routing/admission calculation (the throughput-governed doctrine).
+	b.WriteString(" " + grammar.C("brt", "CHAT") + grammar.C("mut", " · steer direction — not speed/provider") + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
 	marks := map[string]string{"operator": "›", "hapax": "‹", "lens": "·"}
 	for _, t := range m.coordinatorChatTurns() {
@@ -635,7 +637,7 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	if m.Mode == ModeCoordChat {
 		prompt += m.CoordChatInput + "▌"
 	} else {
-		prompt += grammar.C("mut", "[c] coordinate the selected lane (send gated · CapabilityIO session backend)")
+		prompt += grammar.C("mut", "[c] steer: prioritize · hold · clarify scope · accept/reject (send gated)")
 	}
 	b.WriteString(clipRunes(grammar.C("pri", prompt), maxVisible(8, w)) + "\n")
 	return strings.TrimRight(b.String(), "\n")
@@ -660,7 +662,7 @@ func (m Model) coordinatorChatTurns() []grammar.Turn {
 		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "refusal", Summary: "queued · live dispatch awaits the CapabilityIO session backend (Phase-1 capture-output)", AIR: sk})
 	}
 	if len(m.CoordChatLog) == 0 {
-		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "chat is transclude + input ready; live dispatch awaits the CapabilityIO session backend (#4296 precondition merged)", AIR: sk})
+		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "you steer DIRECTION (priority/hold/scope/accept); speed, provider, and fanout are derived — not yours to set", AIR: sk})
 	}
 	return turns
 }
@@ -734,9 +736,30 @@ func (m Model) coordinatorContextPane(w, h int) string {
 	var b strings.Builder
 	b.WriteString(" " + grammar.C("brt", "COORDINATOR") + grammar.C("mut", " · the lens selection drives this context") + "\n")
 	b.WriteString(m.coordinatorSelectionContext(w))
+	b.WriteString(m.coordinatorThroughputLine(w) + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
 	b.WriteString(m.renderYardCockpit(w))
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// coordinatorThroughputLine: the OBJECTIVE throughput calculation (the throughput-governed doctrine) —
+// what the operator READS, never sets. Speed/provider/fanout are DERIVED from this, not steered: the
+// operator steers only direction (the chat). WIP · the limiting constraint · attention contention.
+func (m Model) coordinatorThroughputLine(w int) string {
+	wip := len(m.Tasks)
+	held, hot := 0, 0
+	for _, t := range m.Tasks {
+		if t.Criticality == "crit" || t.Criticality == "major" || t.PredictedStage == "hold" {
+			held++
+		}
+	}
+	for _, s := range m.Sessions {
+		if s.Attention >= 0.5 {
+			hot++
+		}
+	}
+	msg := fmt.Sprintf("THROUGHPUT  WIP %d · limiting %d held/blocked · %d hot lanes · speed/provider/fanout = DERIVED", wip, held, hot)
+	return " " + grammar.C("2nd", clipRunes(msg, maxVisible(8, w-1)))
 }
 
 // coordinatorSelectionContext: the brushed selection block — the focused task's coordination state,
