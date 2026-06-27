@@ -142,7 +142,12 @@ func RenderInjectionComposer(parts []ChatPart, airOn bool) string {
 	for i, p := range parts {
 		switch p.Kind {
 		case PartText:
-			b.WriteString(fmt.Sprintf("  %d %s ~%dtok · %s\n", i+1, C("2nd", "text"), p.TokenEst, injClip(p.Text, 48)))
+			// A text part's body is content too: redact it on air through the SAME interlock as
+			// file/image bodies — a pasted secret or path in chat text is exactly the leak the
+			// file branch guards against, and must not ship verbatim because it is "just text".
+			body := Redact(p.AIR, "body", injClip(p.Text, 48), airOn)
+			b.WriteString(fmt.Sprintf("  %d %s ~%dtok · %s\n", i+1, C("2nd", "text"), p.TokenEst, body))
+			b.WriteString(secretWarning(p.Text, airOn))
 		default: // PartFileRef, PartImageRef
 			path := Redact(p.AIR, "path", p.Path, airOn) // filesystem path is SENSITIVE — denied on air
 			body := Redact(p.AIR, "body", bodyPreview(p), airOn)
@@ -152,17 +157,26 @@ func RenderInjectionComposer(parts []ChatPart, airOn bool) string {
 			}
 			b.WriteString(fmt.Sprintf("  %d %s[%s] %s · %s · ~%dtok · %s\n",
 				i+1, C("yel", p.Kind.String()), ref, path, injBytes(p.Bytes), p.TokenEst, body))
-			if !airOn { // surface secrets only in the operator's present-at-hand frame (air is shape-only)
-				if found := ScanSecrets(p.Text); len(found) > 0 {
-					b.WriteString("    " + C("red", "⚠ secret detected: "+strings.Join(found, ", ")+
-						" — surfaced, NOT stripped; review before any send") + "\n")
-				}
-			}
+			b.WriteString(secretWarning(p.Text, airOn))
 		}
 	}
 	b.WriteString(C("mut", "  ── egress is always-gated (separate from execution trust) ──") + "\n")
 	b.WriteString(C("org", "  NOT WIRED — provider send requires the governed CapabilityIO SESSION gate (explicit confirm; no Enter-sends)"))
 	return b.String()
+}
+
+// secretWarning surfaces detected secrets — but ONLY in the operator's off-air present-at-hand
+// frame (the air frame is shape-only and must not even hint where a secret sits). Pure: it scans,
+// it never strips (auto-strip ships an unreviewed "redacted" payload, itself a leak class).
+func secretWarning(text string, airOn bool) string {
+	if airOn {
+		return ""
+	}
+	if found := ScanSecrets(text); len(found) > 0 {
+		return "    " + C("red", "⚠ secret detected: "+strings.Join(found, ", ")+
+			" — surfaced, NOT stripped; review before any send") + "\n"
+	}
+	return ""
 }
 
 func bodyPreview(p ChatPart) string {

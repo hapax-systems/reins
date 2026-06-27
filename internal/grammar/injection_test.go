@@ -75,6 +75,23 @@ func TestComposerRedactsPathAndBodyOnAir(t *testing.T) {
 	}
 }
 
+func TestComposerTextPartIsEgressSafe(t *testing.T) {
+	// GLM-via-CC review (2026-06-27) caught the PartText branch leaking on air — a text part is
+	// content too: on air it must redact, off air it must surface secrets (never strip).
+	parts := []ChatPart{TextPart("api_key = sk-DEADBEEF01234567 please ship")}
+	off := RenderInjectionComposer(parts, false)
+	if !strings.Contains(off, "secret detected") {
+		t.Fatalf("off-air must surface a secret pasted into a TEXT part:\n%s", off)
+	}
+	on := RenderInjectionComposer(parts, true)
+	if strings.Contains(on, "sk-DEADBEEF") || strings.Contains(on, "api_key") || strings.Contains(on, "secret") {
+		t.Fatalf("on-air must redact a TEXT part's body — no verbatim leak:\n%s", on)
+	}
+	if !strings.Contains(on, "▒▒▒") {
+		t.Fatalf("on-air text body must show the redaction token:\n%s", on)
+	}
+}
+
 func TestComposerNeverMarksSendEligible(t *testing.T) {
 	out := RenderInjectionComposer([]ChatPart{FileRef("/p/f.go", "package x", 10, nil)}, false)
 	if !strings.Contains(out, "NOT WIRED") {

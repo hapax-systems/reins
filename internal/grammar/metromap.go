@@ -23,8 +23,12 @@ type Trainyard struct {
 	Tasks []Task
 }
 
-// stationIndex maps an SDLC stage ("S8_SHIP") onto its station column, clamping S9+ onto the
-// witnessed terminus and unknown/empty stages onto intake.
+// stationIndex maps an SDLC stage ("S8_SHIP") onto its station column. whoisStageIndex is bounded
+// to 0..11 (or -1), so the clamps are honest: an UNRESOLVED stage falls to intake (REQ, never the
+// terminus), and only S11 (archive) reaches the WIT terminus via the upper clamp — a merged-but-
+// UNWITNESSED task (S8) maps to DEP (penultimate), never to WIT. (Pinned by
+// TestTrainyardStationsTerminateAtWitness; the GLM-via-CC review's "unwitnessed could land on WIT"
+// concern does not occur because the bad case is unreachable given that range.)
 func stationIndex(stage string) int {
 	n := whoisStageIndex(stage)
 	if n < 0 {
