@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,7 +11,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
+	"github.com/hapax-systems/reins/internal/imgpreview"
 )
 
 // focusBar renders text as an unmistakable full-width SELECTION bar (bright on the focus background),
@@ -675,6 +679,35 @@ func (m Model) coordinatorChatTurns() []grammar.Turn {
 func (m Model) coordinatorLensPane(w, h int) string {
 	var b strings.Builder
 	b.WriteString(" " + grammar.C("2nd", clipRunes("LENS · the cursor of attention over the selection lattice", maxVisible(8, w-1))) + "\n")
+	if m.LensZone == "files" {
+		zone := " " + grammar.C("mut", "zone  ") + grammar.C("mut", "tasks   sessions   events   gates   ") + grammar.C("pri", "▸files")
+		b.WriteString(clipRunes(zone, maxVisible(8, w)) + "\n")
+		b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+		if m.FilesErr != "" {
+			b.WriteString(" " + grammar.C("red", "dir error: ") + grammar.C("mut", clipRunes(m.FilesErr, maxVisible(8, w-2))))
+			return strings.TrimRight(b.String(), "\n")
+		}
+		visible := h - 5
+		if visible < 1 {
+			visible = 1
+		}
+		start := 0
+		if len(m.FilesEntries) > visible {
+			if m.FilesCursor >= visible {
+				start = m.FilesCursor - visible + 1
+			}
+			if mx := len(m.FilesEntries) - visible; start > mx {
+				start = mx
+			}
+		}
+		end := start + visible
+		if end > len(m.FilesEntries) {
+			end = len(m.FilesEntries)
+		}
+		b.WriteString(files.RenderList(m.FilesEntries[start:end], m.FilesCwd, m.FilesCursor-start, m.AIR, w-1) + "\n")
+		b.WriteString(" " + grammar.C("mut", clipRunes("[j/k] move · [l/⏎] dir · [h] up · [z] tasks", maxVisible(8, w-1))))
+		return strings.TrimRight(b.String(), "\n")
+	}
 	zone := " " + grammar.C("mut", "zone  ") + grammar.C("pri", "▸tasks") + grammar.C("mut", "   sessions   events   gates")
 	b.WriteString(clipRunes(zone, maxVisible(8, w)) + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
@@ -733,6 +766,9 @@ func dashOr(s string) string {
 // selection drives. The SELECTION block transcludes the focused task (the {{sel}} of framework §5),
 // then the live Yard cockpit (ladder / attention / fleet / gates). AIR-safe throughout.
 func (m Model) coordinatorContextPane(w, h int) string {
+	if m.LensZone == "files" {
+		return m.coordinatorFilePreview(w, h)
+	}
 	var b strings.Builder
 	b.WriteString(" " + grammar.C("brt", "COORDINATOR") + grammar.C("mut", " · the lens selection drives this context") + "\n")
 	b.WriteString(m.coordinatorSelectionContext(w))
@@ -740,6 +776,62 @@ func (m Model) coordinatorContextPane(w, h int) string {
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
 	b.WriteString(m.renderYardCockpit(w))
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// coordinatorFilePreview renders the focused filebrowser entry in the wide coordinator pane. For an
+// IMAGE it shows the ACTUAL pixels (imgpreview half-block) in the operator's present-at-hand frame;
+// ON AIR it is shape-only — metadata, pixels withheld — egress-safe by construction. The filename
+// is sensitive and redacts on air.
+func (m Model) coordinatorFilePreview(w, h int) string {
+	var b strings.Builder
+	e, ok := m.focusedFile()
+	if !ok {
+		b.WriteString(" " + grammar.C("brt", "PREVIEW") + "\n")
+		b.WriteString(grammar.C("mut", "  (no file focused — [j/k] to move)"))
+		return b.String()
+	}
+	name := grammar.Redact(nil, "label", e.Name, m.AIR) // a filename can carry identity — redact on air
+	b.WriteString(" " + grammar.C("brt", "PREVIEW") + grammar.C("mut", " · ") + grammar.C("pri", name) + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	if e.IsDir {
+		b.WriteString(grammar.C("mut", "  directory · [l/⏎] enter"))
+		return b.String()
+	}
+	if isImageExt(e.Ext) {
+		if m.AIR {
+			// On air: shape-only. Do NOT call RenderFile even with ProtoMetadataOnly — its metadata
+			// line embeds the filename, which would leak the very name the header just redacted.
+			b.WriteString("  " + grammar.C("yel", "image · shape-only · pixels and filename withheld on air"))
+			return b.String()
+		}
+		// Off air (the operator's present-at-hand frame): render the ACTUAL image. A metadata-only
+		// terminal falls back to a name+dims line — fine off air, in the operator's own frame.
+		cols := maxVisible(8, w-2)
+		rows := h - 4
+		if rows < 2 {
+			rows = 2
+		}
+		out, _ := imgpreview.RenderFile(filepath.Join(m.FilesCwd, e.Name), cols, rows, imgpreview.DetectProtocol(os.Getenv))
+		b.WriteString(out)
+		return b.String()
+	}
+	// non-image file: pixel-free for now (a syntax-tokenized text head is a follow-up increment).
+	meta := e.Ext
+	if meta == "" {
+		meta = "file"
+	}
+	b.WriteString("  " + grammar.C("2nd", meta) + grammar.C("mut", " · non-image · metadata-only (text-head preview is a follow-up)"))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// isImageExt reports whether a lowercased extension is a previewable raster image (decode failures
+// for the less-common formats fall back honestly to metadata in imgpreview.RenderFile).
+func isImageExt(ext string) bool {
+	switch ext {
+	case "png", "jpg", "jpeg", "gif", "bmp", "webp":
+		return true
+	}
+	return false
 }
 
 // coordinatorThroughputLine: the OBJECTIVE throughput calculation (the throughput-governed doctrine) —

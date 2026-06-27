@@ -2,11 +2,14 @@ package model
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
 
@@ -386,6 +389,11 @@ type Model struct {
 	Sel                 Selection       // the cursor-of-attention's rank/field/type (row index stays in Focus)
 	CoordChatInput      string          // the Yard Coordinator chat input buffer (ModeCoordChat)
 	CoordChatLog        []string        // the operator's local coordination messages (send gated · CapabilityIO session backend)
+	LensZone            string          // active coordinator-lens zone ("" / "tasks" = task rows; "files" = the filebrowser)
+	FilesCwd            string          // filebrowser current directory (lazily defaulted on first entry)
+	FilesCursor         int             // filebrowser row cursor into FilesEntries
+	FilesEntries        []files.Entry   // the current directory listing (loaded on zone entry / cwd change)
+	FilesErr            string          // last filebrowser load error (honest, shown in the pane)
 	Filter              string          // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string          // active criticality-class filter (ok|warn|major|crit) — a selected count
 	IntakeSourceFilter  string          // active :intake source filter; empty means all sources
@@ -1225,6 +1233,97 @@ func New(title string) Model {
 	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}}
 }
 
+// toggleFilesZone flips the coordinator lens between task rows and the filebrowser. On entering the
+// files zone it lazily defaults the cwd (working dir, else home) and loads the listing.
+func (m Model) toggleFilesZone() Model {
+	if m.LensZone == "files" {
+		m.LensZone = "tasks"
+		m.Status = ":coordinator · lens → tasks"
+		return m
+	}
+	m.LensZone = "files"
+	if strings.TrimSpace(m.FilesCwd) == "" {
+		if wd, err := os.Getwd(); err == nil {
+			m.FilesCwd = wd
+		} else if home, err := os.UserHomeDir(); err == nil {
+			m.FilesCwd = home
+		} else {
+			m.FilesCwd = "."
+		}
+	}
+	m = m.loadFiles()
+	m.Status = ":coordinator · lens → files · [j/k] move · [l/⏎] enter dir · [h] up · [z] back to tasks"
+	return m
+}
+
+// loadFiles reads FilesCwd into FilesEntries, clamping the cursor and recording any error honestly.
+func (m Model) loadFiles() Model {
+	es, err := files.ListDir(m.FilesCwd)
+	if err != nil {
+		m.FilesErr = err.Error()
+		m.FilesEntries = nil
+		m.FilesCursor = 0
+		return m
+	}
+	m.FilesErr = ""
+	m.FilesEntries = es
+	if m.FilesCursor >= len(es) {
+		m.FilesCursor = len(es) - 1
+	}
+	if m.FilesCursor < 0 {
+		m.FilesCursor = 0
+	}
+	return m
+}
+
+// focusedFile returns the entry under the filebrowser cursor.
+func (m Model) focusedFile() (files.Entry, bool) {
+	if m.FilesCursor >= 0 && m.FilesCursor < len(m.FilesEntries) {
+		return m.FilesEntries[m.FilesCursor], true
+	}
+	return files.Entry{}, false
+}
+
+// updateFilesZone owns navigation while the files zone is active. It returns handled=false for any
+// key it does not own, so quit / command / page-switch / [z] keep working through the global handlers.
+func (m Model) updateFilesZone(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch keyName(v) {
+	case "j", "down":
+		if m.FilesCursor < len(m.FilesEntries)-1 {
+			m.FilesCursor++
+		}
+		return m, nil, true
+	case "k", "up":
+		if m.FilesCursor > 0 {
+			m.FilesCursor--
+		}
+		return m, nil, true
+	case "g":
+		m.FilesCursor = 0
+		return m, nil, true
+	case "G":
+		if n := len(m.FilesEntries); n > 0 {
+			m.FilesCursor = n - 1
+		}
+		return m, nil, true
+	case "l", "enter":
+		if e, ok := m.focusedFile(); ok && e.IsDir {
+			m.FilesCwd = filepath.Join(m.FilesCwd, e.Name)
+			m.FilesCursor = 0
+			m = m.loadFiles()
+		}
+		return m, nil, true
+	case "h":
+		if parent := filepath.Dir(m.FilesCwd); parent != m.FilesCwd {
+			m.FilesCwd = parent
+			m.FilesCursor = 0
+			m = m.loadFiles()
+		}
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
 func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 	// follow the tail: if the cursor was on (or past) the newest row, keep it pinned to newest as the
@@ -1885,6 +1984,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeVerbMenu {
 			return m.updateVerbMenu(v)
 		}
+		// Filebrowser zone owns navigation (j/k/l/h/g/G) when active; everything else (quit,
+		// command, page-switch, [z] toggle) falls through to the global handlers below.
+		if m.Page == PageCoordinator && m.LensZone == "files" {
+			if nm, cmd, handled := m.updateFilesZone(v); handled {
+				return nm, cmd
+			}
+		}
 		if nm, cmd, ok := m.updateGlobal(v); ok {
 			return nm, cmd
 		}
@@ -1909,6 +2015,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageCoordinator {
 				m.Mode, m.CoordChatInput = ModeCoordChat, ""
 				m.Status = "coordinate: type a message · [Enter] queue (send gated · CapabilityIO session backend) · [Esc] cancel"
+				return m, nil
+			}
+		case "z": // toggle the coordinator lens between task rows and the filebrowser zone
+			if m.Page == PageCoordinator {
+				m = m.toggleFilesZone()
 				return m, nil
 			}
 		case "v": // object-verb menu — the focused task's STATE-LEGAL governed verbs (verbs attach to objects)

@@ -38,9 +38,12 @@ func ListDir(path string) ([]Entry, error) {
 		if !e.IsDir {
 			if info, err := de.Info(); err == nil {
 				e.Size = info.Size()
+			} else {
+				e.Size = -1 // stat failed after readdir — render "?" honestly, not a bogus 0B
 			}
-			if ext := strings.TrimPrefix(filepath.Ext(e.Name), "."); ext != "" {
-				e.Ext = strings.ToLower(ext)
+			// filepath.Ext(".bashrc") == ".bashrc": a dotfile has a leading dot, not an extension.
+			if ext := filepath.Ext(e.Name); ext != "" && ext != e.Name {
+				e.Ext = strings.ToLower(strings.TrimPrefix(ext, "."))
 			}
 		}
 		entries = append(entries, e)
@@ -56,6 +59,12 @@ func ListDir(path string) ([]Entry, error) {
 
 func humanSize(n int64) string {
 	switch {
+	case n < 0:
+		return "?" // unknown (stat failed) — honest, not a fake 0B
+	case n >= 1<<40:
+		return fmt.Sprintf("%.1fTB", float64(n)/(1<<40))
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1fGB", float64(n)/(1<<30))
 	case n >= 1<<20:
 		return fmt.Sprintf("%.1fMB", float64(n)/(1<<20))
 	case n >= 1<<10:
@@ -86,7 +95,9 @@ func RenderList(entries []Entry, cwd string, cursor int, airOn bool, width int) 
 	}
 	var b strings.Builder
 	crumb := grammar.Redact(nil, "path", cwd, airOn) // filesystem path is sensitive on air
-	b.WriteString(grammar.C("2nd", "▶ ") + grammar.C("mut", crumb) + "\n")
+	// Breadcrumb uses a path glyph «»» distinct from the three state glyphs (dir ▸ / file · /
+	// cursor ▶) so the listing reads in grayscale — the breadcrumb is never mistaken for the cursor.
+	b.WriteString(grammar.C("2nd", "» ") + grammar.C("mut", crumb) + "\n")
 	if len(entries) == 0 {
 		b.WriteString(grammar.C("mut", "  (empty directory)"))
 		return b.String()

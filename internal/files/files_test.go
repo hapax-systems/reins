@@ -77,6 +77,32 @@ func TestRenderListRedactsCwdOnAir(t *testing.T) {
 	}
 }
 
+func TestDotfileHasNoExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	es, err := ListDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if es[0].Name != ".bashrc" || es[0].Ext != "" {
+		t.Fatalf("a dotfile has no extension; got name=%q ext=%q", es[0].Name, es[0].Ext)
+	}
+}
+
+func TestRenderListLargeSizeAndGrayscaleBreadcrumb(t *testing.T) {
+	out := RenderList([]Entry{{Name: "huge.bin", Size: 2 << 30, Ext: "bin"}}, "/p", 0, false, 60)
+	if !strings.Contains(out, "GB") {
+		t.Fatalf("a 2GiB file must render in GB, not overflow as MB:\n%s", out)
+	}
+	// Grayscale invariant: the cursor glyph ▶ must appear exactly once (the cursor row), not also
+	// on the breadcrumb — state is carried by glyph, not by color.
+	if n := strings.Count(out, "▶"); n != 1 {
+		t.Fatalf("cursor glyph ▶ must be unique to the cursor row, found %d:\n%s", n, out)
+	}
+}
+
 func TestRenderListEmptyAndOOBNoPanic(t *testing.T) {
 	if strings.TrimSpace(RenderList(nil, "/x", 0, false, 40)) == "" {
 		t.Fatal("an empty directory should still render an honest line")
