@@ -65,8 +65,8 @@ func (m Model) View() string {
 		return m.renderLastlogDoor(w, h)
 	}
 	railW := railWidth
-	if w < 100 || m.isReferencePage() || ((m.Page == PageEvents || m.Page == PageTasks || m.Page == PageSessions) && w >= 160) {
-		railW = 0 // reference pages and wide row pages manage their own context panes
+	if w < 100 || m.isReferencePage() || m.Page == PageCoordinator || ((m.Page == PageEvents || m.Page == PageTasks || m.Page == PageSessions) && w >= 160) {
+		railW = 0 // reference pages, the self-composing coordinator, and wide row pages manage their own context panes
 	}
 	mainW := w
 	if railW > 0 {
@@ -534,10 +534,128 @@ func (m Model) blockedBreakdown(indices []int) (hold, risk int) {
 
 // Z2a — the main pane body: the active page, rendered by the cell grammar.
 func (m Model) bodyFor(w, h int) string {
+	if m.Page == PageCoordinator { // the Yard Coordinator is INHERENTLY a composed split (lens │ coordinator)
+		return m.coordinatorBody(w, h)
+	}
 	if m.SplitContext && w >= splitContextMinWidth {
 		return m.splitContextBody(w, h)
 	}
 	return m.bodyForPage(w, h)
+}
+
+// hconcatBlocks is the HConcat composition primitive (framework §1 Layer-3 seed): join two fitted
+// blocks (each h lines tall) side-by-side with a divider column. The view-algebra's split = HConcat;
+// the Yard Coordinator is its first instance, composing its OWN left + right rather than inheriting
+// the session-frozen global split (dissolving the "left always frozen to sessions" anti-pattern).
+func hconcatBlocks(left []string, div string, right []string, h int) string {
+	out := make([]string, 0, h)
+	for i := 0; i < h; i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out = append(out, l+div+r)
+	}
+	return strings.Join(out, "\n")
+}
+
+// coordinatorBody composes the Yard Coordinator: LEFT = the Miller-column lens over the selection
+// lattice, RIGHT = the coordinator context the lens selection drives (framework §5). HConcat of two
+// page-owned panes — no session-source assumptions leak in. Narrow terminals drop the lens column.
+func (m Model) coordinatorBody(w, h int) string {
+	leftW, rightW, ok := splitContextWidths(w)
+	if !ok {
+		return m.coordinatorContextPane(w, h)
+	}
+	left := fitBlock(m.coordinatorLensPane(leftW, h), leftW, h)
+	right := fitBlock(m.coordinatorContextPane(rightW, h), rightW, h)
+	return hconcatBlocks(left, grammar.C("border", "│"), right, h)
+}
+
+// coordinatorLensPane: the Yard Coordinator's LEFT pane — a Miller-column lens over the selection
+// lattice (framework §5 + the selection-model spec). v1 shows L0 ZONE (the lattice's domains; the
+// live subject is `tasks`) and L2 ROW (the tasks, rendered THROUGH the cell-grammar encoder), with the
+// cursor; [j/k] drives m.Focus, which brushes the right coordinator. The breadcrumb situates the
+// cursor in the whole. (L3 field / L4 token descent + zone-switching land next.)
+func (m Model) coordinatorLensPane(w, h int) string {
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("2nd", clipRunes("LENS · the cursor of attention over the selection lattice", maxVisible(8, w-1))) + "\n")
+	zone := " " + grammar.C("mut", "zone  ") + grammar.C("pri", "▸tasks") + grammar.C("mut", "   sessions   events   gates")
+	b.WriteString(clipRunes(zone, maxVisible(8, w)) + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	tasks := m.visibleTasks()
+	if len(tasks) == 0 {
+		b.WriteString(" " + grammar.C("2nd", "no tasks · waiting for /read/tasks") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	b.WriteString("  " + grammar.RenderTaskHeader() + "\n")
+	visible := h - 6 // header · zone · rule · task-header · rule · breadcrumb
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(tasks) > visible {
+		if m.Focus >= visible {
+			start = m.Focus - visible + 1
+		}
+		if mx := len(tasks) - visible; start > mx {
+			start = mx
+		}
+	}
+	for i := start; i < start+visible && i < len(tasks); i++ {
+		row := grammar.RenderTaskRow(tasks[i], m.AIR)
+		if i == m.Focus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(row, w-1) + "\n")
+		} else {
+			b.WriteString(" " + row + "\n")
+		}
+	}
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	crumb := fmt.Sprintf("▶ path  Z0▸zone tasks ▸ Z2▸row %d/%d   ·   [j/k] move · [Z] coordinator", m.Focus+1, len(tasks))
+	b.WriteString(" " + grammar.C("mut", clipRunes(crumb, maxVisible(8, w-1))) + "\n")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// coordinatorContextPane: the Yard Coordinator's RIGHT pane — the coordinator context the lens
+// selection drives. The SELECTION block transcludes the focused task (the {{sel}} of framework §5),
+// then the live Yard cockpit (ladder / attention / fleet / gates). AIR-safe throughout.
+func (m Model) coordinatorContextPane(w, h int) string {
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "COORDINATOR") + grammar.C("mut", " · the lens selection drives this context") + "\n")
+	b.WriteString(m.coordinatorSelectionContext(w))
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	b.WriteString(m.renderYardCockpit(w))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// coordinatorSelectionContext: the brushed selection block — the focused task's coordination state,
+// transcluded reference-not-copy and AIR-redacted (the left lens selection driving the right).
+func (m Model) coordinatorSelectionContext(w int) string {
+	t, ok := m.FocusedTask()
+	if !ok {
+		return " " + grammar.C("mut", "▶ selection  (none — [j/k] moves the lens cursor)") + "\n"
+	}
+	d := func(s string) string {
+		if strings.TrimSpace(s) == "" {
+			return "—"
+		}
+		return s
+	}
+	id := grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR)
+	owner := grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)
+	crit := t.Criticality
+	if crit == "" {
+		crit = "ok"
+	}
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("pri", "▶ selection  ") + grammar.C("brt", clipRunes(d(id), maxVisible(8, w-14))) + "\n")
+	ctx := fmt.Sprintf("   stage %s · prior %s · next %s · owner %s · %s · %d ties",
+		d(t.Stage), d(t.PriorStage), d(t.PredictedStage), d(owner), crit, t.RelCount)
+	b.WriteString(" " + grammar.C("mut", clipRunes(ctx, maxVisible(8, w-1))) + "\n")
+	return b.String()
 }
 
 func (m Model) bodyForPage(w, h int) string {

@@ -11,24 +11,25 @@ import (
 )
 
 const (
-	PageEvents     = 0
-	PageTasks      = 1
-	PageSessions   = 2
-	PageDynamics   = 3
-	PageHelp       = 4
-	PageLegend     = 5
-	PageCommands   = 6
-	PageWindows    = 7
-	PageIntent     = 8
-	PageSurfaces   = 9
-	PageDomains    = 10
-	PageYard       = 11
-	PageCaps       = 12
-	PageReadiness  = 13
-	PageIntake     = 14
-	PageEpistemics = 15
-	PageLifecycles = 16
-	PageTraces     = 17
+	PageEvents      = 0
+	PageTasks       = 1
+	PageSessions    = 2
+	PageDynamics    = 3
+	PageHelp        = 4
+	PageLegend      = 5
+	PageCommands    = 6
+	PageWindows     = 7
+	PageIntent      = 8
+	PageSurfaces    = 9
+	PageDomains     = 10
+	PageYard        = 11
+	PageCaps        = 12
+	PageReadiness   = 13
+	PageIntake      = 14
+	PageEpistemics  = 15
+	PageLifecycles  = 16
+	PageTraces      = 17
+	PageCoordinator = 18 // the Yard Coordinator: a Miller-column lens (left) + coordinator (right), framework §5
 )
 
 const (
@@ -632,7 +633,7 @@ func (m Model) splitContextActive() bool {
 // :events rows; other pages have none). The cursor + its verbs operate on THIS.
 func (m Model) pageRows() int {
 	switch m.Page {
-	case PageTasks:
+	case PageTasks, PageCoordinator: // the coordinator lens navigates the task list (L2 rows)
 		return len(m.visibleTasks())
 	case PageEvents:
 		return len(m.Events)
@@ -723,7 +724,7 @@ func (m Model) curFocus() int {
 // focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
 // so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
 func (m Model) focusTo(i int) Model {
-	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces {
+	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageCoordinator {
 		return m
 	}
 	max := m.pageRows() - 1
@@ -1402,6 +1403,7 @@ var verbs = []verbDef{
 	{name: "sessions", aliases: []string{"s"}, kind: commandRead, group: "window", gloss: "live agent/session roster", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "traces", aliases: []string{"trace"}, kind: commandRead, group: "window", gloss: "recent LLM-observability traces (model/tokens/cost/latency)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "yard", kind: commandRead, group: "window", gloss: "Trainyard-style SDLC cockpit over live Reins read models", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "coordinator", aliases: []string{"coord"}, kind: commandRead, group: "window", gloss: "Yard Coordinator: a Miller-column lens (left) drives the coordinator context (right)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "readiness", aliases: []string{"ready", "gates", "gate"}, kind: commandRead, group: "window", gloss: "gates/readiness projection across read sources, lanes, tasks, and command routes", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "intake", aliases: []string{"observations", "obs", "inbox"}, kind: commandRead, group: "window", gloss: "source-backed intake observations/demand projection", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "capabilities", aliases: []string{"caps", "cap"}, kind: commandRead, group: "window", gloss: "capability routing fit/admission projection", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1503,6 +1505,9 @@ func (m Model) Exec(line string) Model {
 	case "yard":
 		m = m.switchPage(PageYard)
 		m.Status = ":yard"
+	case "coordinator":
+		m = m.switchPage(PageCoordinator)
+		m.Status = ":coordinator"
 	case "readiness":
 		m = m.switchPage(PageReadiness)
 		m.Status = ":readiness"

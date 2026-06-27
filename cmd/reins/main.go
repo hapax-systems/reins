@@ -254,6 +254,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageSessions, true
 	case "yard":
 		return model.PageYard, true
+	case "coordinator", "coord":
+		return model.PageCoordinator, true
 	case "readiness", "ready", "gates", "gate":
 		return model.PageReadiness, true
 	case "capabilities", "caps", "cap":
