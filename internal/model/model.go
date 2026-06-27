@@ -644,10 +644,10 @@ func (m Model) lifecycleRowCount() int {
 // wiring needed.
 func (m Model) composesViaAlgebra() bool {
 	switch m.Page {
-	case PageEvents:
-		// Unconditionally algebra-owned — even when dark. composePage() returns nil for dark events so
-		// they render the dark-hint body (bodyForPage), but the legacy session-frozen split must NEVER
-		// re-engage (which would also re-bind templates/yank to the session source via
+	case PageEvents, PageTasks, PageSessions:
+		// Unconditionally algebra-owned — even when dark. composePage() returns nil for the dark case so
+		// the page renders the dark-hint body (bodyForPage), but the legacy session-frozen split must
+		// NEVER re-engage (which would also re-bind templates/yank to the session source via
 		// commandSelectionPage). The dark fall-through is handled in bodyFor, gated on this predicate.
 		return true
 	}

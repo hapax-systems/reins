@@ -598,6 +598,22 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.eventsListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.eventContextPane(pw) }},
 			0.65, m.eventsEmergentRelation())
+	case PageTasks:
+		if m.TasksDark {
+			return nil // dark: fall through to taskBody (dark-reason disclosure)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 74, Render: func(pw, ph int) string { return m.tasksListBody(pw, ph) }},
+			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.taskWorkDomainPane(pw) }},
+			0.60, m.tasksEmergentRelation())
+	case PageSessions:
+		if m.SessionsDark {
+			return nil // dark: fall through to sessionsBody (dark-reason disclosure)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.sessionsListBody(pw, ph) }},
+			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.sessionConstraintPane(pw) }},
+			0.62, m.sessionsEmergentRelation())
 	case PageDispatch:
 		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
 		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
@@ -745,6 +761,41 @@ func (m Model) eventsEmergentRelation() string {
 	others := make([]relate.Entity, 0, len(m.Events))
 	for _, e := range m.Events {
 		oe := eventEntity(e)
+		if oe.ID == anchor.ID {
+			continue
+		}
+		others = append(others, oe)
+	}
+	return m.emergentRelation(anchor, others, nil)
+}
+
+// tasksEmergentRelation anchors on the focused task; others = the visible task list (same derivation
+// as the coordinator's task-anchored relation).
+func (m Model) tasksEmergentRelation() string {
+	focused, ok := m.FocusedTask()
+	if !ok {
+		return ""
+	}
+	others := make([]relate.Entity, 0, len(m.visibleTasks()))
+	for _, t := range m.visibleTasks() {
+		if t.TaskID == focused.TaskID {
+			continue
+		}
+		others = append(others, taskEntity(t))
+	}
+	return m.emergentRelation(taskEntity(focused), others, nil)
+}
+
+// sessionsEmergentRelation anchors on the focused session; others = the rest of the fleet.
+func (m Model) sessionsEmergentRelation() string {
+	focused, ok := m.FocusedSession()
+	if !ok {
+		return ""
+	}
+	anchor := sessionEntity(focused)
+	others := make([]relate.Entity, 0, len(m.Sessions))
+	for _, s := range m.Sessions {
+		oe := sessionEntity(s)
 		if oe.ID == anchor.ID {
 			continue
 		}

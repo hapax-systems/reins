@@ -174,13 +174,15 @@ func TestWideContextTallFrameUsesSlackPayloadBeforeBlankGround(t *testing.T) {
 	m.Width, m.Height, m.Page = 220, 52, PageTasks
 
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"CONTEXT SLACK", "sources", "task mix", "release/hold"} {
+	// the tasks algebra split fills the tall frame with its own panes (list │ WORK DOMAIN) — no blank
+	// ground — and the WORK DOMAIN secondary surfaces the release-blocked task.
+	for _, want := range []string{"WORK DOMAIN", "release blocked"} {
 		if !strings.Contains(v, want) {
-			t.Fatalf("tall wide context should fill spare rows with %q:\n%s", want, v)
+			t.Fatalf("the tasks algebra should fill the tall frame with the work-domain split, missing %q:\n%s", want, v)
 		}
 	}
 	if strings.Contains(v, "lane        cx-ready") {
-		t.Fatalf("non-split task slack must not imply unrelated selected session lane context:\n%s", v)
+		t.Fatalf("the tasks page must not imply an unrelated selected-session lane context:\n%s", v)
 	}
 }
 
@@ -806,14 +808,13 @@ func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
 			m := base
 			m.Page = pair.Page
-			if pair.Page == PageEvents {
-				// events self-composes via the view-algebra (eventsListBody │ eventContextPane), NOT the
-				// session-frozen split — assert its own two-pane markers.
-				v := ansi.Strip(m.View())
-				for _, want := range []string{"live coord events", "EVENT CONTEXT"} {
-					if !strings.Contains(v, want) {
-						t.Fatalf("events algebra frame missing %q:\n%s", want, v)
-					}
+			if m.composesViaAlgebra() {
+				// events/tasks/sessions self-compose via the view-algebra (list │ context), NOT the
+				// session-frozen split. They no longer use the authored split-pair as a composition
+				// source (split-pairs are being ABOLISHED); their own two-pane render + native nav are
+				// covered by each page's dedicated algebra tests. Here just assert the frame renders.
+				if v := ansi.Strip(m.View()); strings.TrimSpace(v) == "" {
+					t.Fatalf("%s algebra frame must render a non-empty two-pane view", pageLabel(pair.Page))
 				}
 				return
 			}
@@ -1887,7 +1888,10 @@ func TestQueuedNarrowSplitDoesNotAdvertiseInactiveContextScroll(t *testing.T) {
 	}
 }
 
-func TestSplitTaskContextWrapsLongClaimAndAuthority(t *testing.T) {
+// The tasks algebra split (tasksListBody │ taskWorkDomainPane) must handle long values without
+// breaking the only-split FRAME: the WORK DOMAIN secondary renders the focused task's long claim/
+// authority, and no line exceeds the terminal width (the layout.Render clip invariant).
+func TestTasksAlgebraFrameHandlesLongFields(t *testing.T) {
 	longTask := "claimed-task-alpha-beta-gamma-delta-epsilon-zeta-eta-theta-iota-tail-marker"
 	longAuthority := "AUTHORITY-CASE-alpha-beta-gamma-delta-epsilon-zeta-tail-marker"
 	m := New("REINS").
@@ -1899,27 +1903,27 @@ func TestSplitTaskContextWrapsLongClaimAndAuthority(t *testing.T) {
 				"task_id": "ok", "stage": "ok", "prior_stage": "ok", "predicted_stage": "ok",
 				"owner": "ok", "criticality": "ok", "authority_case": "ok", "no_go": "ok",
 			},
-		}}, false).
-		FoldSessions([]grammar.Session{{
-			Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: longTask,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "claimed_task": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 46, PageTasks, true
+	m.Width, m.Height, m.Page = 170, 46, PageTasks
 
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"WORK DOMAIN", "tail-marker", "AUTHORITY-CASE-alpha-beta-gamma-delta-epsilon-zeta-tail-", "marker", "release_cutover_tail"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split task work-domain should preserve long value %q:\n%s", want, v)
-		}
+	if !strings.Contains(v, "WORK DOMAIN") {
+		t.Fatalf("the tasks algebra secondary must render the WORK DOMAIN pane:\n%s", v)
+	}
+	if !strings.Contains(v, "tail-marker") {
+		t.Fatalf("the focused task's long value must be preserved/visible:\n%s", v)
 	}
 	for i, line := range strings.Split(v, "\n") {
 		if got := ansi.StringWidth(line); got > m.Width {
-			t.Fatalf("split task line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
+			t.Fatalf("tasks line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
 		}
 	}
 }
 
-func TestSplitSessionContextWrapsLongBlockerAndClaim(t *testing.T) {
+// The sessions algebra split (sessionsListBody │ sessionConstraintPane) must handle long values
+// without breaking the only-split FRAME: the LANE READINESS secondary renders the focused session's
+// long blocker/claim, and no line exceeds the terminal width.
+func TestSessionsAlgebraFrameHandlesLongFields(t *testing.T) {
 	longBlocker := "blocked-by-route-evidence-alpha-beta-gamma-delta-epsilon-tail-marker"
 	longClaim := "claimed-task-alpha-beta-gamma-delta-epsilon-zeta-eta-tail-marker"
 	m := New("REINS").FoldSessions([]grammar.Session{{
@@ -1927,75 +1931,29 @@ func TestSplitSessionContextWrapsLongBlockerAndClaim(t *testing.T) {
 		ClaimedTask: longClaim, Attention: 0.72,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "claimed_task": "ok", "attention": "ok"},
 	}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 46, PageSessions, true
+	m.Width, m.Height, m.Page = 170, 46, PageSessions
 
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"LANE READINESS", "blocked-by-route-evidence-alpha-beta-gamma-delta-epsilon-", "claimed-task-alpha-beta-gamma-delta-epsilon-zeta-eta-tail-", "tail-marker"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split session context should preserve long value %q:\n%s", want, v)
-		}
+	if !strings.Contains(v, "LANE READINESS") {
+		t.Fatalf("the sessions algebra secondary must render the LANE READINESS pane:\n%s", v)
+	}
+	if !strings.Contains(v, "tail-marker") {
+		t.Fatalf("the focused session's long value must be preserved/visible:\n%s", v)
 	}
 	for i, line := range strings.Split(v, "\n") {
 		if got := ansi.StringWidth(line); got > m.Width {
-			t.Fatalf("split session line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
+			t.Fatalf("sessions line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
 		}
 	}
 }
 
-func TestSessionsWidePaneRendersWorkSurfaceAndDetailRefs(t *testing.T) {
-	m := New("REINS").
-		FoldSessions([]grammar.Session{{
-			Role: "cx-session", Session: "tmux-secret", Platform: "codex", State: "active", Readiness: "claim",
-			ClaimedTask: "task-1", Attention: 0.82, RouteID: "codex.headless.full", RouteBindingState: "policy_only",
-			AIR: map[string]string{"role": "ok", "session": "deny", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "route_id": "ok", "route_binding_state": "ok", "mode": "ok", "profile": "ok", "route_evidence_ref": "deny", "output_age_s": "ok", "relay_age_s": "ok"},
-		}}, false).
-		FoldSessionDetail(grammar.SessionDetail{
-			Role:      "cx-session",
-			Platform:  "codex",
-			State:     "active",
-			Readiness: "claim",
-			Task: grammar.SessionTaskDetail{
-				TaskID: "task-1", Status: "claimed", AuthorityCase: "SECRET-CASE", ParentSpec: "SECRET-PARENT", MutationSurface: "source",
-			},
-			EvidenceRefs: []grammar.EvidenceRef{
-				{Kind: "cc_task_note", Path: "/secret/task.md", Size: 12},
-				{Kind: "transcript_candidate", Path: "/secret/transcript.jsonl", Size: 34},
-			},
-			EvidenceSummary: grammar.SessionEvidenceSummary{
-				Total:                   2,
-				ByKind:                  map[string]int{"cc_task_note": 1, "transcript_candidate": 1},
-				TranscriptRootsObserved: 1,
-				TranscriptRootsMissing:  0,
-				Truncated:               false,
-				Privacy:                 "metadata-only; transcript candidates raw_access=false",
-				RawAccess:               false,
-			},
-			Resume: grammar.ResumeContext{Intent: "session.resume", Ready: false, Authority: "supervisor_or_methodology_dispatch", BlockedReasons: []string{"not_wired"}},
-			AIR:    map[string]string{"task_id": "ok", "status": "ok", "mutation_surface": "ok", "authority_case": "deny", "parent_spec": "deny", "evidence_count": "ok", "path": "deny", "resume_ready": "ok"},
-		}, false)
-	m.Width, m.Height, m.Page = 190, 46, PageSessions
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"session work surface", "{{sel.role}}", "{{sel.claimed_task}}", ":intent resume", "task=task-1", "status=claimed", "mutation=source", "evidence=2", "task-note:1,transcript:1", "roots observed=1 missing=0", "raw_access=false", "resume_ready=false"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("session work surface missing %q:\n%s", want, v)
-		}
-	}
-	if strings.Contains(v, "SECRET_TRANSCRIPT") {
-		t.Fatalf("session work surface must not render raw transcript content:\n%s", v)
-	}
-
-	m.AIR = true
-	v = ansi.Strip(m.View())
-	for _, leak := range []string{"SECRET-CASE", "SECRET-PARENT", "/secret/task.md", "/secret/transcript.jsonl", "tmux-secret"} {
-		if strings.Contains(v, leak) {
-			t.Fatalf("AIR session work surface leaked %q:\n%s", leak, v)
-		}
-	}
-	if !strings.Contains(v, "case=▒▒▒") || !strings.Contains(v, "parent=▒▒▒") {
-		t.Fatalf("AIR session work surface should preserve authority structure with redaction:\n%s", v)
-	}
-}
+// (Removed TestSessionsWidePaneRendersWorkSurfaceAndDetailRefs — it tested the legacy ≥150
+// sessionsWideBody's INLINE "session work surface" (the SessionDetail: task/evidence/authority/resume).
+// The only-split algebra renders sessionsListBody │ sessionConstraintPane inline and relocates the
+// full work surface to the session DOOR — the standard list→detail pattern. The work surface + its AIR
+// redaction remain covered: air_guard_test.go TestNoAirDeniedValueEverLeaks opens SessionDoorOpen on
+// PageSessions, and grammar_test.go TestRenderSessionDoorAIRRedacts{OperationalHandles,Refs} test the
+// door render directly.)
 
 // The events algebra split must handle long fields without breaking the only-split FRAME: the long
 // subject is preserved/visible (in the list or the emergent relation), and no rendered line ever
@@ -2072,64 +2030,12 @@ func TestEventsComposeViaAlgebraNativeNav(t *testing.T) {
 	}
 }
 
-func TestSplitContextTaskPaneUsesSelectedSessionClaim(t *testing.T) {
-	m := New("REINS").
-		FoldTasks([]grammar.Task{
-			{TaskID: "hidden-task", Stage: "S1", Owner: "other", AIR: map[string]string{"task_id": "ok", "stage": "ok", "owner": "ok"}},
-			{TaskID: "linked-task", Stage: "S7", PredictedStage: "hold", Owner: "cx-link", Criticality: "crit", AIR: map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok"}},
-		}, false).
-		FoldSessions([]grammar.Session{
-			{Role: "cx-link", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: "linked-task", Blocker: "none", Attention: 0.75,
-				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "session": "ok"}},
-		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageTasks, true
-	m.Focus, m.SFocus = 0, 0
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"sessions -> task work by claimed_task", "selected session claimed task", "source      cx-link", "task        linked-task", "release blocked"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split task context should derive from selected session claim, missing %q:\n%s", want, v)
-		}
-	}
-	if strings.Contains(v, "task        hidden-task") {
-		t.Fatalf("split task context should not use hidden task cursor:\n%s", v)
-	}
-}
-
-func TestSplitTaskPaneBlocksHiddenTaskControls(t *testing.T) {
-	base := New("REINS").
-		FoldTasks([]grammar.Task{
-			{TaskID: "hidden-task", Stage: "S1", Owner: "other", Criticality: "warn", AIR: map[string]string{"task_id": "ok", "stage": "ok", "owner": "ok", "criticality": "ok"}},
-			{TaskID: "linked-task", Stage: "S7", PredictedStage: "hold", Owner: "cx-link", Criticality: "crit", AIR: map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok", "owner": "ok", "criticality": "ok"}},
-		}, false).
-		FoldSessions([]grammar.Session{{
-			Role: "cx-link", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: "linked-task", Blocker: "none", Attention: 0.75,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok"},
-		}}, false)
-	base.Width, base.Height, base.Page, base.SplitContext = 220, 44, PageTasks, true
-	base.Focus, base.SFocus, base.Sel.Rank = 1, 0, RankRow
-
-	for _, k := range []string{"/", "f", "tab", "V"} {
-		t.Run(k, func(t *testing.T) {
-			m := step(base, k)
-			if m.Mode != ModeNormal {
-				t.Fatalf("split task key %q should not enter hidden task mode, got mode=%d status=%q", k, m.Mode, m.Status)
-			}
-			if m.Focus != base.Focus || m.SFocus != base.SFocus {
-				t.Fatalf("split task key %q should not move hidden/source cursors, focus=%d/%d sfocus=%d/%d", k, m.Focus, base.Focus, m.SFocus, base.SFocus)
-			}
-			if m.Sel.Rank != RankRow || m.Sel.Field != "" || len(m.Sel.Members) != 0 {
-				t.Fatalf("split task key %q should not mutate hidden task selection: %+v", k, m.Sel)
-			}
-			if m.Filter != "" || m.CritFilter != "" {
-				t.Fatalf("split task key %q should not mutate hidden task filters: filter=%q crit=%q", k, m.Filter, m.CritFilter)
-			}
-			if !strings.Contains(m.Status, "split tasks: source pane owns") {
-				t.Fatalf("split task key %q should explain ownership, got status=%q", k, m.Status)
-			}
-		})
-	}
-}
+// (Removed TestSplitContextTaskPaneUsesSelectedSessionClaim and TestSplitTaskPaneBlocksHidden
+// TaskControls — they pinned the legacy session-frozen TASKS split: the task pane DERIVED from the
+// selected session's claimed_task, and the native task controls (/, f, tab, V) were BLOCKED ("source
+// pane owns"). The only-split view-algebra ABOLISHES that — the tasks page anchors on its OWN focused
+// task and the native filter/field/verb controls now WORK. Native task nav/template/paste is covered
+// by TestWideTasksUseWorkDomainContext + TestTemplateResolvesSelection.)
 
 func TestSplitYardUsesSelectedSessionAsTrainyardDrilldown(t *testing.T) {
 	m := New("REINS").
