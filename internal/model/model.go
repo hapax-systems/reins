@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/hapax-systems/reins/internal/dispatch"
 	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
@@ -33,6 +34,7 @@ const (
 	PageLifecycles  = 16
 	PageTraces      = 17
 	PageCoordinator = 18 // the Yard Coordinator: a Miller-column lens (left) + coordinator (right), framework §5
+	PageDispatch    = 19 // the capability-dispatch ledger + measurement surface (cc-dispatch observability)
 )
 
 const (
@@ -313,6 +315,7 @@ type Model struct {
 	Tasks               []grammar.Task
 	Sessions            []grammar.Session
 	Traces              []grammar.Trace
+	DispatchRecords     []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -1521,6 +1524,7 @@ var verbs = []verbDef{
 	{name: "tasks", aliases: []string{"t"}, kind: commandRead, group: "window", gloss: "the task registry", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "sessions", aliases: []string{"s"}, kind: commandRead, group: "window", gloss: "live agent/session roster", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "traces", aliases: []string{"trace"}, kind: commandRead, group: "window", gloss: "recent LLM-observability traces (model/tokens/cost/latency)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "dispatch", aliases: []string{"disp"}, kind: commandRead, group: "window", gloss: "the capability-dispatch ledger + measurement surface (cost/quality/utilization, honest gaps)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "yard", kind: commandRead, group: "window", gloss: "Trainyard-style SDLC cockpit over live Reins read models", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "coordinator", aliases: []string{"coord"}, kind: commandRead, group: "window", gloss: "Yard Coordinator: a Miller-column lens (left) drives the coordinator context (right)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "readiness", aliases: []string{"ready", "gates", "gate"}, kind: commandRead, group: "window", gloss: "gates/readiness projection across read sources, lanes, tasks, and command routes", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1621,6 +1625,10 @@ func (m Model) Exec(line string) Model {
 	case "traces":
 		m = m.switchPage(PageTraces)
 		m.Status = ":traces"
+	case "dispatch":
+		m = m.loadDispatch()
+		m = m.switchPage(PageDispatch)
+		m.Status = ":dispatch"
 	case "yard":
 		m = m.switchPage(PageYard)
 		m.Status = ":yard"
@@ -1768,6 +1776,14 @@ func (m Model) selectedIntentSubject() string {
 		return "window " + w.ID
 	}
 	return "selection none"
+}
+
+// loadDispatch reads the cc-dispatch ledger into the model for the :dispatch page. Fail-open: empty
+// when the dev2 lane has not emitted yet — the surface says "ledger empty" honestly rather than faking
+// activity (use `reins --probe dispatch` to inspect the populated fixture).
+func (m Model) loadDispatch() Model {
+	m.DispatchRecords, _ = dispatch.Read(dispatch.LedgerPath(), 100)
+	return m
 }
 
 func (m Model) switchPage(page int) Model {

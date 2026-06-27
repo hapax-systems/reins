@@ -190,6 +190,7 @@ var windowRegistry = []WindowDef{
 	{Key: "0", ID: "domains", Name: "domains", Short: "doms", Page: PageDomains, Scope: "engine", Lifecycle: "engine", Kind: "registry"},
 	{Key: "L", ID: "lifecycles", Name: "lifecycles", Short: "life", Page: PageLifecycles, Scope: "engine", Lifecycle: "engine", Kind: "registry"},
 	{Key: "T", ID: "traces", Name: "traces", Short: "traces", Page: PageTraces, Scope: "instance", Lifecycle: "substrate", Kind: "stream"},
+	{Key: "D", ID: "dispatch", Name: "dispatch", Short: "disp", Page: PageDispatch, Scope: "instance", Lifecycle: "sdlc", Kind: "stream"},
 	{Key: "?", ID: "legend", Name: "legend", Short: "legend", Page: PageLegend, Scope: "engine", Lifecycle: "engine", Kind: "reference"},
 }
 

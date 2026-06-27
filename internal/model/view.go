@@ -585,8 +585,60 @@ func (m Model) composePage(w, h int) *layout.Spec {
 	switch m.Page {
 	case PageCoordinator:
 		return m.specCoordinator()
+	case PageDispatch:
+		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
+		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
+		// elucidation, not a minted join, so the connector relation is honest.
+		div := grammar.C("border", "│")
+		return layout.Split(
+			layout.Leaf(&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.dispatchLedgerPane(pw, ph) }}),
+			layout.Leaf(&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.dispatchMeasurementPane(pw) }}),
+			0.62, layout.Connector{Glyph: div, Relation: "measurement derived from the ledger"})
 	}
 	return nil
+}
+
+// dispatchLedgerPane renders the cc-dispatch ledger (the primary of the :dispatch page): one compact
+// ACTIVITY row per record (newest first, windowed to the height). The measurement half lives in the
+// secondary. Empty → says so plainly rather than faking activity.
+func (m Model) dispatchLedgerPane(w, h int) string {
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "DISPATCH LEDGER") + grammar.C("mut", "  capability · route · slice · admission · launched · latency") + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	if len(m.DispatchRecords) == 0 {
+		b.WriteString(" " + grammar.C("mut", "(no dispatches recorded — ledger empty; the cc-dispatch lane has not emitted yet)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	visible := maxVisible(1, h-3)
+	for i, r := range m.DispatchRecords {
+		if i >= visible {
+			b.WriteString(" " + grammar.C("mut", fmt.Sprintf("…+%d older", len(m.DispatchRecords)-visible)) + "\n")
+			break
+		}
+		b.WriteString("  " + grammar.RenderDispatchRowCompact(r, m.AIR) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// dispatchMeasurementPane renders the measurement readout (the secondary, derived from the same
+// ledger): the measurement-completion summary (cost/quality/outcome gaps COUNTED + named, never
+// faked), the latent-resource utilization split, and the standing blind-spots. Measurement-first.
+func (m Model) dispatchMeasurementPane(w int) string {
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "MEASUREMENT") + grammar.C("mut", "  derived from the ledger") + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	b.WriteString(grammar.RenderMeasurementSummary(grammar.SummarizeMeasurement(m.DispatchRecords)) + "\n\n")
+	b.WriteString(grammar.RenderUtilization(grammar.Utilization(m.DispatchRecords, dispatchRoutableSet)) + "\n\n")
+	b.WriteString(grammar.RenderDispatchBlindSpots())
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// dispatchRoutableSet is the canonical routable capability set the utilization rollup measures
+// active-vs-latent against (the "latent resource" denominator). Mirrors the cc-dispatch resolver's
+// active set + the gated follow-on routes.
+var dispatchRoutableSet = []string{
+	"glm-via-cc", "codex.full", "claude.fast", "claude.interactive", "agy",
+	"api.provider_gateway", "fugu", "fugu-ultra", "glmcp-worker", "sakana",
 }
 
 // specCoordinator is the flagship STANDING-EMERGENT split: LENS │ (COORDINATOR │ CHAT). The lens is

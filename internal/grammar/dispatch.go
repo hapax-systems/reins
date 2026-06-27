@@ -85,6 +85,62 @@ func RenderDispatchRow(r DispatchRecord, airOn bool) string {
 	}, "  ")
 }
 
+// RenderDispatchRowCompact renders the ACTIVITY half of a dispatch (for the ledger list in a split
+// pane): routing + admission + launch + latency. The MEASUREMENT half (cost/quality/outcome) lives in
+// the measurement pane, where its honest gaps have room to be named rather than clipped off the row.
+func RenderDispatchRowCompact(r DispatchRecord, airOn bool) string {
+	launched := C("grn", "▸")
+	if !r.Launched {
+		launched = C("red", "✖")
+	}
+	return strings.Join([]string{
+		C("brt", "⇉ "+r.Capability),
+		C("2nd", r.RouteID),
+		C("mut", r.SliceKind),
+		C("2nd", r.AdmissionAction),
+		launched + C("mut", fmt.Sprintf("%dms", r.DispatchLatencyMs)),
+		C("mut", "task:") + dispatchSecret(r.CCTask, airOn),
+	}, "  ")
+}
+
+// MeasurementSummary aggregates the measurement-completion state across the ledger: how many
+// dispatches have a real cost / quality / terminal outcome vs how many are still unmeasured.
+type MeasurementSummary struct {
+	Total, Priced, Verified, Settled int
+}
+
+// SummarizeMeasurement counts the measured-vs-not split (nil = not yet measured by the follow-on).
+func SummarizeMeasurement(records []DispatchRecord) MeasurementSummary {
+	s := MeasurementSummary{Total: len(records)}
+	for _, r := range records {
+		if r.CostUSD != nil {
+			s.Priced++
+		}
+		if r.QualitySignal != nil && strings.TrimSpace(*r.QualitySignal) != "" {
+			s.Verified++
+		}
+		if r.Outcome != nil && strings.TrimSpace(*r.Outcome) != "" {
+			s.Settled++
+		}
+	}
+	return s
+}
+
+// RenderMeasurementSummary is the measurement-first readout: the cost/quality/outcome gaps are COUNTED
+// and named (priced N/total, the rest UNMEASURED; verified N/total, the rest asserted), never hidden.
+func RenderMeasurementSummary(s MeasurementSummary) string {
+	cost := C("yel", fmt.Sprintf("cost     %d/%d priced · rest UNMEASURED", s.Priced, s.Total))
+	if s.Total > 0 && s.Priced == s.Total {
+		cost = C("grn", fmt.Sprintf("cost     %d/%d priced", s.Priced, s.Total))
+	}
+	qual := C("yel", fmt.Sprintf("quality  %d/%d verified · rest asserted", s.Verified, s.Total))
+	if s.Total > 0 && s.Verified == s.Total {
+		qual = C("grn", fmt.Sprintf("quality  %d/%d verified", s.Verified, s.Total))
+	}
+	out := C("mut", fmt.Sprintf("outcome  %d/%d settled · %d in-flight", s.Settled, s.Total, s.Total-s.Settled))
+	return strings.Join([]string{cost, qual, out}, "\n")
+}
+
 // RenderDispatchHeader labels the dispatch-ledger columns + names the two open measurement gaps so a
 // reader knows the surface is honest about what it cannot yet measure.
 func RenderDispatchHeader() string {
