@@ -131,7 +131,7 @@ def test_every_facet_channel_prose_is_encoder_recognized():
     expected = {
         "identity": "text", "posture": "criticality-hue", "action": "text",
         "ownership": "family-hue", "place": "family-hue", "time": "freshness-dim",
-        "provenance": "provenance-pip", "measure": "magnitude-bar", "qualifier": "text",
+        "provenance": "provenance-pip", "measure": "magnitude-bar", "variant": "text",
     }
     assert set(expected) == set(fr.FACETS), "the channel-binding expectation must cover exactly the 9 facets"
     for facet, f in fr.FACETS.items():
@@ -227,7 +227,7 @@ def test_safety_registry_never_airs_a_body():
 
 def test_safety_newly_aired_fields_are_only_safe_structural():
     """vs the live _DEFAULT_ALLOW, the registry may NEWLY-AIR only safe structural/operational fields
-    (the documented skeleton repair + structured identity/ownership/qualifier) — NEVER a free-text or
+    (the documented skeleton repair + structured identity/ownership/variant) — NEVER a free-text or
     PII-bearing field. Pins that adopting the registry as the live allowlist cannot leak."""
     # VETTED safe newly-aired set (each eyeballed: structural/operational, NO PII/free-text). A NEW
     # field that newly-airs trips this test for re-vetting (drift guard) — the safety review is pinned.
@@ -239,7 +239,7 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         "cost", "latency_ms", "prompt_tok", "completion_tok", "total_tok", "size", "total",
         # recency timestamps (Time facet):
         "activity_age_s", "mtime", "updated_at",
-        # structured identity/ownership/action/qualifier (ids, lane names, verbs — not free-text):
+        # structured identity/ownership/action/variant (ids, lane names, verbs — not free-text):
         "actor", "assigned_to", "model", "trace_id", "intent", "ready", "attached",
         "lens", "inquiry_mode", "audience_mode", "explanation_path",
         # edge ref IDs (task/node/route ids — safe; path-like refs are SENSITIVE-denied):

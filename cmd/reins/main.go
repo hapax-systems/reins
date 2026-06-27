@@ -433,7 +433,7 @@ func main() {
 				}
 				order := reg.CitationOrder
 				if len(order) == 0 { // offline citation order (decreasing concreteness)
-					order = []string{"identity", "ownership", "place", "action", "posture", "qualifier", "measure", "time", "provenance"}
+					order = []string{"identity", "ownership", "place", "action", "posture", "variant", "measure", "time", "provenance"}
 				}
 				samples := map[string]grammar.CellValue{
 					"identity":   {Text: "task-4284", Width: 12},
@@ -441,7 +441,7 @@ func main() {
 					"place":      {Text: "podium", Width: 8},
 					"action":     {Text: "implement", Width: 10},
 					"posture":    {Text: "crit", Width: 6},
-					"qualifier":  {Text: "opus·fast", Width: 10},
+					"variant":    {Text: "opus·fast", Width: 10},
 					"measure":    {Magnitude: 0.72, Text: "0.72", Width: 5},
 					"time":       {Magnitude: 0.85, Text: "2m", Width: 4},
 					"provenance": {Text: "inferred", Width: 9},

@@ -24,7 +24,7 @@ var canonicalFacetProse = map[string]string{
 	"time":       "freshness-dim",
 	"provenance": "secondary pip + AIR-class",
 	"measure":    "eighth-block bar",
-	"qualifier":  "text / view-axis",
+	"variant":    "text / view-axis",
 }
 
 var canonicalFacetChannel = map[string]Channel{
@@ -36,7 +36,7 @@ var canonicalFacetChannel = map[string]Channel{
 	"time":       ChannelFreshnessDim,
 	"provenance": ChannelProvenancePip,
 	"measure":    ChannelMagnitudeBar,
-	"qualifier":  ChannelText,
+	"variant":    ChannelText,
 }
 
 // ChannelFromProse must resolve every one of the registry's 9 channel-prose strings to the
@@ -75,7 +75,7 @@ func TestChannelForFacetPrefersRegistryProse(t *testing.T) {
 	}
 }
 
-// identity/action/qualifier -> plain text in the primary ink, padded to width, value preserved.
+// identity/action/variant -> plain text in the primary ink, padded to width, value preserved.
 func TestEncodeCellTextCarriesValue(t *testing.T) {
 	c := EncodeCell(FacetRegistry{}, "identity", CellValue{Text: "task-4284", Width: 12}, false)
 	if c.Channel != ChannelText {

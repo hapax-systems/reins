@@ -27,7 +27,7 @@ type Channel int
 
 const (
 	ChannelUnknown        Channel = iota - 1 // -1: an unrecognized channel prose (SSOT drift) — never rendered; callers fall back
-	ChannelText                              // identity / action / qualifier: plain text (+ selection-shape, applied by the row)
+	ChannelText                              // identity / action / variant: plain text (+ selection-shape, applied by the row)
 	ChannelCriticalityHue                    // posture (ordinal): a state glyph colored by criticality
 	ChannelFamilyHue                         // ownership / place (categorical): the owner/locus family hue
 	ChannelFreshnessDim                      // time (temporal): an eighth-block brightness ladder (recent → stale)
@@ -72,7 +72,7 @@ var defaultFacetChannel = map[string]Channel{
 	"time":       ChannelFreshnessDim,
 	"provenance": ChannelProvenancePip,
 	"measure":    ChannelMagnitudeBar,
-	"qualifier":  ChannelText,
+	"variant":    ChannelText,
 }
 
 // ChannelFromProse parses a registry `channel` string into the bound Channel. The compound proses
@@ -238,7 +238,7 @@ func renderChannel(ch Channel, v CellValue, airOn bool) string {
 		}
 		return glyphCell(palette.ProvToken(v.Text), g, v.Text, v.Width)
 
-	default: // ChannelText (identity / action / qualifier) + the ChannelUnknown safety fallback
+	default: // ChannelText (identity / action / variant) + the ChannelUnknown safety fallback
 		if denied {
 			return C("mut", padTo(redactToken, v.Width))
 		}

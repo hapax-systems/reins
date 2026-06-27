@@ -41,12 +41,12 @@ FACETS: dict[str, dict[str, str]] = {
                    "role": "ordinal-confidence", "channel": "secondary pip + AIR-class", "air": "gate"},
     "measure":    {"gloss": "how much",            "question": "what scalar quantity?",
                    "role": "quantitative","channel": "eighth-block bar",       "air": "air"},
-    "qualifier":  {"gloss": "which variant",       "question": "which capability/mode variant?",
+    "variant":  {"gloss": "which variant",       "question": "which capability/mode variant?",
                    "role": "categorical-subfacet","channel": "text / view-axis","air": "air"},
 }
 
 CITATION_ORDER = ["identity", "ownership", "place", "action", "posture",
-                  "qualifier", "measure", "time", "provenance"]
+                  "variant", "measure", "time", "provenance"]
 
 # ── THE TWO LAYERS KEPT OUTSIDE THE FACET SET ────────────────────────────────
 # EDGES — a relation is a property of a PAIR (an entity-REFERENCE pointing at another unit), not a
@@ -118,15 +118,15 @@ FACET_BY_NAME: dict[str, str] = {
     "attention": "measure", "route_count": "measure", "ok_count": "measure", "blocked_count": "measure",
     "evidence_count": "measure", "rel_count": "measure", "receipt_count": "measure", "count": "measure",
     "total": "measure", "depth_count": "measure",
-    # qualifier (capability/mode variant — the sub-faceted dimensional cross-product)
-    "effort": "qualifier", "context_mode": "qualifier", "fast_mode": "qualifier",
-    "quantization": "qualifier", "demand_vector": "qualifier", "hardening": "qualifier",
-    "eval_plane": "qualifier", "review_obligation": "qualifier", "learning_eligibility": "qualifier",
-    "benchmark_coverage": "qualifier", "fixed_overhead": "qualifier", "spend_model": "qualifier",
-    "capability_class": "qualifier", "surface_family": "qualifier", "model": "qualifier",
-    "model_id": "qualifier", "mode": "qualifier", "profile": "qualifier", "res": "qualifier",
-    "lens": "qualifier", "inquiry_mode": "qualifier", "audience_mode": "qualifier",
-    "explanation_path": "qualifier", "default_lens": "qualifier", "meta": "qualifier",
+    # variant (capability/mode variant — the sub-faceted dimensional cross-product)
+    "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
+    "quantization": "variant", "demand_vector": "variant", "hardening": "variant",
+    "eval_plane": "variant", "review_obligation": "variant", "learning_eligibility": "variant",
+    "benchmark_coverage": "variant", "fixed_overhead": "variant", "spend_model": "variant",
+    "capability_class": "variant", "surface_family": "variant", "model": "variant",
+    "model_id": "variant", "mode": "variant", "profile": "variant", "res": "variant",
+    "lens": "variant", "inquiry_mode": "variant", "audience_mode": "variant",
+    "explanation_path": "variant", "default_lens": "variant", "meta": "variant",
 }
 
 # ── PER-(domain, attr) OVERRIDES (the field-level homonyms) ───────────────────
