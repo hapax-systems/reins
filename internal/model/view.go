@@ -594,6 +594,12 @@ func (m Model) specCoordinator() *layout.Spec {
 	div := grammar.C("border", "│")
 	lens := &layout.Pane{MinW: 28, Render: func(pw, ph int) string { return m.coordinatorLensPane(pw, ph) }}
 	coord := &layout.Pane{MinW: 22, Render: func(pw, ph int) string { return m.coordinatorContextPane(pw, ph) }}
+	if m.LensZone == "files" {
+		// Browsing files: the chat is idle, so give the PREVIEW that real estate — LENS(listing) │
+		// PREVIEW at ~35/65. The wider pane means the image preview renders at far more braille cells
+		// (more dots → higher resolution), per the operator's "unused real estate → larger cell groups".
+		return layout.Split(layout.Leaf(lens), layout.Leaf(coord), 0.35, layout.Connector{Glyph: div})
+	}
 	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
 	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
 	return layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})

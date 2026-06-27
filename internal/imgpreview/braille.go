@@ -15,6 +15,32 @@ var brailleBits = [2][4]byte{
 
 func lum(r, g, b uint8) float64 { return 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b) }
 
+// FitCells picks the braille cell grid that best fits an iw×ih image into maxCols×maxRows preserving
+// aspect — so a wider pane makes the image BIGGER (more cells/dots → higher resolution) without
+// stretching it. A braille dot is ~square on screen: 2 dots span one char-width, 4 dots span one
+// char-height, and a char is ≈1:2 — so the display aspect of a cols×rows grid is cols : 2·rows.
+func FitCells(iw, ih, maxCols, maxRows int) (cols, rows int) {
+	if iw <= 0 || ih <= 0 || maxCols <= 0 || maxRows <= 0 {
+		return maxCols, maxRows
+	}
+	cols = maxCols
+	rows = cols * ih / (2 * iw)
+	if rows > maxRows {
+		rows = maxRows
+		cols = 2 * rows * iw / ih
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if cols > maxCols {
+		cols = maxCols
+	}
+	return cols, rows
+}
+
 // RenderBraille renders img as a braille (2×4 dots per cell) grid — ~4× the spatial resolution of
 // RenderHalfBlock, dot-matrix style. Within each cell a sub-pixel's dot is set when it is brighter
 // than the cell's mean luminance (so local structure/edges show), and the cell is truecolor-tinted

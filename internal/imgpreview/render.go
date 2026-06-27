@@ -86,8 +86,10 @@ func humanSize(n int64) string {
 }
 
 // RenderFileBraille previews an image file as a higher-resolution braille (2×4 dots/cell) grid —
-// the dot-matrix mode. Decode failure falls back to the pixel-free Metadata line.
-func RenderFileBraille(path string, cols, rows int) (string, error) {
+// the dot-matrix mode. It aspect-fits the image into the maxCols×maxRows budget (FitCells), so a
+// larger pane yields a bigger, higher-resolution preview without stretching. Decode failure falls
+// back to the pixel-free Metadata line.
+func RenderFileBraille(path string, maxCols, maxRows int) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Metadata(path), err
@@ -97,6 +99,7 @@ func RenderFileBraille(path string, cols, rows int) (string, error) {
 	if err != nil {
 		return Metadata(path), nil
 	}
+	cols, rows := FitCells(img.Bounds().Dx(), img.Bounds().Dy(), maxCols, maxRows)
 	return RenderBraille(img, cols, rows), nil
 }
 
