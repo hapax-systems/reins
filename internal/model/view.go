@@ -643,7 +643,7 @@ func (m Model) airRelationLabel(r relate.Relation) string {
 		}
 		return grammar.C("2nd", r.Label)
 	case "facet":
-		if m.AIR && sensitiveFacet(r.Facet) {
+		if m.AIR && !airSafeFacet(r.Facet) {
 			return grammar.C("2nd", fmt.Sprintf("shares %s (%d)", r.Facet, r.Count))
 		}
 		return grammar.C("2nd", r.Label)
@@ -652,7 +652,16 @@ func (m Model) airRelationLabel(r relate.Relation) string {
 	}
 }
 
-func sensitiveFacet(f string) bool { return f == "owner" || f == "case" }
+// airSafeFacet allowlists the STRUCTURAL facets whose VALUE is safe to air (stage/criticality/score
+// carry no PII). Default-deny: every other facet's value — owner, case, actor, subject, role, kind,
+// or any unknown/newly-added facet — is withheld on air, so a sensitive facet can never leak.
+func airSafeFacet(f string) bool {
+	switch f {
+	case "stage", "crit", "score":
+		return true
+	}
+	return false
+}
 
 // coordinatorRelationBanner names the coordination TYPE + join, always-on (framework §5: "adjacency is
 // never mysterious"). The lens selection drives the coordinator + chat; the SAME selected id echoes
