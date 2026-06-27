@@ -820,6 +820,16 @@ func (m Model) coordinatorLensPane(w, h int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// airSeverityToken is the criticality hue, demoted to "mut" when criticality is denied on air — the
+// hue is a derived channel that would otherwise disclose crit/major on an allowlisted stage/state
+// cell even though the value itself is redacted (mirrors the whois-door criticality handling).
+func airSeverityToken(crit string, airMap map[string]string, air bool) string {
+	if air && airMap["criticality"] != "ok" {
+		return "mut"
+	}
+	return grammar.SeverityToken(crit)
+}
+
 // dashOr returns "—" for an empty value (compact structured silence in one-line summaries).
 func dashOr(s string) string {
 	if strings.TrimSpace(s) == "" {
@@ -4943,6 +4953,9 @@ func (m Model) renderSelectedIntakeLane(w int) string {
 	related := m.sessionRelatedEvents(s)
 	failures := 0
 	for _, ev := range related {
+		if m.AIR && ev.AIR["kind"] != "ok" {
+			continue // a denied kind must not be classified into the on-air failure tally
+		}
 		if strings.Contains(strings.ToLower(ev.Kind), "fail") {
 			failures++
 		}
@@ -9584,10 +9597,10 @@ func (m Model) eventContextPane(w int) string {
 		if ev.Actor != "" && x.Actor == ev.Actor {
 			sameActor++
 		}
-		if strings.Contains(strings.ToLower(x.Kind), "fail") {
-			failures++
+		if (!m.AIR || x.AIR["kind"] == "ok") && strings.Contains(strings.ToLower(x.Kind), "fail") {
+			failures++ // on air a denied kind must not be classified — the count discloses it
 		}
-		if strings.Contains(strings.ToLower(x.Kind), "succeed") {
+		if (!m.AIR || x.AIR["kind"] == "ok") && strings.Contains(strings.ToLower(x.Kind), "succeed") {
 			successes++
 		}
 		kinds[grammar.Redact(x.AIR, "kind", shortKindForPanel(x.Kind), m.AIR)]++ // per-event AIR: a denied kind aggregates as ▒▒▒, never leaks
@@ -10393,7 +10406,7 @@ func (m Model) taskWorkDomainPane(w int) string {
 	if crit == "" {
 		crit = "ok"
 	}
-	ctok := grammar.SeverityToken(crit)
+	ctok := airSeverityToken(crit, t.AIR, m.AIR)
 	next := taskFieldValueForAir(t, "predicted_stage", m.AIR)
 	if strings.TrimSpace(next) == "" {
 		next = "·"
@@ -10791,7 +10804,7 @@ func (m Model) taskRail(w int) string {
 	if r := []rune(id); len(r) > w-3 {
 		id = string(r[:w-3])
 	}
-	ctok := grammar.SeverityToken(t.Criticality)
+	ctok := airSeverityToken(t.Criticality, t.AIR, m.AIR)
 	ntok := "grn"
 	if t.PredictedStage == "hold" {
 		ntok = "red"
