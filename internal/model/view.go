@@ -597,12 +597,9 @@ func (m Model) specCoordinator() *layout.Spec {
 	div := grammar.C("border", "│")
 	lens := &layout.Pane{MinW: 28, Render: func(pw, ph int) string { return m.coordinatorLensPane(pw, ph) }}
 	coord := &layout.Pane{MinW: 22, Render: func(pw, ph int) string { return m.coordinatorContextPane(pw, ph) }}
-	if m.LensZone == "files" {
-		// Browsing files: the chat is idle, so give the PREVIEW that real estate — LENS(listing) │
-		// PREVIEW at ~35/65. The wider pane means the image preview renders at far more braille cells
-		// (more dots → higher resolution), per the operator's "unused real estate → larger cell groups".
-		return layout.Split(layout.Leaf(lens), layout.Leaf(coord), 0.35, layout.Connector{Glyph: div})
-	}
+	// The files zone uses the SAME standard three-pane layout (operator: return to the previous
+	// coordinator layout, before the expanded-cell real-estate reallocation) — the preview renders
+	// in the middle COORD pane, the chat keeps its column.
 	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
 	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
 	return layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
@@ -868,9 +865,17 @@ func (m Model) coordinatorFilePreview(w, h int) string {
 	}
 	if isImageExt(e.Ext) {
 		if m.AIR {
-			// On air: shape-only. Do NOT call RenderFile even with ProtoMetadataOnly — its metadata
-			// line embeds the filename, which would leak the very name the header just redacted.
-			b.WriteString("  " + grammar.C("yel", "image · shape-only · pixels and filename withheld on air"))
+			// On air (operator ruling 2026-06-27): the coarse BLOCK-PIXEL rendering. RenderFileAIR
+			// clamps the half-block to a hard resolution ceiling so fine detail (text, faces) is
+			// destroyed below legibility while the gist survives — confidentiality-by-resolution, not
+			// by withholding. It never embeds the filename: a decode failure folds to a name-free
+			// shape-only line (Metadata would leak the name the header just redacted).
+			cols := maxVisible(8, w-2)
+			rows := h - 4
+			if rows < 2 {
+				rows = 2
+			}
+			b.WriteString(imgpreview.RenderFileAIR(filepath.Join(m.FilesCwd, e.Name), cols, rows))
 			return b.String()
 		}
 		// Off air (the operator's present-at-hand frame): render the ACTUAL image at higher resolution
