@@ -14,6 +14,8 @@ import (
 	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/imgpreview"
+	"github.com/hapax-systems/reins/internal/layout"
+	"github.com/hapax-systems/reins/internal/relate"
 )
 
 // focusBar renders text as an unmistakable full-width SELECTION bar (bright on the focus background),
@@ -573,34 +575,67 @@ func hconcatCols(div string, h int, cols ...[]string) string {
 // HConcat of page-owned panes (no session-source assumptions leak in). Width-responsive: 3 columns
 // when wide, lens │ coordinator when medium, coordinator-only when narrow.
 func (m Model) coordinatorBody(w, h int) string {
+	// The flagship STANDING-EMERGENT split, composed through the view-algebra (only-split): LENS is
+	// the single driving locus; COORDINATOR and CHAT are transcluded from its selection. The
+	// connector relation is EMERGENT (relate.Derive over the selection), not an authored banner.
 	div := grammar.C("border", "│")
-	banner := m.coordinatorRelationBanner(w)
-	ch := h - 1 // the relationship banner owns row 0; the columns fill the rest
-	if ch < 1 {
-		ch = 1
-	}
-	var cols string
-	switch {
-	case w >= 200: // LENS │ COORDINATOR │ CHAT
-		lensW := 72
-		rest := w - lensW - 2
-		coordW := rest / 2
-		chatW := rest - coordW
-		lens := fitBlock(m.coordinatorLensPane(lensW, ch), lensW, ch)
-		coord := fitBlock(m.coordinatorContextPane(coordW, ch), coordW, ch)
-		chat := fitBlock(m.coordinatorChatPane(chatW, ch), chatW, ch)
-		cols = hconcatCols(div, ch, lens, coord, chat)
-	default:
-		leftW, rightW, ok := splitContextWidths(w)
-		if !ok { // narrow: coordinator only (lens + chat fold away)
-			return banner + "\n" + m.coordinatorContextPane(w, h-1)
-		}
-		left := fitBlock(m.coordinatorLensPane(leftW, ch), leftW, ch)
-		right := fitBlock(m.coordinatorContextPane(rightW, ch), rightW, ch)
-		cols = hconcatCols(div, ch, left, right)
-	}
-	return banner + "\n" + cols
+	lens := &layout.Pane{MinW: 28, Render: func(pw, ph int) string { return m.coordinatorLensPane(pw, ph) }}
+	coord := &layout.Pane{MinW: 22, Render: func(pw, ph int) string { return m.coordinatorContextPane(pw, ph) }}
+	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
+	// LENS │ (COORDINATOR │ CHAT): the lens drives both; coordinator+chat have no authored join
+	// between them (ambient), so their connector asserts nothing.
+	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
+	spec := layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
+	return layout.Render(spec, w, h)
 }
+
+// coordinatorEmergentRelation derives the connector's relationship from the lens selection to the
+// rest of the visible lattice, AIR-aware. v1 consumes facet-overlap (the relation-derivation
+// PRODUCER that would supply richer edges is cross-repo, not yet built).
+func (m Model) coordinatorEmergentRelation() string {
+	focused, ok := m.FocusedTask()
+	if !ok {
+		return ""
+	}
+	others := make([]relate.Entity, 0, len(m.visibleTasks()))
+	for _, t := range m.visibleTasks() {
+		if t.TaskID == focused.TaskID {
+			continue
+		}
+		others = append(others, taskEntity(t))
+	}
+	return m.airRelationLabel(relate.Derive(taskEntity(focused), others, nil))
+}
+
+func taskEntity(t grammar.Task) relate.Entity {
+	return relate.Entity{ID: t.TaskID, Facets: map[string]string{
+		"owner": t.Owner,
+		"stage": shortStage2(t.Stage),
+		"crit":  t.Criticality,
+		"case":  t.AuthorityCase,
+	}}
+}
+
+// airRelationLabel renders an emergent relation, withholding sensitive facet VALUES (owner/case)
+// and edge PEER ids on air while keeping the structural shape — never a raw-value leak.
+func (m Model) airRelationLabel(r relate.Relation) string {
+	switch r.Kind {
+	case "edge":
+		if m.AIR {
+			return grammar.C("2nd", r.Type+" ▒▒▒")
+		}
+		return grammar.C("2nd", r.Label)
+	case "facet":
+		if m.AIR && sensitiveFacet(r.Facet) {
+			return grammar.C("2nd", fmt.Sprintf("shares %s (%d)", r.Facet, r.Count))
+		}
+		return grammar.C("2nd", r.Label)
+	default:
+		return ""
+	}
+}
+
+func sensitiveFacet(f string) bool { return f == "owner" || f == "case" }
 
 // coordinatorRelationBanner names the coordination TYPE + join, always-on (framework §5: "adjacency is
 // never mysterious"). The lens selection drives the coordinator + chat; the SAME selected id echoes

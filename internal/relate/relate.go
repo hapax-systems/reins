@@ -30,10 +30,18 @@ type Edge struct {
 	Weight   float64
 }
 
-// Relation is the emergent pane-to-pane relationship: a short label for the connector header + a strength.
+// Relation is the emergent pane-to-pane relationship. Label is the off-air default; the structured
+// fields let a caller render it AIR-aware (withhold a sensitive facet Value or edge Peer on air
+// while keeping the structural shape).
 type Relation struct {
-	Label    string
+	Kind     string // "edge" | "facet" | "none"
+	Type     string // edge type (Kind=="edge"): blocks/causes/feeds/...
+	Peer     string // peer entity id (Kind=="edge")
+	Facet    string // shared facet name (Kind=="facet")
+	Value    string // shared facet value (Kind=="facet")
+	Count    int    // how many others share it (Kind=="facet")
 	Strength float64
+	Label    string
 }
 
 // Derive computes the emergent relationship FROM an anchor entity (e.g. pane A's selection) TO a set
@@ -46,7 +54,7 @@ func Derive(anchor Entity, others []Entity, edges []Edge) Relation {
 	if r, ok := strongestSharedFacet(anchor, others); ok {
 		return r
 	}
-	return Relation{Label: "—", Strength: 0}
+	return Relation{Kind: "none", Label: "—", Strength: 0}
 }
 
 func strongestEdge(anchor Entity, others []Entity, edges []Edge) (Relation, bool) {
@@ -74,7 +82,10 @@ func strongestEdge(anchor Entity, others []Entity, edges []Edge) (Relation, bool
 	if !found {
 		return Relation{}, false
 	}
-	return Relation{Label: best.Type + " " + best.Dst, Strength: best.Weight}, true
+	return Relation{
+		Kind: "edge", Type: best.Type, Peer: best.Dst,
+		Label: best.Type + " " + best.Dst, Strength: best.Weight,
+	}, true
 }
 
 func strongestSharedFacet(anchor Entity, others []Entity) (Relation, bool) {
@@ -113,6 +124,7 @@ func strongestSharedFacet(anchor Entity, others []Entity) (Relation, bool) {
 		return Relation{}, false
 	}
 	return Relation{
+		Kind: "facet", Facet: best.facet, Value: best.value, Count: n,
 		Label:    fmt.Sprintf("shares %s=%s (%d)", best.facet, best.value, n),
 		Strength: float64(n) / float64(len(others)),
 	}, true
