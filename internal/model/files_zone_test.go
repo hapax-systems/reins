@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/files"
+	"github.com/hapax-systems/reins/internal/imgpreview"
 )
 
 // The coordinator [z] toggle enters/leaves the filebrowser zone; while active, j/k/l/h drive the
@@ -89,16 +90,25 @@ func TestCoordinatorFilePreviewImageOffAirOnAir(t *testing.T) {
 		t.Fatalf("off-air preview should render the image as braille dot-matrix:\n%s", off)
 	}
 
-	// On air: shape-only — no pixels, filename redacted, the withheld note shown.
+	// On air (operator ruling 2026-06-27): the AIR version of the image is the coarse BLOCK-PIXEL
+	// (half-block) rendering — confidentiality-by-resolution. Pixels ARE shown, but clamped to a hard
+	// coarseness ceiling so fine detail (text, faces) is destroyed below legibility; the filename is
+	// still redacted.
 	m.AIR = true
-	on := m.coordinatorFilePreview(60, 24)
-	if strings.Contains(on, "▀") {
-		t.Fatalf("on-air must NOT egress image pixels:\n%s", on)
+	on := m.coordinatorFilePreview(200, 80) // a large pane must NOT sharpen the on-air image
+	pixRows := 0
+	for _, ln := range strings.Split(on, "\n") {
+		if strings.Contains(ln, "▀") {
+			pixRows++
+		}
+	}
+	if pixRows == 0 {
+		t.Fatalf("on-air must render the coarse block-pixel image (half-block ▀):\n%s", on)
+	}
+	if pixRows > imgpreview.AIRMaxRows {
+		t.Fatalf("on-air pixels must clamp to the AIR ceiling (≤%d rows), got %d:\n%s", imgpreview.AIRMaxRows, pixRows, on)
 	}
 	if strings.Contains(on, "pic.png") {
-		t.Fatalf("on-air must redact the filename:\n%s", on)
-	}
-	if !strings.Contains(on, "shape-only") {
-		t.Fatalf("on-air must state pixels are withheld:\n%s", on)
+		t.Fatalf("on-air must still redact the filename:\n%s", on)
 	}
 }
