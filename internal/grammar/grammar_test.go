@@ -255,6 +255,17 @@ func sampleTask() Task {
 		AIR: map[string]string{"task_id": "ok", "stage": "ok", "no_go": "ok"}}
 }
 
+// The cockpit's name comes from Franklin's "If passion drives, let reason hold the reins" — the
+// fragment rides the help front door as the epigraph. (A deliberate touch; guard it from drift.)
+func TestHelpCarriesTheReinsEpigraph(t *testing.T) {
+	got := RenderHelp()
+	for _, want := range []string{"let reason hold the reins", "Franklin"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help epigraph missing %q", want)
+		}
+	}
+}
+
 func TestRenderTaskRowLocal(t *testing.T) {
 	got := RenderTaskRow(sampleTask(), false)
 	if !strings.Contains(got, critGlyph["ok"]) || !strings.Contains(got, "event-spine") || !strings.Contains(got, "S6") {

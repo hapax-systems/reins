@@ -1281,6 +1281,7 @@ func RenderDynamics(g Graph, airOn bool) string {
 func RenderHelp() string {
 	return strings.Join([]string{
 		"REINS — one cockpit for the whole delivery lifecycle.",
+		"      “…let reason hold the reins.”      — Benjamin Franklin",
 		"",
 		"PAGES",
 		"  [1] :events          live coord event stream; [j/k] select, [y] yank event fields",
