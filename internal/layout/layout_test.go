@@ -96,6 +96,29 @@ func TestNestedSplitMakesThreeColumns(t *testing.T) {
 	}
 }
 
+func TestMalformedSpecsStayExactWidthNoPanic(t *testing.T) {
+	// GLM-via-CC review (2026-06-27): a zero-value Spec, a nil child, or a multi-cell connector glyph
+	// must not panic and must keep every line exactly w wide.
+	zero := Render(&Spec{}, 10, 2) // neither Leaf nor Split
+	for _, l := range lines(zero) {
+		if ansi.StringWidth(l) != 10 {
+			t.Fatalf("zero-value Spec line width = %d, want 10", ansi.StringWidth(l))
+		}
+	}
+	nilChild := Split(Leaf(block("A", 1)), &Spec{}, 0.5, Connector{Glyph: "│"})
+	for _, l := range lines(Render(nilChild, 21, 2)) {
+		if ansi.StringWidth(l) != 21 {
+			t.Fatalf("nil/empty child must not shrink the row: width = %d, want 21", ansi.StringWidth(l))
+		}
+	}
+	multiCell := Split(Leaf(block("A", 1)), Leaf(block("B", 1)), 0.5, Connector{Glyph: "XX"})
+	for _, l := range lines(Render(multiCell, 21, 2)) {
+		if ansi.StringWidth(l) != 21 {
+			t.Fatalf("a multi-cell connector glyph must be normalized to 1: width = %d, want 21", ansi.StringWidth(l))
+		}
+	}
+}
+
 func TestRenderIsPureAndHandlesEmpty(t *testing.T) {
 	s := Split(Leaf(block("A", 1)), Leaf(block("B", 1)), 0.5, Connector{Glyph: "│"})
 	if Render(s, 20, 2) != Render(s, 20, 2) {

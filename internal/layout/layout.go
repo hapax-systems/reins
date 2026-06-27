@@ -72,6 +72,9 @@ func render(s *Spec, w, h int) []string {
 	if s.Leaf != nil {
 		return fit(s.Leaf.Render(w, h), w, h)
 	}
+	if s.Split == nil { // a zero-value Spec — render empty, never panic
+		return fit("", w, h)
+	}
 	sp := s.Split
 	if w < 3 { // degenerate physical floor — cannot place two panes + a connector
 		return render(sp.Primary, w, h)
@@ -92,8 +95,10 @@ func render(s *Spec, w, h int) []string {
 	if glyph == "" {
 		glyph = "│"
 	}
+	glyph = fitLine(glyph, 1) // normalize to exactly one display cell (the width contract assumes it)
 	for i := 0; i < ch; i++ {
-		out = append(out, at(left, i)+glyph+at(right, i))
+		// fit BOTH cells to their column: a nil/short child (e.g. a malformed Spec) can't shrink the row.
+		out = append(out, fitLine(at(left, i), pw)+glyph+fitLine(at(right, i), sw))
 	}
 	return out
 }
@@ -152,7 +157,7 @@ func clamp(v, lo, hi int) int {
 }
 
 func clampRatio(r float64) float64 {
-	if r < 0.1 {
+	if !(r >= 0.1) { // catches NaN and undershoot in one test
 		return 0.1
 	}
 	if r > 0.9 {
