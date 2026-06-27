@@ -13,6 +13,7 @@ import (
 	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/graph"
+	"github.com/hapax-systems/reins/internal/imgpreview"
 	"github.com/hapax-systems/reins/internal/model"
 )
 
@@ -517,6 +518,34 @@ func main() {
 				fmt.Println()
 				fmt.Println(grammar.RenderTrainyard(grammar.Trainyard{Tasks: ts}, w))
 				fmt.Printf("\n%d tasks · binding from %s\n", len(ts), src)
+				return
+			}
+			if a == "image" {
+				// --probe image <path> [size:WxH]: render an image through the preview substrate (the
+				// operator's off-air present-at-hand frame) so the filebrowser's image preview can be
+				// eyeballed headlessly. Run in a real terminal to SEE the picture.
+				path := ""
+				w, h := 80, 40
+				for _, b := range os.Args[2:] {
+					if pw, ph, ok := parseProbeSize(b); ok {
+						w, h = pw, ph
+						continue
+					}
+					if b != "image" && !strings.HasPrefix(b, "--") {
+						path = b
+					}
+				}
+				if path == "" {
+					fmt.Println("usage: reins --probe image <path> [size:WxH]")
+					return
+				}
+				proto := imgpreview.DetectProtocol(os.Getenv)
+				fmt.Printf("IMAGE PREVIEW — %s · protocol=%s (%dx%d cells)\n\n", path, proto, w, h)
+				out, err := imgpreview.RenderFile(path, w, h, proto)
+				if err != nil {
+					fmt.Println("error:", err)
+				}
+				fmt.Println(out)
 				return
 			}
 		}
