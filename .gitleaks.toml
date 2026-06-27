@@ -1,0 +1,17 @@
+# Reins gitleaks configuration.
+#
+# Extend the default gitleaks ruleset, but allowlist the cockpit's OWN secret-DETECTOR and its
+# test fixtures. Those files are inherently full of secret-SHAPED strings — detecting such strings
+# is literally their job (internal/grammar/injection.go ScanSecrets + its tests) — and they contain
+# no real credentials. Without this, the repo's secrets-scan flags the detector's own fixtures.
+title = "reins"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reins secret-detector source + fixtures (secret-shaped by design, no real secrets)"
+paths = [
+  '''internal/grammar/injection\.go''',
+  '''internal/grammar/injection_test\.go''',
+]
