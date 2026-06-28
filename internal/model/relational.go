@@ -35,6 +35,10 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 
 	allow := len(config.Defaults().AIRAllowlist)
 	n := len(m.identityRoster())
+	authSummary := fmt.Sprintf("●%d ◐%d ◌%d ○%d", op, md, st, un)
+	if op+md+st+un == 0 {
+		authSummary = "no turns in the ladder (load :session)"
+	}
 	stakeFlag := "consent ledger NOT landed → no per-stakeholder consented/withheld/deferred states yet"
 	dangerFlag := fmt.Sprintf("%d distinct principals act across the fleet (the WHO is the :identity roster)", n)
 	if n == 0 {
@@ -48,7 +52,7 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 			"on-air ⟵ broadcast · default-deny + N-sec hold + dump/kill (hold/kill NOT wired yet)",
 			"the toggle is the operator's standing consent decision for the stream",
 		}},
-		{Key: "authorship", Name: "authorship", Summary: fmt.Sprintf("●%d ◐%d ◌%d ○%d", op, md, st, un), Lines: []string{
+		{Key: "authorship", Name: "authorship", Summary: authSummary, Lines: []string{
 			fmt.Sprintf("● operator %d — free-text, ALWAYS denied on air", op),
 			fmt.Sprintf("◐ model %d — model-authored, airs per field", md),
 			fmt.Sprintf("◌ structured %d — registry/hardened, may air", st),

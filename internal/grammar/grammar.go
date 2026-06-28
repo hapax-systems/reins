@@ -1531,6 +1531,10 @@ func RenderLegend() string {
 	row(C("2nd", "» / «»"), "path breadcrumb marker (path text may redact on air)")
 	row(C("border", "│"), "pane divider; panes should explain each other")
 	row(C("mut", "… N more"), "overflow rows exist below the current viewport")
+	hd("CASE-ROLE AXES  (:axes · A1 :identity · A6 :relational)")
+	row(C("grn", "●")+C("yel", "◐")+C("mut", "○"), "axis build status: ● live (folds) · ◐ partial · ○ projection-pending (badged)")
+	row(C("grn", "▰")+C("2nd", "◇")+C("yel", "◆")+C("pri", "◈"), "A1 identity class: ▰ lane · ◇ actor · ◆ owner · ◈ mixed")
+	row(C("brt", "◹")+C("2nd", "✎")+C("yel", "⊟")+C("pri", "⚖"), "A6 consent facet: ◹ broadcast-frame · ✎ authorship · ⊟ field-gating · ⚖ stakeholders")
 	hd("PROVENANCE  (:dynamics nodes — a confidence ladder)")
 	for _, k := range provOrder {
 		row(C(palette.ProvToken(k), statusGlyphs[k]+" "+pad(k, 9)), provGloss[k])

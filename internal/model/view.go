@@ -180,6 +180,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "axes", len(grammar.Axes()), false
 	case PageIdentity:
 		return "identity", len(m.identityRoster()), false
+	case PageRelational:
+		return "relational", len(m.consentFacets()), false
 	case PageEpistemics:
 		return "epistemics", len(m.epistemicRows()), m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark
 	case PageHelp:
@@ -419,6 +421,8 @@ func (m Model) windowSignal(page int) (string, string) {
 		return fmt.Sprintf("%dA", len(grammar.Axes())), "mut"
 	case PageIdentity:
 		return fmt.Sprintf("%dI", len(m.identityRoster())), "mut"
+	case PageRelational:
+		return fmt.Sprintf("%dA6", len(m.consentFacets())), "mut"
 	case PageEpistemics:
 		if m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark {
 			return "DARK", "red"
@@ -721,6 +725,11 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.identityListBody(pw, ph) }},
 			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.identityDetailBody(pw) }},
 			0.5, "principal -> identity contract")
+	case PageRelational:
+		return m.specListContext(
+			&layout.Pane{MinW: 58, Render: func(pw, ph int) string { return m.relationalListBody(pw, ph) }},
+			&layout.Pane{MinW: 54, Render: func(pw, ph int) string { return m.relationalDetailBody(pw) }},
+			0.46, "consent facet -> posture")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -1605,7 +1614,7 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.tracesBody(w, h)
 	case PageSessionTurns:
 		return m.turnListBody(w, h)
-	case PageDynamics, PageLoops, PageAxes, PageIdentity, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
+	case PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
 		return m.eventsBody(w, h)
@@ -2003,6 +2012,8 @@ func (m Model) splitSessionContext(s grammar.Session) string {
 		return m.sourceOnlySessionContext(s, "case-role framework")
 	case PageIdentity:
 		return m.sourceOnlySessionContext(s, "identity roster")
+	case PageRelational:
+		return m.sourceOnlySessionContext(s, "consent posture")
 	case PageEpistemics:
 		return m.sourceOnlySessionContext(s, "evidence/provenance")
 	case PageHelp:
@@ -2125,7 +2136,7 @@ func (m Model) splitContextPane(w, h int) string {
 		body = m.sessionConstraintPane(w)
 	case PageCaps:
 		body = m.renderCapabilitySplitPane(w, bodyH)
-	case PageTraces, PageDynamics, PageLoops, PageAxes, PageIdentity, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
+	case PageTraces, PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
 		body = m.splitReferenceSlice(w, bodyH)
 	default:
 		body = m.eventContextPane(w)
@@ -3700,6 +3711,54 @@ func (m Model) identityDetailBody(w int) string {
 		return " " + grammar.C("brt", "IDENTITY CONTRACT") + "\n\n " + grammar.C("mut", "no principals in the current role/actor/owner fold")
 	}
 	return grammar.RenderIdentityDetail(roster[clamp(m.IdentityFocus, 0, len(roster)-1)], m.AIR, w)
+}
+
+func (m Model) relationalListBody(w, h int) string {
+	facets := m.consentFacets()
+	header := []string{
+		" " + grammar.C("brt", "CONSENT POSTURE") + grammar.C("mut", " — A6: who is affected · the access-control lens (projection-pending)"),
+		" " + grammar.C("mut", "The pane governs PII — it shows POLICY + counts + glyphs, never a protected value."),
+		" " + grammar.RenderConsentFacetHeader(),
+		" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))),
+	}
+	visible := h - len(header)
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(facets) > visible {
+		if m.RelationalFocus >= visible {
+			start = m.RelationalFocus - visible + 1
+		}
+		if mx := len(facets) - visible; start > mx {
+			start = mx
+		}
+	}
+	var b strings.Builder
+	for _, line := range header {
+		b.WriteString(fitWidth(line, w) + "\n")
+	}
+	if len(facets) == 0 {
+		b.WriteString(" " + grammar.C("mut", "no consent facets in the current posture fold") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for i := start; i < start+visible && i < len(facets); i++ {
+		line := grammar.RenderConsentFacetRow(facets[i], w-1)
+		if i == m.RelationalFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(line, w-1) + "\n")
+		} else {
+			b.WriteString(" " + line + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) relationalDetailBody(w int) string {
+	facets := m.consentFacets()
+	if len(facets) == 0 {
+		return " " + grammar.C("brt", "CONSENT POSTURE") + "\n\n " + grammar.C("mut", "no consent facets in the current posture fold")
+	}
+	return grammar.RenderConsentFacetDetail(facets[clamp(m.RelationalFocus, 0, len(facets)-1)], w)
 }
 
 func (m Model) focusedLoopRow() (loopRow, bool) {
@@ -9900,6 +9959,8 @@ func pageLabel(page int) string {
 		return "PageAxes"
 	case PageIdentity:
 		return "PageIdentity"
+	case PageRelational:
+		return "PageRelational"
 	case PageEpistemics:
 		return "PageEpistemics"
 	case PageHelp:
@@ -10228,6 +10289,8 @@ func (m Model) referenceContextHeading() string {
 		return "case-role axes"
 	case PageIdentity:
 		return "identity roster"
+	case PageRelational:
+		return "consent posture"
 	case PageEpistemics:
 		return "epistemic context"
 	case PageHelp:
@@ -12951,6 +13014,16 @@ func (m Model) floorActions(w int) string {
 		} else {
 			parts = append(parts, grammar.C("mut", "no principals"))
 		}
+	case PageRelational:
+		if n := len(m.consentFacets()); n > 0 {
+			parts = append(parts,
+				grammar.C("yel", "[j/k]")+fmt.Sprintf("consent facet %d/%d", m.RelationalFocus+1, n),
+				grammar.C("yel", "[g/G]")+"first/last",
+				grammar.C("mut", "access-control posture"),
+			)
+		} else {
+			parts = append(parts, grammar.C("mut", "no consent facets"))
+		}
 	default:
 		if m.Page == PageDynamics {
 			if m.pageRows() > 0 {
@@ -13276,6 +13349,8 @@ func (m Model) trustSignalForPage(page int) trustSignal {
 		out = trustSignal{Authority: "framework", Freshness: "static", Support: "five-tuple-contract", Recency: "static"}
 	case PageIdentity:
 		out = trustSignal{Authority: "projection", Freshness: "folded", Support: "role/actor/owner", Recency: "current-fold"}
+	case PageRelational:
+		out = trustSignal{Authority: "projection", Freshness: "folded", Support: "consent-posture", Recency: "current-fold"}
 	case PageDomains:
 		fresh := domainSourceAge(m.Domains.LifecycleSources, m.Domains.Sources)
 		auth := "domain-pack"

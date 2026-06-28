@@ -1,0 +1,33 @@
+{
+  "predicates": [
+    {
+      "pov_label": "local-terminal",
+      "region": "left_wall",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 120.0,
+      "direction": "decrease",
+      "critical": true
+    }
+  ],
+  "aggregation_floor": 0.75,
+  "note": "A6 :relational pane (facet-list|detail @0.46): the LEFT consent-facet list renders text rows (left_wall edge_energy >= the principled text-present floor 1.0), the center spans into the focused facet's consent-posture breakdown + the A6 contract (entity_core), and the frame stays dark-theme (entity_core luma <= 120). A reference/posture pane — thresholds reflect a legible posture surface, not feed-density. Authored from design intent."
+}

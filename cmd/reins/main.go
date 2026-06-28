@@ -316,6 +316,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageAxes, true
 	case "identity", "who", "a1":
 		return model.PageIdentity, true
+	case "relational", "consent", "a6":
+		return model.PageRelational, true
 	case "epistemics", "epi", "epistemic":
 		return model.PageEpistemics, true
 	case "help":

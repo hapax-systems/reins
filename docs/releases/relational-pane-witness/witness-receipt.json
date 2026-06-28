@@ -1,0 +1,78 @@
+{
+  "receipt": {
+    "kind": "av_witness",
+    "witness_mode": "reins-local-terminal-self-witness",
+    "receipt_id": "c9febddac93fb9561b31e1d8",
+    "content_hash": "478fb975c2e957f15157e81ca01bcbe398f085cd6c77fe4a7b710aa348f53d6c",
+    "active_source_head": "4c51dce",
+    "status": "pass",
+    "obs_moving": true,
+    "collected_at": 1782663445.4499905,
+    "expires_at": 1782665245.4499905,
+    "via": "reins-shot",
+    "perceptual_digest": "570ed5781ad627a1c033ff85b04aa299f229e02c47a65c364b7218102025ea9b",
+    "intent_hash": "1a52cf7781cf6c9c07fd35b14fa58e046fd6f2bb7e18cf5f90d85d81ce28e4da",
+    "intent_pass": true,
+    "signature": ""
+  },
+  "predicates": [
+    {
+      "pov": "local-terminal",
+      "region": "left_wall",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "critical": true,
+      "realized": 1.601,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "critical": true,
+      "realized": 2.335,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 120.0,
+      "critical": true,
+      "realized": 32.132,
+      "holds": true
+    }
+  ],
+  "realized_vector": {
+    "local-terminal": {
+      "ceiling": {
+        "luma": 37.72735871471125,
+        "edge_energy": 3.7063172713105477
+      },
+      "left_wall": {
+        "luma": 29.263090192772257,
+        "edge_energy": 1.6005836429232363
+      },
+      "right_wall": {
+        "luma": 23.31679047974189,
+        "edge_energy": 0.07319108138072905
+      },
+      "floor": {
+        "luma": 25.83088623562544,
+        "edge_energy": 0.6897398512605454
+      },
+      "entity_core": {
+        "luma": 32.13180379730904,
+        "edge_energy": 2.3353496969004706
+      },
+      "negative_space": {
+        "luma": 41.387558906521754,
+        "edge_energy": 4.713930825421087
+      }
+    }
+  }
+}

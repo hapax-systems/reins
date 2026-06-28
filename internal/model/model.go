@@ -39,6 +39,7 @@ const (
 	PageLoops        = 21 // A5 Tier-1 causal-loop analysis over the live dynamics graph (computed, no simulation)
 	PageAxes         = 22 // the six case-role axes — representational framework + five-tuple contracts
 	PageIdentity     = 23 // A1 Identity — the principal roster (who is acting) derived from role/actor/owner
+	PageRelational   = 24 // A6 Relational — the consent/access-control posture (who is affected)
 )
 
 const (
@@ -472,6 +473,7 @@ type Model struct {
 	LoopFocus           int  // selected A5 causal loop in :loops
 	AxisFocus           int  // selected case-role axis in :axes
 	IdentityFocus       int  // selected principal in :identity
+	RelationalFocus     int  // selected consent facet in :relational
 	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height              int
 	Beat                int                // low-rate liveness frame; visual only, never authority/readiness
@@ -805,6 +807,10 @@ func (m Model) composesViaAlgebra() bool {
 		// E7.3 — self-anchored A1 identity roster. The primary is the principal list and the secondary is
 		// the focused principal detail; [j/k] moves IdentityFocus and never reverts to the session-frozen split.
 		return true
+	case PageRelational:
+		// E7.4 — self-anchored A6 consent posture. The primary is the consent facet list and the secondary is
+		// the focused posture detail; [j/k] moves RelationalFocus and never reverts to the session-frozen split.
+		return true
 	}
 	return false
 }
@@ -849,6 +855,8 @@ func (m Model) pageRows() int {
 		return len(grammar.Axes())
 	case PageIdentity:
 		return len(m.identityRoster())
+	case PageRelational:
+		return len(m.consentFacets())
 	case PageCommands:
 		return len(verbs)
 	case PageWindows:
@@ -869,7 +877,7 @@ func (m Model) pageRows() int {
 
 // isReferencePage reports pages with no row cursor but scrollable full-width explanatory content.
 func (m Model) isReferencePage() bool {
-	return m.Page == PageDynamics || m.Page == PageLoops || m.Page == PageAxes || m.Page == PageIdentity || m.Page == PageHelp || m.Page == PageLegend ||
+	return m.Page == PageDynamics || m.Page == PageLoops || m.Page == PageAxes || m.Page == PageIdentity || m.Page == PageRelational || m.Page == PageHelp || m.Page == PageLegend ||
 		m.Page == PageCommands || m.Page == PageWindows || m.Page == PageIntent ||
 		m.Page == PageSurfaces || m.Page == PageDomains || m.Page == PageLifecycles || m.Page == PageYard ||
 		m.Page == PageReadiness || m.Page == PageCaps || m.Page == PageIntake ||
@@ -911,6 +919,9 @@ func (m Model) curFocus() int {
 	if m.Page == PageIdentity {
 		return m.IdentityFocus
 	}
+	if m.Page == PageRelational {
+		return m.RelationalFocus
+	}
 	if m.Page == PageCommands {
 		return m.CommandFocus
 	}
@@ -938,7 +949,7 @@ func (m Model) curFocus() int {
 // focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
 // so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
 func (m Model) focusTo(i int) Model {
-	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageLoops && m.Page != PageAxes && m.Page != PageIdentity && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageSessionTurns && m.Page != PageCoordinator {
+	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageLoops && m.Page != PageAxes && m.Page != PageIdentity && m.Page != PageRelational && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageSessionTurns && m.Page != PageCoordinator {
 		return m
 	}
 	max := m.pageRows() - 1
@@ -966,6 +977,8 @@ func (m Model) focusTo(i int) Model {
 		m.AxisFocus = i
 	} else if m.Page == PageIdentity {
 		m.IdentityFocus = i
+	} else if m.Page == PageRelational {
+		m.RelationalFocus = i
 	} else if m.Page == PageCommands {
 		m.CommandFocus = i
 	} else if m.Page == PageWindows {
@@ -1069,6 +1082,18 @@ func (m Model) identityFocusTo(i int) Model {
 	}
 	m.IdentityFocus = clamp(i, 0, max)
 	m.Status = fmt.Sprintf("identity %d/%d", m.IdentityFocus+1, max+1)
+	return m
+}
+
+func (m Model) relationalFocusTo(i int) Model {
+	facets := m.consentFacets()
+	max := len(facets) - 1
+	if max < 0 {
+		m.RelationalFocus = 0
+		return m
+	}
+	m.RelationalFocus = clamp(i, 0, max)
+	m.Status = fmt.Sprintf("consent facet %d/%d", m.RelationalFocus+1, max+1)
 	return m
 }
 
@@ -1838,6 +1863,7 @@ var verbs = []verbDef{
 	{name: "loops", aliases: []string{"causal"}, kind: commandRead, group: "window", gloss: "A5 causal-loop analysis over :dynamics (computed, no simulation)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "axes", aliases: []string{"framework"}, kind: commandRead, group: "window", gloss: "the six case-role axes — the representational framework + five-tuple contracts", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "identity", aliases: []string{"who", "a1"}, kind: commandRead, group: "window", gloss: "A1 Identity — the principal roster (who is acting) derived from role/actor/owner", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "relational", aliases: []string{"consent", "a6"}, kind: commandRead, group: "window", gloss: "A6 Relational — the consent/access-control posture (frame · authorship · gating · stakeholders)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "turns", aliases: []string{"session-turns", "session"}, kind: commandRead, group: "window", gloss: "SESSION TURN-LADDER fixture (chat-pane flagship ahead of CapabilityIO)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "epistemics", aliases: []string{"epi", "epistemic"}, kind: commandRead, group: "window", gloss: "evidence/provenance posture over dynamics, observations, domains, capabilities, and sessions", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1968,6 +1994,9 @@ func (m Model) Exec(line string) Model {
 	case "identity":
 		m = m.switchPage(PageIdentity)
 		m.Status = ":identity"
+	case "relational":
+		m = m.switchPage(PageRelational)
+		m.Status = ":relational"
 	case "epistemics":
 		m = m.switchPage(PageEpistemics)
 		m.Status = ":epistemics"
@@ -2701,6 +2730,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageIdentity {
 				return m.identityFocusTo(m.IdentityFocus + 1), nil
 			}
+			if m.Page == PageRelational {
+				return m.relationalFocusTo(m.RelationalFocus + 1), nil
+			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(m.CommandFocus + 1), nil
 			}
@@ -2750,6 +2782,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.Page == PageIdentity {
 				return m.identityFocusTo(m.IdentityFocus - 1), nil
+			}
+			if m.Page == PageRelational {
+				return m.relationalFocusTo(m.RelationalFocus - 1), nil
 			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(m.CommandFocus - 1), nil
@@ -2801,6 +2836,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageIdentity {
 				return m.identityFocusTo(0), nil
 			}
+			if m.Page == PageRelational {
+				return m.relationalFocusTo(0), nil
+			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(0), nil
 			}
@@ -2849,6 +2887,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.Page == PageIdentity {
 				return m.identityFocusTo(len(m.identityRoster()) - 1), nil
+			}
+			if m.Page == PageRelational {
+				return m.relationalFocusTo(len(m.consentFacets()) - 1), nil
 			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(len(verbs) - 1), nil
