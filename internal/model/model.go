@@ -414,8 +414,10 @@ type Model struct {
 	Sessions            []grammar.Session
 	Traces              []grammar.Trace
 	DispatchRecords     []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
-	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (fixture-fed until CapabilityIO SESSION feed)
+	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (live FetchTurns; fixture fallback when the feed is dark)
 	TurnBlocks          map[string][]grammar.TurnBlock
+	TurnRole            string // the session role whose turns the chat-pane streams (set on entry from the focused lane)
+	TurnsDark           bool   // the live turn feed is dark → the ladder shown is the demo fixture (labeled honestly, never silently)
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -2134,6 +2136,26 @@ func (m Model) loadTurns() Model {
 	return m
 }
 
+// FoldTurns folds a live turn-receipt page (FetchTurns) into the chat-pane ladder. A successful
+// fetch REPLACES the demo fixture with the live ladder; a dark/empty feed KEEPS the fixture so the
+// flagship stays legible but sets TurnsDark so the view labels the source honestly — never passing
+// canned data off as live (never-false-green). The live receipt carries the ladder rows only, so
+// live mode renders the detail blocks honestly-empty until a per-turn detail fetch lands.
+func (m Model) FoldTurns(turns []grammar.Turn, dark bool) Model {
+	if dark || len(turns) == 0 {
+		m.TurnsDark = true
+		if len(m.TurnLadder) == 0 {
+			m = m.loadTurns() // never leave the flagship blank — seed the demo fixture
+		}
+		return m
+	}
+	m.TurnLadder = turns
+	m.TurnBlocks = map[string][]grammar.TurnBlock{}
+	m.TurnsDark = false
+	m.TurnFocus = clamp(m.TurnFocus, 0, maxVisible(0, len(m.TurnLadder)-1))
+	return m
+}
+
 func (m Model) switchPage(page int) Model {
 	if m.WindowSeen == nil {
 		m.WindowSeen = map[int]string{}
@@ -2144,7 +2166,19 @@ func (m Model) switchPage(page int) Model {
 		m = m.loadDispatch() // load the ledger on EVERY entry path (cycle, D-key, :dispatch) — not stale
 	}
 	if page == PageSessionTurns {
-		m = m.loadTurns()
+		// Target the focused lane's role; (re)seed the demo fixture only on a role change or a cold
+		// ladder — re-entering the same live lane keeps its streamed turns (no fixture clobber).
+		role := m.TurnRole
+		if s, ok := m.FocusedSession(); ok && strings.TrimSpace(s.Role) != "" {
+			role = s.Role
+		}
+		if role != m.TurnRole || len(m.TurnLadder) == 0 {
+			m.TurnRole = role
+			m = m.loadTurns()
+			m.TurnsDark = true // honest: no live feed for this lane yet (the tick replaces it)
+		}
+		m.TurnFocus = clamp(m.TurnFocus, 0, maxVisible(0, len(m.TurnLadder)-1))
+		m.DetailScroll = 0
 	}
 	m.Mode = ModeNormal
 	m.DoorOpen = false
@@ -2240,6 +2274,13 @@ type TracesMsg struct {
 	Error  string
 }
 
+// TurnsMsg carries a fresh session turn-receipt page into Update (the chat-pane live feed).
+type TurnsMsg struct {
+	Turns []grammar.Turn
+	Dark  bool
+	Error string
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case EventsMsg:
@@ -2254,6 +2295,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.TracesError = v.Error
 		m.TracesSeq++
 		m.LastFold = "traces"
+		return m, nil
+	case TurnsMsg:
+		m = m.FoldTurns(v.Turns, v.Dark)
+		m.LastFold = "turns"
 		return m, nil
 	case LastlogPageMsg:
 		// a PgUp backward-page landed: prepend the older events (newest-at-bottom order)

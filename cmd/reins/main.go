@@ -88,6 +88,16 @@ func fetchTracesOnce(url string) tea.Msg {
 	return msg
 }
 
+// fetchTurnsOnce: one session turn-receipt page for a lane role -> a TurnsMsg. An empty role (no
+// lane targeted yet) is dark by construction — the chat pane keeps its demo fixture (labeled).
+func fetchTurnsOnce(role string) tea.Msg {
+	if strings.TrimSpace(role) == "" {
+		return model.TurnsMsg{Dark: true}
+	}
+	turns, err := api.FetchTurns(role, "")
+	return model.TurnsMsg{Turns: turns, Dark: err != nil, Error: errorText(err)}
+}
+
 func fetchSessionDetailOnce(url, role string) tea.Msg {
 	d, dark, err := api.FetchSessionDetail(url, role)
 	msg := model.SessionDetailMsg{Detail: d, Dark: dark}
@@ -148,6 +158,9 @@ func epistemicsTick(url string) tea.Cmd {
 func sessionsTick(url string) tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return fetchSessionsOnce(url) })
 }
+func turnsTick(role string) tea.Cmd { // chat-pane live feed — polls the targeted lane's turn receipts
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTurnsOnce(role) })
+}
 func tracesTick(url string) tea.Cmd { // LLM-spend obs — a cadence between sessions(4s) and intake(8s)
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTracesOnce(url) })
 }
@@ -184,7 +197,8 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchGatesOnce(r.url) },
 		func() tea.Msg { return fetchDomainsOnce(r.url) },
 		func() tea.Msg { return fetchTracesOnce(r.url) },
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), beatTick(),
+		func() tea.Msg { return fetchTurnsOnce(r.m.TurnRole) },
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), beatTick(),
 	)
 }
 
@@ -204,6 +218,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, sessionsTick(r.url) // re-arm the live lane roster poll/re-fold loop
 	case model.TracesMsg:
 		return r, tracesTick(r.url) // re-arm the LLM-observability poll/re-fold loop
+	case model.TurnsMsg:
+		return r, turnsTick(r.m.TurnRole) // re-arm the chat-pane turn feed for the currently-targeted lane
 	case model.IntakeMsg:
 		return r, intakeTick(r.url) // re-arm intake snapshot polling
 	case model.CapabilitiesMsg:
@@ -399,6 +415,7 @@ func main() {
 					fmt.Print(grammar.RenderTurnDetail(hdr, blocks[model.TurnID(hdr)], air))
 					return
 				}
+				fmt.Println("· demo fixture — offline turn-grammar render (live session feed not wired in --probe)")
 				fmt.Println(grammar.RenderTurnHeader())
 				for _, t := range turns {
 					fmt.Println(grammar.RenderTurnRow(t, air))

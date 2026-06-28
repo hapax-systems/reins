@@ -10725,8 +10725,21 @@ func (m Model) renderSelectedTrace(w int) string {
 	return b.String()
 }
 
+// turnSourceLabel honestly names the chat-pane feed: live (streaming a lane's turns) vs the demo
+// fixture (the live feed is dark) — so canned data is never read as live. The lane role redacts on air.
+func (m Model) turnSourceLabel() string {
+	role := strings.TrimSpace(m.TurnRole)
+	if m.TurnsDark {
+		if role == "" {
+			return "· demo fixture — no lane targeted (live session feed dark)"
+		}
+		return "· demo fixture — live turn feed for " + grammar.Redact(nil, "label", role, m.AIR) + " is dark"
+	}
+	return "· live — streaming " + grammar.Redact(nil, "label", role, m.AIR) + " session turns"
+}
+
 func (m Model) turnListBody(w, h int) string {
-	visible := h - 4 // two-row lane rail + rule + header
+	visible := h - 5 // two-row lane rail + source label + rule + header
 	if visible < 1 {
 		visible = 1
 	}
@@ -10741,6 +10754,11 @@ func (m Model) turnListBody(w, h int) string {
 	}
 	var b strings.Builder
 	b.WriteString(m.turnLaneRail(w) + "\n")
+	srcTok := "2nd"
+	if m.TurnsDark {
+		srcTok = "mut"
+	}
+	b.WriteString(" " + grammar.C(srcTok, clipRunes(m.turnSourceLabel(), maxVisible(8, w-1))) + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
 	b.WriteString("  " + grammar.RenderTurnHeader() + "\n")
 	if len(m.TurnLadder) == 0 {
