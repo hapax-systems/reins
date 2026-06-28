@@ -111,6 +111,36 @@ func (m Model) templateValue(key string) (string, bool) {
 		return "", false
 	}
 
+	if page == PageSessionTurns {
+		t, has := m.FocusedTurn()
+		field := func(f string) (string, bool) {
+			if !has {
+				return "", false
+			}
+			if f == "id" {
+				f = "turn_id"
+			}
+			switch f {
+			case "turn_id", "ts", "role", "kind", "summary", "model", "route", "gate":
+				return turnFieldValueForAir(t, f, m.AIR), true
+			default:
+				return "", false
+			}
+		}
+		selectedField := m.selectedFieldForPage(page, "summary")
+		switch {
+		case key == "sel", key == "sel.value":
+			return field(selectedField)
+		case key == "sel.id", key == "focus":
+			return field("turn_id")
+		case key == "sel.field":
+			return selectedField, true
+		case strings.HasPrefix(key, "sel."):
+			return field(strings.TrimPrefix(key, "sel."))
+		}
+		return "", false
+	}
+
 	if page == PageCaps {
 		c, has := m.FocusedCapabilityRow()
 		field := func(f string) (string, bool) {
@@ -525,6 +555,17 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 		if value == "" {
 			return "", "", false
 		}
+	case PageSessionTurns:
+		t, has := m.FocusedTurn()
+		if !has {
+			return "", "", false
+		}
+		switch field {
+		case "id", "turn_id", "ts", "role", "kind", "summary", "model", "route", "gate":
+			value = turnFieldValueForAir(t, field, m.AIR)
+		default:
+			return "", "", false
+		}
 	case PageTasks:
 		t, has := m.FocusedTask()
 		if !has {
@@ -620,7 +661,7 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 }
 
 // templateKeys: the offerable references (kept small + ordered for the fish menu).
-var templateKeys = []string{"sel", "sel.id", "sel.field", "sel.value", "sel.status", "sel.meaning", "sel.authority", "sel.family", "sel.receipt", "sel.source_refs", "sel.missing", "sel.kind", "sel.contract", "sel.crit", "focus", "ring.0"}
+var templateKeys = []string{"sel", "sel.id", "sel.field", "sel.value", "sel.summary", "sel.status", "sel.meaning", "sel.authority", "sel.family", "sel.receipt", "sel.source_refs", "sel.missing", "sel.kind", "sel.contract", "sel.crit", "focus", "ring.0"}
 
 // templateCandidates: when the input has an OPEN `{{…` fragment, offer the references as fish
 // candidates, each with an AIR-safe LIVE PREVIEW of what it resolves to (discoverability + dynamic

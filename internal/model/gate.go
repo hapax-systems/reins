@@ -20,7 +20,7 @@ const (
 func pageVerdict(page int) Verdict {
 	switch page {
 	case PageEvents, PageTasks, PageSessions, PageYard, PageReadiness, PageIntake,
-		PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageIntent:
+		PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageIntent, PageSessionTurns:
 		return VerdictStanding
 	case PageTraces:
 		return VerdictPeek

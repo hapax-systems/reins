@@ -367,19 +367,16 @@ func main() {
 				return
 			}
 		}
-		// --probe turns: OFFLINE fixture render of the session-pane turn grammar (§9 step-1 read-
-		// projection; CapabilityIO SESSION-kind is sequenced behind #4296, so no live backend yet).
-		// Demonstrates the turn-ladder + its livestream-safe AIR collapse for the operator vetting loop.
+		// --probe turns/session: OFFLINE fixture render of the session-pane turn grammar (§9
+		// read-projection; CapabilityIO SESSION-kind is gated, so no live backend yet). Demonstrates
+		// the turn-ladder + its livestream-safe AIR collapse for the operator vetting loop.
 		for _, a := range os.Args[2:] {
-			if a == "turns" || a == "session-turns" {
+			if a == "turns" || a == "session-turns" || a == "session" {
 				air := false
 				for _, b := range os.Args[2:] {
 					if b == "--air" {
 						air = true
 					}
-				}
-				sk := func() map[string]string {
-					return map[string]string{"ts": "ok", "kind": "ok", "role": "ok", "model": "ok", "route": "ok", "gate": "ok", "magnitude": "ok"}
 				}
 				detail := false
 				for _, b := range os.Args[2:] {
@@ -387,30 +384,21 @@ func main() {
 						detail = true
 					}
 				}
+				turns, blocks := model.SessionTurnFixture()
 				if detail { // expanded single-turn tree (progressive-disclosure summon view)
-					hdr := grammar.Turn{TS: "2026-06-26T18:40:07Z", Role: "cc-reins", Kind: "assistant", Summary: "fix the flaky trace test", Magnitude: 0.5, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass", AIR: sk()}
-					blks := []grammar.TurnBlock{
-						{Kind: "reasoning", Summary: "widen the 3s timeout; inject a fake clock", Magnitude: 0.4, AIR: map[string]string{"kind": "ok"}},
-						{Kind: "tool_call", Summary: "go test ./... -run Trace", Magnitude: 0.5, Meta: "Bash", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
-						{Kind: "tool_result", Summary: "ok  internal/grammar  0.004s", Magnitude: 0.6, Meta: "exit 0 · 42 lines", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
-						{Kind: "diff", Summary: "grammar_test.go @@ -3 +6", Magnitude: 0.3, Meta: "+6 -2", AIR: map[string]string{"kind": "ok", "meta": "ok"}},
+					idx := 3
+					if idx >= len(turns) {
+						idx = 0
 					}
-					fmt.Print(grammar.RenderTurnDetail(hdr, blks, air))
+					if len(turns) == 0 {
+						return
+					}
+					hdr := turns[idx]
+					fmt.Print(grammar.RenderTurnDetail(hdr, blocks[model.TurnID(hdr)], air))
 					return
 				}
-				fix := []grammar.Turn{
-					{TS: "2026-06-26T18:40:01Z", Role: "operator", Kind: "user", Summary: "fix the flaky trace test and open a PR", Magnitude: 0.2, Model: "—", Route: "operator.input", AIR: sk()},
-					{TS: "2026-06-26T18:40:02Z", Role: "cc-reins", Kind: "reasoning", Summary: "the test asserts on a 3s timeout; widen and stub the clock", Magnitude: 0.4, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
-					{TS: "2026-06-26T18:40:05Z", Role: "cc-reins", Kind: "assistant", Summary: "I'll widen the timeout and inject a fake clock.", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
-					{TS: "2026-06-26T18:40:07Z", Role: "cc-reins", Kind: "tool_call", Summary: "Bash(go test ./... -run Trace)", Magnitude: 0.5, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass", AIR: sk()},
-					{TS: "2026-06-26T18:40:12Z", Role: "cc-reins", Kind: "tool_result", Summary: "ok  internal/grammar  0.004s (42 lines)", Magnitude: 0.6, Model: "—", Route: "claude.code.full", Gate: "pass", AIR: sk()},
-					{TS: "2026-06-26T18:40:20Z", Role: "cc-reins", Kind: "diff", Summary: "grammar_test.go +6 -2", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pending", AIR: sk()},
-					{TS: "2026-06-26T18:40:21Z", Role: "cc-reins", Kind: "approval", Summary: "apply edit to grammar_test.go?", Magnitude: 0.2, Model: "—", Route: "claude.code.full", Gate: "pending", AIR: sk()},
-					{TS: "2026-06-26T18:40:30Z", Role: "lane-beta", Kind: "dispatch", Summary: "dispatched: open PR for the trace fix", Magnitude: 0.4, Model: "codex", Route: "codex.spark.full", Gate: "pass", AIR: sk()},
-					{TS: "2026-06-26T18:40:45Z", Role: "lane-beta", Kind: "refusal", Summary: "push blocked: authorization-packet-validator", Magnitude: 0.5, Model: "codex", Route: "codex.spark.full", Gate: "deny", AIR: sk()},
-				}
 				fmt.Println(grammar.RenderTurnHeader())
-				for _, t := range fix {
+				for _, t := range turns {
 					fmt.Println(grammar.RenderTurnRow(t, air))
 				}
 				return

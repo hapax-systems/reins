@@ -257,8 +257,8 @@ func TestRegistrySlackRowsArePageSpecific(t *testing.T) {
 		page int
 		want []string
 	}{
-		{name: "commands", page: PageCommands, want: []string{"read:19", "arg verbs", "mutation surface"}},
-		{name: "windows", page: PageWindows, want: []string{"registered:20", "linked:8", "source-only:11"}},
+		{name: "commands", page: PageCommands, want: []string{"read:20", "arg verbs", "mutation surface"}},
+		{name: "windows", page: PageWindows, want: []string{"registered:21", "linked:8", "source-only:11"}},
 		{name: "surfaces", page: PageSurfaces, want: []string{"mode:4", "projection:12", "open=[:]"}},
 		{name: "intent", page: PageIntent, want: []string{"resume", "9 targets", "preview only", "{{sel.*}}"}},
 		{name: "help", page: PageHelp, want: []string{"split marks", "contract", "no buried screens"}},
@@ -426,7 +426,7 @@ func TestTitleBarRendersChannelHotlistWithActivity(t *testing.T) {
 	m.Width, m.Height, m.Page = 120, 40, PageSessions
 
 	title := ansi.Strip(m.viewTitle(300))
-	for _, want := range []string{"REINS", "win", "1.events:", "2.tasks:2!1", "‹3.sess:1!1›", "Y.yard:2!1", "R.ready:1!0", "I.obs", "C.caps:18c!12", "4.dyn:1@all", "E.epi", "5.help:ref", "6.cmds:23", "7.wins:20", "8.intent:9", "9.surf:35", "0.doms:17", "L.life:6", "D.disp", "?.legend:ref"} {
+	for _, want := range []string{"REINS", "win", "1.events:", "2.tasks:2!1", "‹3.sess:1!1›", "Y.yard:2!1", "R.ready:1!0", "I.obs", "C.caps:18c!12", "4.dyn:1@all", "E.epi", "5.help:ref", "6.cmds:24", "7.wins:21", "8.intent:9", "9.surf:35", "0.doms:17", "L.life:6", "D.disp", "U.turns", "?.legend:ref"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("title hotlist missing %q:\n%s", want, title)
 		}
@@ -454,7 +454,7 @@ func TestWindowRegistrySeparatesEngineAndInstanceLifecycleWindows(t *testing.T) 
 	if out.Page != PageWindows {
 		t.Fatalf(":wins should open the windows page, got page %d", out.Page)
 	}
-	if !strings.Contains(out.Status, "windows:") || !strings.Contains(out.Status, "engine 8") || !strings.Contains(out.Status, "instance 12") || !strings.Contains(out.Status, "intake") || !strings.Contains(out.Status, "routing") || !strings.Contains(out.Status, "sdlc") {
+	if !strings.Contains(out.Status, "windows:") || !strings.Contains(out.Status, "engine 8") || !strings.Contains(out.Status, "instance 13") || !strings.Contains(out.Status, "intake") || !strings.Contains(out.Status, "routing") || !strings.Contains(out.Status, "sdlc") {
 		t.Fatalf("window registry summary should expose scope and lifecycle split, got %q", out.Status)
 	}
 }
@@ -974,8 +974,12 @@ func TestExecHotkeyAndCycleOpenRegisteredPages(t *testing.T) {
 		t.Fatalf("] must cycle to dispatch after traces, got page %d", m.Page)
 	}
 	m = step(m, "]")
+	if m.Page != PageSessionTurns {
+		t.Fatalf("] must cycle to session turns after dispatch, got page %d", m.Page)
+	}
+	m = step(m, "]")
 	if m.Page != PageLegend {
-		t.Fatalf("] must cycle to legend after dispatch, got page %d", m.Page)
+		t.Fatalf("] must cycle to legend after session turns, got page %d", m.Page)
 	}
 	m = step(m, "]")
 	if m.Page != PageEvents {
@@ -986,8 +990,12 @@ func TestExecHotkeyAndCycleOpenRegisteredPages(t *testing.T) {
 		t.Fatalf("[ must wrap from events to legend, got page %d", m.Page)
 	}
 	m = step(m, "[")
+	if m.Page != PageSessionTurns {
+		t.Fatalf("[ must cycle from legend to session turns, got page %d", m.Page)
+	}
+	m = step(m, "[")
 	if m.Page != PageDispatch {
-		t.Fatalf("[ must cycle from legend to dispatch, got page %d", m.Page)
+		t.Fatalf("[ must cycle from session turns to dispatch, got page %d", m.Page)
 	}
 	m = step(m, "[")
 	if m.Page != PageTraces {
@@ -2939,7 +2947,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		t.Fatalf(":commands j should move command focus, focus=%d status=%q", cmds.CommandFocus, cmds.Status)
 	}
 	cmdView = ansi.Strip(cmds.View())
-	for _, want := range []string{"tasks (t)", "read/window", "selected    tasks (t)", "[j/k]command 2/23"} {
+	for _, want := range []string{"tasks (t)", "read/window", "selected    tasks (t)", "[j/k]command 2/24"} {
 		if !strings.Contains(cmdView, want) {
 			t.Fatalf("commands selected-row context missing %q:\n%s", want, cmdView)
 		}
@@ -2973,7 +2981,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		t.Fatalf(":windows j should move window focus, focus=%d status=%q", wins.WindowFocus, wins.Status)
 	}
 	winView := ansi.Strip(wins.View())
-	for _, want := range []string{"WINDOWS", "sessions", "yard", "readiness", "intake", "triage", "routing", "matrix", "sdlc", "cockpit", "gate", "epistemics", "commands", "surfaces", "domains", "lifecycles", "PageYard", "PageReadiness", "PageIntake", "PageCaps", "PageEpistemics", "PageCommands", "PageIntent", "PageSurfaces", "PageDomains", "PageLifecycles", "SPLIT", "link:compact role", "link:target actor", "link:scroll role", "anchor:target system", "anchor:target evidence", "anchor:ref tenant", "source-only", "selected    tasks", "[j/k]window 2/20", "jump        [2] / :tasks"} {
+	for _, want := range []string{"WINDOWS", "sessions", "yard", "readiness", "intake", "triage", "routing", "matrix", "sdlc", "cockpit", "gate", "epistemics", "commands", "surfaces", "domains", "lifecycles", "PageYard", "PageReadiness", "PageIntake", "PageCaps", "PageEpistemics", "PageCommands", "PageIntent", "PageSurfaces", "PageDomains", "PageLifecycles", "SPLIT", "link:compact role", "link:target actor", "link:scroll role", "anchor:target system", "anchor:target evidence", "anchor:ref tenant", "source-only", "selected    tasks", "[j/k]window 2/21", "jump        [2] / :tasks"} {
 		if !strings.Contains(winView, want) {
 			t.Fatalf("windows page missing %q:\n%s", want, winView)
 		}

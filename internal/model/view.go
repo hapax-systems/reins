@@ -154,6 +154,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "sessions", len(m.Sessions), m.SessionsDark
 	case PageTraces:
 		return "traces", len(m.Traces), m.TracesDark
+	case PageSessionTurns:
+		return "session-turns", len(m.TurnLadder), false
 	case PageYard:
 		return "yard", len(m.Tasks), m.TasksDark && m.SessionsDark && m.EventsDark
 	case PageReadiness:
@@ -313,6 +315,10 @@ func (m Model) windowSignal(page int) (string, string) {
 			return "DARK", "red"
 		}
 		if n := len(m.Traces); n > 0 {
+			return fmt.Sprintf("%d", n), "mut"
+		}
+	case PageSessionTurns:
+		if n := len(m.TurnLadder); n > 0 {
 			return fmt.Sprintf("%d", n), "mut"
 		}
 	case PageTasks:
@@ -640,6 +646,17 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.tracesListBody(pw, ph) }},
 			&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.renderSelectedTrace(pw) }},
 			0.62, m.tracesEmergentRelation())
+	case PageSessionTurns:
+		// E4.2 — SESSION TURN-LADDER, fixture-fed ahead of CapabilityIO. The primary is the receded
+		// chat/turn ladder; the secondary is the focused turn's expanded block stream. It is self-anchored
+		// like traces/events: [j/k] moves TurnFocus and bindings resolve to the turn, never a lane row.
+		if len(m.TurnLadder) == 0 {
+			return nil
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.turnListBody(pw, ph) }},
+			&layout.Pane{MinW: 48, Render: func(pw, ph int) string { return m.turnDetailBody(pw) }},
+			0.55, "focused turn → blocks")
 	case PageIntent:
 		// Inc 3 TRANSFORM — SELF-ANCHORED (own IntentFocus; the explicit j handler beats isReferencePage).
 		// The legacy session-frozen reference split (sessions │ intent review) is ABOLISHED: the primary
@@ -1370,6 +1387,8 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.sessionsBody(w, h)
 	case PageTraces:
 		return m.tracesBody(w, h)
+	case PageSessionTurns:
+		return m.turnListBody(w, h)
 	case PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
@@ -9158,6 +9177,12 @@ func pageLabel(page int) string {
 		return "PageTasks"
 	case PageSessions:
 		return "PageSessions"
+	case PageTraces:
+		return "PageTraces"
+	case PageSessionTurns:
+		return "PageSessionTurns"
+	case PageDispatch:
+		return "PageDispatch"
 	case PageYard:
 		return "PageYard"
 	case PageReadiness:
@@ -10134,6 +10159,18 @@ func (m Model) contextLine() string {
 			return grammar.C("2nd", " LLM traces · no rows · focus: —")
 		}
 		return grammar.C("2nd", fmt.Sprintf(" LLM traces · newest at bottom · %d rows · [j/k] select · focus: %s", len(m.Traces), f))
+	case PageSessionTurns:
+		f := "—"
+		if turn, ok := m.FocusedTurn(); ok {
+			f = turnIDForAir(turn, m.AIR)
+			if r := []rune(f); len(r) > 28 {
+				f = string(r[:28])
+			}
+		}
+		if len(m.TurnLadder) == 0 {
+			return grammar.C("2nd", " session turns · fixture not loaded · focus: —")
+		}
+		return grammar.C("2nd", fmt.Sprintf(" SESSION TURN-LADDER · fixture-fed ahead of CapabilityIO · %d turns · [j/k] select [y]ank · focus: %s", len(m.TurnLadder), f))
 	case PageSessions:
 		f := "—"
 		if s, ok := m.FocusedSession(); ok {
@@ -10225,6 +10262,114 @@ func (m Model) renderSelectedTrace(w int) string {
 	writeWrappedKV(&b, "latency", grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR), "2nd", w)
 	writeWrappedKV(&b, "contract", "metadata-only LLM observability; no prompt/response body, no tool I/O — cost + latency are the held signals", "mut", w)
 	return b.String()
+}
+
+func (m Model) turnListBody(w, h int) string {
+	visible := h - 4 // two-row lane rail + rule + header
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(m.TurnLadder) > visible {
+		if m.TurnFocus >= visible {
+			start = m.TurnFocus - visible + 1
+		}
+		if mx := len(m.TurnLadder) - visible; start > mx {
+			start = mx
+		}
+	}
+	var b strings.Builder
+	b.WriteString(m.turnLaneRail(w) + "\n")
+	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	b.WriteString("  " + grammar.RenderTurnHeader() + "\n")
+	if len(m.TurnLadder) == 0 {
+		b.WriteString(" " + grammar.C("mut", "(no turn fixture loaded — CapabilityIO SESSION feed gated)") + "\n")
+		return b.String()
+	}
+	for i := start; i < start+visible && i < len(m.TurnLadder); i++ {
+		row := grammar.RenderTurnRow(m.TurnLadder[i], m.AIR)
+		if i == m.TurnFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(row, w-1) + "\n")
+		} else {
+			b.WriteString("  " + row + "\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) turnLaneRail(w int) string {
+	type lane struct {
+		role   string
+		status string
+		count  int
+		rank   int
+	}
+	rank := map[string]int{"gate": 5, "awaiting": 4, "done": 3, "streaming": 2, "idle": 1}
+	statusFor := func(t grammar.Turn) string {
+		if strings.TrimSpace(t.Gate) != "" {
+			return "gate"
+		}
+		switch t.Kind {
+		case "approval":
+			return "awaiting"
+		case "tool_result", "diff", "refusal":
+			return "done"
+		case "assistant", "reasoning", "tool_call", "dispatch":
+			return "streaming"
+		default:
+			return "idle"
+		}
+	}
+	lanes := map[string]*lane{}
+	order := []string{}
+	for _, t := range m.TurnLadder {
+		role := grammar.Redact(t.AIR, "role", t.Role, m.AIR)
+		if strings.TrimSpace(role) == "" {
+			role = "—"
+		}
+		l, ok := lanes[role]
+		if !ok {
+			l = &lane{role: role, status: "idle", rank: rank["idle"]}
+			lanes[role] = l
+			order = append(order, role)
+		}
+		l.count++
+		st := statusFor(t)
+		if rank[st] > l.rank {
+			l.status, l.rank = st, rank[st]
+		}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		li, lj := lanes[order[i]], lanes[order[j]]
+		if li.rank != lj.rank {
+			return li.rank > lj.rank
+		}
+		return li.role < lj.role
+	})
+	chips := make([]string, 0, len(order))
+	for _, role := range order {
+		l := lanes[role]
+		tok := map[string]string{"gate": "yel", "awaiting": "yel", "done": "grn", "streaming": "pri", "idle": "mut"}[l.status]
+		chips = append(chips, grammar.C(tok, fmt.Sprintf("[%s %s×%d]", role, l.status, l.count)))
+	}
+	if len(chips) == 0 {
+		chips = append(chips, grammar.C("mut", "[no lanes]"))
+	}
+	head := " " + grammar.C("brt", "LANE-RAIL") + grammar.C("mut", "  distinct turn roles · ranked gate>awaiting>done>streaming>idle")
+	body := " " + strings.Join(chips, grammar.C("mut", "  "))
+	return fitWidth(head, w) + "\n" + fitWidth(body, w)
+}
+
+func (m Model) turnDetailBody(w int) string {
+	t, ok := m.FocusedTurn()
+	if !ok {
+		return grammar.C("mut", " turn detail\n\n no selected turn\n")
+	}
+	blocks := m.TurnBlocks[TurnID(t)]
+	if len(blocks) == 0 {
+		return grammar.RenderTurnDetail(t, nil, m.AIR) + "   " + grammar.C("mut", "(no expanded blocks for this fixture turn)") + "\n"
+	}
+	return grammar.RenderTurnDetail(t, blocks, m.AIR)
 }
 
 func (m Model) eventsWideBody(w, h int) string {
@@ -11928,6 +12073,14 @@ func (m Model) floorActions(w int) string {
 				grammar.C("yel", "[j/k]")+"select",
 				grammar.C("yel", "[↵]")+"detail",
 				grammar.C("yel", "[r]")+"resume-intent",
+				grammar.C("yel", "[y]")+"ank",
+			)
+		}
+	case PageSessionTurns:
+		if m.pageRows() > 0 {
+			parts = append(parts,
+				grammar.C("yel", "[j/k]")+fmt.Sprintf("turn %d/%d", m.TurnFocus+1, len(m.TurnLadder)),
+				grammar.C("yel", "[g/G]")+"first/last",
 				grammar.C("yel", "[y]")+"ank",
 			)
 		}

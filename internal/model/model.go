@@ -15,26 +15,27 @@ import (
 )
 
 const (
-	PageEvents      = 0
-	PageTasks       = 1
-	PageSessions    = 2
-	PageDynamics    = 3
-	PageHelp        = 4
-	PageLegend      = 5
-	PageCommands    = 6
-	PageWindows     = 7
-	PageIntent      = 8
-	PageSurfaces    = 9
-	PageDomains     = 10
-	PageYard        = 11
-	PageCaps        = 12
-	PageReadiness   = 13
-	PageIntake      = 14
-	PageEpistemics  = 15
-	PageLifecycles  = 16
-	PageTraces      = 17
-	PageCoordinator = 18 // the Yard Coordinator: a Miller-column lens (left) + coordinator (right), framework §5
-	PageDispatch    = 19 // the capability-dispatch ledger + measurement surface (cc-dispatch observability)
+	PageEvents       = 0
+	PageTasks        = 1
+	PageSessions     = 2
+	PageDynamics     = 3
+	PageHelp         = 4
+	PageLegend       = 5
+	PageCommands     = 6
+	PageWindows      = 7
+	PageIntent       = 8
+	PageSurfaces     = 9
+	PageDomains      = 10
+	PageYard         = 11
+	PageCaps         = 12
+	PageReadiness    = 13
+	PageIntake       = 14
+	PageEpistemics   = 15
+	PageLifecycles   = 16
+	PageTraces       = 17
+	PageCoordinator  = 18 // the Yard Coordinator: a Miller-column lens (left) + coordinator (right), framework §5
+	PageDispatch     = 19 // the capability-dispatch ledger + measurement surface (cc-dispatch observability)
+	PageSessionTurns = 20 // SESSION TURN-LADDER: chat-pane flagship, fixture-fed ahead of CapabilityIO
 )
 
 const (
@@ -111,6 +112,61 @@ func sessionRingEntry(s grammar.Session, field, val string) RingEntry {
 	return RingEntry{Value: val, Field: field, Page: "sessions", AIR: airDecision(s.AIR, field)}
 }
 
+// TurnID is the stable fixture/live-map key for one normalized session turn: ts + role + kind.
+func TurnID(t grammar.Turn) string { return t.TS + "|" + t.Role + "|" + t.Kind }
+
+func turnIDForAir(t grammar.Turn, airOn bool) string {
+	if airOn && (t.AIR["ts"] != "ok" || t.AIR["role"] != "ok" || t.AIR["kind"] != "ok") {
+		return "▒▒▒"
+	}
+	return TurnID(t)
+}
+
+func turnSummaryForAir(t grammar.Turn, airOn bool) string {
+	if airOn && (t.Prov == "operator" || t.Prov == "untrusted") {
+		return "▒▒▒"
+	}
+	return grammar.Redact(t.AIR, "summary", t.Summary, airOn)
+}
+
+func turnFieldValueForAir(t grammar.Turn, field string, airOn bool) string {
+	switch field {
+	case "id", "turn_id":
+		return turnIDForAir(t, airOn)
+	case "ts":
+		return grammar.Redact(t.AIR, "ts", t.TS, airOn)
+	case "role":
+		return grammar.Redact(t.AIR, "role", t.Role, airOn)
+	case "kind":
+		return grammar.Redact(t.AIR, "kind", t.Kind, airOn)
+	case "summary":
+		return turnSummaryForAir(t, airOn)
+	case "model":
+		return grammar.Redact(t.AIR, "model", t.Model, airOn)
+	case "route":
+		return grammar.Redact(t.AIR, "route", t.Route, airOn)
+	case "gate":
+		return grammar.Redact(t.AIR, "gate", t.Gate, airOn)
+	default:
+		return ""
+	}
+}
+
+func turnRingEntry(t grammar.Turn, field string) RingEntry {
+	air := airDecision(t.AIR, field)
+	if field == "id" || field == "turn_id" {
+		if airDecision(t.AIR, "ts") != "ok" || airDecision(t.AIR, "role") != "ok" || airDecision(t.AIR, "kind") != "ok" {
+			air = "deny"
+		} else {
+			air = "ok"
+		}
+	}
+	if field == "summary" && (t.Prov == "operator" || t.Prov == "untrusted") {
+		air = "deny"
+	}
+	return RingEntry{Value: turnFieldValueForAir(t, field, false), Field: field, Page: "session-turns", AIR: air}
+}
+
 func ringValue(e RingEntry, airOn bool) string {
 	if airOn && e.AIR != "ok" {
 		return "▒▒▒"
@@ -180,6 +236,10 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 			{"r", "role"}, {"p", "platform"}, {"d", "readiness"}, {"t", "state"}, {"b", "blocker"},
 			{"a", "attention"}, {"s", "session"}, {"c", "claimed_task"}, {"u", "route_id"}, {"m", "mode"},
 			{"f", "profile"}, {"g", "route_binding_state"}, {"e", "route_evidence_ref"}, {"o", "output_age_s"}, {"l", "relay_age_s"},
+		}
+	case PageSessionTurns:
+		return []yankFieldDef{
+			{"i", "id"}, {"m", "summary"}, {"r", "role"}, {"k", "kind"}, {"g", "gate"},
 		}
 	case PageTasks:
 		return []yankFieldDef{
@@ -323,6 +383,26 @@ func (m Model) yankSessionField(key string) (field, val string, ok bool) {
 	return "", "", false
 }
 
+func (m Model) yankTurnField(key string) (field, val string, ok bool) {
+	t, has := m.FocusedTurn()
+	if !has {
+		return "", "", false
+	}
+	switch key {
+	case "i":
+		return "id", TurnID(t), true
+	case "m":
+		return "summary", t.Summary, true
+	case "r":
+		return "role", t.Role, true
+	case "k":
+		return "kind", t.Kind, true
+	case "g":
+		return "gate", t.Gate, true
+	}
+	return "", "", false
+}
+
 type Model struct {
 	Title               string
 	Page                int
@@ -331,6 +411,8 @@ type Model struct {
 	Sessions            []grammar.Session
 	Traces              []grammar.Trace
 	DispatchRecords     []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
+	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (fixture-fed until CapabilityIO SESSION feed)
+	TurnBlocks          map[string][]grammar.TurnBlock
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -386,6 +468,8 @@ type Model struct {
 	EFocus              int             // selected row index into m.Events (the :events cursor) — selection is page-aware
 	SFocus              int             // selected row index into m.Sessions (the :sessions cursor)
 	TFocus              int             // selected row index into m.Traces (the :traces cursor)
+	TurnFocus           int             // selected row index into m.TurnLadder (the :session-turns cursor)
+	DetailScroll        int             // reserved detail-pane scroll for expanded turn blocks
 	IFocus              int             // selected row index into visibleIntakeRows (the :intake bucket cursor)
 	CFocus              int             // selected capability/status row index into the grouped :capabilities projection
 	CommandFocus        int             // selected command registry row
@@ -547,6 +631,14 @@ func (m Model) FocusedTrace() (grammar.Trace, bool) {
 	return m.Traces[m.TFocus], true
 }
 
+// FocusedTurn returns the normalized session turn under the :session-turns cursor.
+func (m Model) FocusedTurn() (grammar.Turn, bool) {
+	if m.TurnFocus < 0 || m.TurnFocus >= len(m.TurnLadder) {
+		return grammar.Turn{}, false
+	}
+	return m.TurnLadder[m.TurnFocus], true
+}
+
 // FocusedIntakeRow returns the aggregate observation bucket under the :intake cursor.
 func (m Model) FocusedIntakeRow() (grammar.IntakeRow, bool) {
 	rows := m.visibleIntakeRows()
@@ -673,10 +765,9 @@ func (m Model) composesViaAlgebra() bool {
 		// intercept is skipped so j moves EpiFocus. composePage() returns nil only when there are no rows
 		// (empty/dark), where bodyForPage renders the NO EPISTEMIC ROWS disclosure.
 		return true
-	case PageTraces:
-		// Inc 3 TRANSFORM — self-anchored (own TFocus). Same lever: the flip self-anchors [j/k] (traces is
-		// not an isReferencePage, so j → focusTo → TFocus) and binds {{focus}}/yank to the focused trace.
-		// composePage() returns nil when dark/empty, where bodyForPage renders tracesBody (dark hint).
+	case PageTraces, PageSessionTurns:
+		// Inc 3/4 TRANSFORM — self-anchored (own focus: TFocus / TurnFocus). Same lever: the flip
+		// self-anchors [j/k] and binds {{focus}}/yank to the focused row, never the session source.
 		return true
 	case PageIntent:
 		// Inc 3 TRANSFORM — self-anchored (own IntentFocus; the explicit j handler runs before the
@@ -720,6 +811,8 @@ func (m Model) pageRows() int {
 		return len(m.Sessions)
 	case PageTraces:
 		return len(m.Traces)
+	case PageSessionTurns:
+		return len(m.TurnLadder)
 	case PageIntake:
 		return len(m.visibleIntakeRows())
 	case PageCaps:
@@ -767,6 +860,9 @@ func (m Model) curFocus() int {
 	if m.Page == PageTraces {
 		return m.TFocus
 	}
+	if m.Page == PageSessionTurns {
+		return m.TurnFocus
+	}
 	if m.Page == PageIntake {
 		return m.IFocus
 	}
@@ -803,7 +899,7 @@ func (m Model) curFocus() int {
 // focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
 // so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
 func (m Model) focusTo(i int) Model {
-	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageCoordinator {
+	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageSessionTurns && m.Page != PageCoordinator {
 		return m
 	}
 	max := m.pageRows() - 1
@@ -817,6 +913,8 @@ func (m Model) focusTo(i int) Model {
 		m.SFocus = i
 	} else if m.Page == PageTraces {
 		m.TFocus = i
+	} else if m.Page == PageSessionTurns {
+		m.TurnFocus = i
 	} else if m.Page == PageIntake {
 		m.IFocus = i
 	} else if m.Page == PageCaps {
@@ -1641,6 +1739,7 @@ var verbs = []verbDef{
 		{Label: "evidence", Detail: "the evidence layer"},
 		{Label: "all", Detail: "every layer, unscaled"},
 	}},
+	{name: "turns", aliases: []string{"session-turns", "session"}, kind: commandRead, group: "window", gloss: "SESSION TURN-LADDER fixture (chat-pane flagship ahead of CapabilityIO)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "epistemics", aliases: []string{"epi", "epistemic"}, kind: commandRead, group: "window", gloss: "evidence/provenance posture over dynamics, observations, domains, capabilities, and sessions", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1730,6 +1829,9 @@ func (m Model) Exec(line string) Model {
 	case "sessions":
 		m = m.switchPage(PageSessions)
 		m.Status = ":sessions"
+	case "turns":
+		m = m.switchPage(PageSessionTurns)
+		m.Status = ":turns"
 	case "traces":
 		m = m.switchPage(PageTraces)
 		m.Status = ":traces"
@@ -1908,6 +2010,42 @@ func lookupIntentArgs() []Candidate {
 	return nil
 }
 
+// SessionTurnFixture is the offline read-projection used by :session-turns and `--probe turns/session`.
+// CapabilityIO's live SESSION feed is gated, so this surface is built ahead as a tiny normalized
+// ladder with the same bimodal-AIR grammar the future feed will satisfy.
+func SessionTurnFixture() ([]grammar.Turn, map[string][]grammar.TurnBlock) {
+	sk := func() map[string]string {
+		return map[string]string{
+			"ts": "ok", "kind": "ok", "role": "ok", "model": "ok", "route": "ok", "gate": "ok", "magnitude": "ok",
+		}
+	}
+	turns := []grammar.Turn{
+		{TS: "2026-06-26T18:40:01Z", Role: "operator", Kind: "user", Prov: "operator", Summary: "fix the flaky trace test and open a PR", Magnitude: 0.2, Model: "—", Route: "operator.input", AIR: sk()},
+		{TS: "2026-06-26T18:40:02Z", Role: "cc-reins", Kind: "reasoning", Prov: "model", Summary: "the test asserts on a 3s timeout; widen and stub the clock", Magnitude: 0.4, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
+		{TS: "2026-06-26T18:40:05Z", Role: "cc-reins", Kind: "assistant", Prov: "model", Summary: "I'll widen the timeout and inject a fake clock.", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", AIR: sk()},
+		{TS: "2026-06-26T18:40:07Z", Role: "cc-reins", Kind: "tool_call", Prov: "structured", Summary: "Bash(go test ./... -run Trace)", Magnitude: 0.5, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pass", AIR: sk()},
+		{TS: "2026-06-26T18:40:12Z", Role: "cc-reins", Kind: "tool_result", Prov: "untrusted", Summary: "ok  internal/grammar  0.004s (42 lines)", Magnitude: 0.6, Model: "—", Route: "claude.code.full", Gate: "pass", AIR: sk()},
+		{TS: "2026-06-26T18:40:20Z", Role: "cc-reins", Kind: "diff", Prov: "structured", Summary: "grammar_test.go +6 -2", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", Gate: "pending", AIR: sk()},
+		{TS: "2026-06-26T18:40:21Z", Role: "cc-reins", Kind: "approval", Prov: "structured", Summary: "apply edit to grammar_test.go?", Magnitude: 0.2, Model: "—", Route: "claude.code.full", Gate: "pending", AIR: sk()},
+		{TS: "2026-06-26T18:40:30Z", Role: "lane-beta", Kind: "dispatch", Prov: "structured", Summary: "dispatched: open PR for the trace fix", Magnitude: 0.4, Model: "codex", Route: "codex.spark.full", Gate: "pass", AIR: sk()},
+		{TS: "2026-06-26T18:40:45Z", Role: "lane-beta", Kind: "refusal", Prov: "model", Summary: "push blocked: authorization-packet-validator", Magnitude: 0.5, Model: "codex", Route: "codex.spark.full", Gate: "deny", AIR: sk()},
+	}
+	blk := func(kind, prov, summary string, magnitude float64, meta string) grammar.TurnBlock {
+		return grammar.TurnBlock{Kind: kind, Prov: prov, Summary: summary, Magnitude: magnitude, Meta: meta,
+			AIR: map[string]string{"kind": "ok", "meta": "ok", "magnitude": "ok"}}
+	}
+	blocks := map[string][]grammar.TurnBlock{
+		TurnID(turns[0]): {blk("user", "operator", "fix the flaky trace test and open a PR", 0.2, "operator prompt")},
+		TurnID(turns[1]): {blk("reasoning", "model", "widen the 3s timeout; inject a fake clock", 0.4, "reasoning block")},
+		TurnID(turns[3]): {blk("tool_call", "structured", "go test ./... -run Trace", 0.5, "Bash")},
+		TurnID(turns[4]): {blk("tool_result", "untrusted", "ok  internal/grammar  0.004s", 0.6, "exit 0 · 42 lines")},
+		TurnID(turns[5]): {blk("diff", "structured", "grammar_test.go @@ -3 +6", 0.3, "+6 -2")},
+		TurnID(turns[7]): {blk("dispatch", "structured", "lane-beta accepted the PR-open slice", 0.4, "lane-beta · codex.spark.full")},
+		TurnID(turns[8]): {blk("refusal", "model", "push blocked until authorization packet validates", 0.5, "deny · authorization-packet-validator")},
+	}
+	return turns, blocks
+}
+
 func (m Model) selectedIntentSubject() string {
 	switch m.commandSelectionPage() {
 	case PageTasks:
@@ -1941,6 +2079,16 @@ func (m Model) loadDispatch() Model {
 	return m
 }
 
+func (m Model) loadTurns() Model {
+	m.TurnLadder, m.TurnBlocks = SessionTurnFixture()
+	if m.TurnBlocks == nil {
+		m.TurnBlocks = map[string][]grammar.TurnBlock{}
+	}
+	m.TurnFocus = clamp(m.TurnFocus, 0, maxVisible(0, len(m.TurnLadder)-1))
+	m.DetailScroll = 0
+	return m
+}
+
 func (m Model) switchPage(page int) Model {
 	if m.WindowSeen == nil {
 		m.WindowSeen = map[int]string{}
@@ -1949,6 +2097,9 @@ func (m Model) switchPage(page int) Model {
 	m.Page = page
 	if page == PageDispatch {
 		m = m.loadDispatch() // load the ledger on EVERY entry path (cycle, D-key, :dispatch) — not stale
+	}
+	if page == PageSessionTurns {
+		m = m.loadTurns()
 	}
 	m.Mode = ModeNormal
 	m.DoorOpen = false
@@ -2297,6 +2448,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m = m.withYankMode() // the focused SESSION row becomes a navigable field-picker
 				} else {
 					m.Status = "yank: no session rows"
+				}
+				return m, nil
+			}
+			if m.Page == PageSessionTurns {
+				if _, ok := m.FocusedTurn(); ok {
+					m = m.withYankMode() // the focused TURN row becomes a navigable field-picker
+				} else {
+					m.Status = "yank: no turn rows"
 				}
 				return m, nil
 			}
@@ -3199,6 +3358,21 @@ func (m Model) yankFieldByKey(key string) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.Ring = pushRing(m.Ring, sessionRingEntry(s, field, val))
+		m.Input, m.Mode, m.Sel.Rank, m.Sel.Field = ringValue(m.Ring[0], m.AIR), ModeCommand, RankRow, ""
+		m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", field, len(m.Ring))
+		return m.flash(fmt.Sprintf("✓ yanked %s → ring %d", field, len(m.Ring)))
+	}
+	if page == PageSessionTurns {
+		field, _, ok := m.yankTurnField(key)
+		if !ok {
+			return m, nil
+		}
+		t, _ := m.FocusedTurn()
+		if m.AIR && turnRingEntry(t, field).AIR != "ok" {
+			m.Status = "yank: " + field + " is redacted on-air — un-yankable"
+			return m, nil
+		}
+		m.Ring = pushRing(m.Ring, turnRingEntry(t, field))
 		m.Input, m.Mode, m.Sel.Rank, m.Sel.Field = ringValue(m.Ring[0], m.AIR), ModeCommand, RankRow, ""
 		m.Status = fmt.Sprintf("yanked %s → command line  (ring %d)", field, len(m.Ring))
 		return m.flash(fmt.Sprintf("✓ yanked %s → ring %d", field, len(m.Ring)))
