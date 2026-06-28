@@ -4,6 +4,8 @@ import "testing"
 
 var expectedDefaultAIRAllowlist = []string{
 	"kind", "score", "ts", "task_id", "stage", "no_go",
+	// operator AIR bar 2026-06-28 "air structural, DENY $cost" — structural skeleton airs; cost omitted.
+	"criticality", "predicted_stage", "prior_stage", "model", "latency_ms", "total_tok", "trace_id", "gate",
 	"id", "layer", "status", "source", "target", "relation", "res",
 	"role", "platform", "state", "alive", "idle", "stalled", "output_age_s", "relay_age_s",
 	"readiness", "blocker", "attention",

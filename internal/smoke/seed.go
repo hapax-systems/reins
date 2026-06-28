@@ -91,7 +91,9 @@ func SeedModel(w, h int) model.Model {
 	// reins-seed-air-fidelity-gap note.)
 	eventAIR := map[string]string{"ts": "ok", "kind": "ok", "score": "ok"}
 	sessionAIR := map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"}
-	traceAIR := map[string]string{"ts": "ok", "trace_id": "ok", "model": "ok", "latency_ms": "ok", "total_tok": "ok", "cost": "ok"}
+	// "air structural, DENY $cost" (operator bar 2026-06-28): the trace skeleton airs; the financial
+	// cost is omitted → it denies on air (matches config.AIRAllowlist; faithful offline --air preview).
+	traceAIR := map[string]string{"ts": "ok", "trace_id": "ok", "model": "ok", "latency_ms": "ok", "total_tok": "ok"}
 	epiAIR := map[string]string{"row_id": "ok", "family": "ok", "subject": "ok", "status": "ok", "authority": "ok"}
 	turnAIR := map[string]string{"role": "ok", "kind": "ok", "model": "ok", "gate": "ok", "ts": "ok"}
 	for i := range m.Tasks {
