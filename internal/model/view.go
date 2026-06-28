@@ -4492,11 +4492,14 @@ func (m Model) renderSelectedYardLane(w int) string {
 		return " " + grammar.C("brt", "SELECTED TRAINYARD LANE") + grammar.C("mut", " — no selected session source")
 	}
 	claim := strings.TrimSpace(s.ClaimedTask)
+	claimOK := !m.AIR || s.AIR["claimed_task"] == "ok"
 	taskState, taskTok := "no claimed task", "mut"
 	taskStage, taskNext := "", ""
 	var linkedTask grammar.Task
 	hasTask := false
-	if claim != "" {
+	if !claimOK {
+		taskState, taskTok = "▒▒▒", "mut" // the visible/gap state discloses the denied claimed_task
+	} else if claim != "" {
 		if t, found := m.taskByID(claim); found {
 			linkedTask, hasTask = t, true
 			taskState, taskTok = "task visible", "grn"
@@ -4509,6 +4512,9 @@ func (m Model) renderSelectedYardLane(w int) string {
 	related := m.sessionRelatedEvents(s)
 	failures, successes := 0, 0
 	for _, ev := range related {
+		if m.AIR && ev.AIR["kind"] != "ok" {
+			continue // a denied kind must not classify into the fail/succeed tally
+		}
 		kind := strings.ToLower(ev.Kind)
 		if strings.Contains(kind, "fail") {
 			failures++
@@ -4522,8 +4528,14 @@ func (m Model) renderSelectedYardLane(w int) string {
 		blocker = "none"
 	}
 	gate, gateTok := yardLaneGate(s, hasTask, linkedTask)
-	if m.AIR && s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
-		gate, gateTok = "blocked by redacted blocker", "red"
+	if m.AIR {
+		// the gate derives from readiness + blocker + the linked task's predicted_stage; redact it if
+		// any of those inputs is denied (else the gate label discloses the hidden field).
+		if s.AIR["readiness"] != "ok" || (hasTask && linkedTask.AIR["predicted_stage"] != "ok") {
+			gate, gateTok = "▒▒▒", "mut"
+		} else if s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
+			gate, gateTok = "blocked by redacted blocker", "red"
+		}
 	}
 	var b strings.Builder
 	line := func(label, value, tok string) {
@@ -4532,12 +4544,28 @@ func (m Model) renderSelectedYardLane(w int) string {
 		}
 		writeWrappedKV(&b, label, value, tok, w)
 	}
+	// hue-gate: a redacted value must not keep its derived color (the hue is itself a derived channel).
+	laneTok, rdyTok, stateTok, attnTok := grammar.LaneToken(s.Role), readinessPaneToken(s.Readiness), sessionStateToken(s.State), attentionToken(s.Attention)
+	if m.AIR {
+		if s.AIR["role"] != "ok" {
+			laneTok = "mut"
+		}
+		if s.AIR["readiness"] != "ok" {
+			rdyTok = "mut"
+		}
+		if s.AIR["state"] != "ok" {
+			stateTok = "mut"
+		}
+		if s.AIR["attention"] != "ok" {
+			attnTok = "mut"
+		}
+	}
 	writeSectionHeader(&b, w, "SELECTED TRAINYARD LANE", "session-driven drilldown; evidence, not control", "lane drilldown")
-	line("lane", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role))
+	line("lane", sessionFieldValueForAir(s, "role", m.AIR), laneTok)
 	line("platform", sessionFieldValueForAir(s, "platform", m.AIR), "2nd")
-	line("readiness", sessionFieldValueForAir(s, "readiness", m.AIR), readinessPaneToken(s.Readiness))
-	line("state", sessionFieldValueForAir(s, "state", m.AIR), sessionStateToken(s.State))
-	line("attention", sessionFieldValueForAir(s, "attention", m.AIR), attentionToken(s.Attention))
+	line("readiness", sessionFieldValueForAir(s, "readiness", m.AIR), rdyTok)
+	line("state", sessionFieldValueForAir(s, "state", m.AIR), stateTok)
+	line("attention", sessionFieldValueForAir(s, "attention", m.AIR), attnTok)
 	line("blocker", blocker, blockerToken(blocker))
 	line("claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri")
 	line("task", taskState, taskTok)
@@ -5045,11 +5073,15 @@ func (m Model) renderSelectedReadinessGate(w int) string {
 		return " " + grammar.C("brt", "SELECTED LANE GATE") + grammar.C("mut", " — no selected session source")
 	}
 	claim := strings.TrimSpace(s.ClaimedTask)
+	claimOK := !m.AIR || s.AIR["claimed_task"] == "ok"
 	taskState, taskTok := "no claimed task", "mut"
 	taskGate, gateTok := "lane only", "2nd"
 	var linkedTask grammar.Task
 	hasTask := false
-	if claim != "" {
+	if !claimOK {
+		taskState, taskTok = "▒▒▒", "mut" // visible/gap/absent discloses the denied claimed_task
+		taskGate, gateTok = "▒▒▒", "mut"
+	} else if claim != "" {
 		if t, found := m.taskByID(claim); found {
 			linkedTask, hasTask = t, true
 			taskState, taskTok = "task visible", "grn"
@@ -5060,20 +5092,40 @@ func (m Model) renderSelectedReadinessGate(w int) string {
 		}
 	}
 	laneGate, laneTok := yardLaneGate(s, hasTask, linkedTask)
-	if m.AIR && s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
-		laneGate, laneTok = "blocked by redacted blocker", "red"
+	if m.AIR {
+		if s.AIR["readiness"] != "ok" || (hasTask && linkedTask.AIR["predicted_stage"] != "ok") {
+			laneGate, laneTok = "▒▒▒", "mut"
+		} else if s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
+			laneGate, laneTok = "blocked by redacted blocker", "red"
+		}
+	}
+	laneHue, rdyHue, blkHue := grammar.LaneToken(s.Role), readinessPaneToken(s.Readiness), blockerToken(s.Blocker)
+	if m.AIR {
+		if s.AIR["role"] != "ok" {
+			laneHue = "mut"
+		}
+		if s.AIR["readiness"] != "ok" {
+			rdyHue = "mut"
+		}
+		if s.AIR["blocker"] != "ok" {
+			blkHue = "mut"
+		}
 	}
 	var b strings.Builder
 	writeSectionHeader(&b, w, "SELECTED LANE GATE", "source lane, claimed task, route receipt posture", "lane gate")
-	writeWrappedKV(&b, "lane", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role), w)
-	writeWrappedKV(&b, "readiness", sessionFieldValueForAir(s, "readiness", m.AIR), readinessPaneToken(s.Readiness), w)
-	writeWrappedKV(&b, "blocker", sessionFieldValueForAir(s, "blocker", m.AIR), blockerToken(s.Blocker), w)
+	writeWrappedKV(&b, "lane", sessionFieldValueForAir(s, "role", m.AIR), laneHue, w)
+	writeWrappedKV(&b, "readiness", sessionFieldValueForAir(s, "readiness", m.AIR), rdyHue, w)
+	writeWrappedKV(&b, "blocker", sessionFieldValueForAir(s, "blocker", m.AIR), blkHue, w)
 	writeWrappedKV(&b, "claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri", w)
 	writeWrappedKV(&b, "task", taskState, taskTok, w)
 	writeWrappedKV(&b, "task gate", taskGate, gateTok, w)
 	if hasTask {
-		writeWrappedKV(&b, "stage", taskFieldValueForAir(linkedTask, "stage", m.AIR), grammar.SeverityToken(linkedTask.Criticality), w)
-		writeWrappedKV(&b, "next", taskFieldValueForAir(linkedTask, "predicted_stage", m.AIR), nextToken(linkedTask.PredictedStage), w)
+		nextHue := nextToken(linkedTask.PredictedStage)
+		if m.AIR && linkedTask.AIR["predicted_stage"] != "ok" {
+			nextHue = "mut"
+		}
+		writeWrappedKV(&b, "stage", taskFieldValueForAir(linkedTask, "stage", m.AIR), airSeverityToken(linkedTask.Criticality, linkedTask.AIR, m.AIR), w)
+		writeWrappedKV(&b, "next", taskFieldValueForAir(linkedTask, "predicted_stage", m.AIR), nextHue, w)
 	}
 	writeWrappedKV(&b, "lane gate", laneGate, laneTok, w)
 	writeWrappedKV(&b, "route", "governed COMMAND route required", "yel", w)

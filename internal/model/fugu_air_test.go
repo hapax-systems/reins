@@ -28,6 +28,25 @@ func TestSessionRelatedEventsJoinIsAirSafe(t *testing.T) {
 	}
 }
 
+// renderSelectedYardLane (the migrated yard secondary) derived task-state, the gate, fail/succeed,
+// and hues from raw denied fields (fugu Inc 2 review #3).
+func TestRenderSelectedYardLaneIsAirSafe(t *testing.T) {
+	s := grammar.Session{Role: "cx", ClaimedTask: "task-x", Readiness: "claim", Blocker: "merge-wedge", State: "active",
+		AIR: map[string]string{"role": "ok", "claimed_task": "deny", "readiness": "deny", "blocker": "deny", "state": "ok", "platform": "ok", "attention": "ok"}}
+	m := New("R").FoldSessions([]grammar.Session{s}, false).
+		FoldTasks([]grammar.Task{{TaskID: "task-x", Stage: "S7", AIR: map[string]string{"task_id": "ok", "stage": "ok"}}}, false)
+	m.AIR = true
+	out := ansi.Strip(m.renderSelectedYardLane(100))
+	for _, leak := range []string{"task visible", "task gap", "merge-wedge"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("renderSelectedYardLane leaked %q on air:\n%s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "▒▒▒") {
+		t.Fatalf("the pane should keep structure with redaction:\n%s", out)
+	}
+}
+
 func TestSplitSourceTopologyIsAirSafe(t *testing.T) {
 	s := grammar.Session{Role: "cx", ClaimedTask: "task-x", Platform: "codex", Readiness: "claim",
 		AIR: map[string]string{"role": "ok", "claimed_task": "deny", "platform": "deny", "readiness": "ok"}}
