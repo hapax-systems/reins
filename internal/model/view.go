@@ -11000,26 +11000,46 @@ func (m Model) tracesBody(w, h int) string {
 	return m.tracesListBody(w, h)
 }
 
+// traceImportance scores a trace by SPEND and LATENCY — an expensive or slow call is interesting, a
+// routine cheap/fast one recedes. Saturating (1−e^−x) so one outlier doesn't dwarf the rest. AIR: a
+// denied cost/latency contributes nothing, so the visible set can't disclose the redacted magnitude.
+func traceImportance(tr grammar.Trace, air bool) float64 {
+	x := 0.0
+	if !air || tr.AIR["cost"] == "ok" {
+		x += tr.Cost / 0.05 // ~$0.05 ≈ a notable call
+	}
+	if !air || tr.AIR["latency_ms"] == "ok" {
+		x += float64(tr.LatencyMs) / 2000.0 // ~2s ≈ a slow call
+	}
+	return 1 - math.Exp(-x)
+}
+
+// traceDoiSelection folds the traces feed through the shared doiVisible mechanism (same as events).
+func (m Model) traceDoiSelection(budget int) (order []int, folded int) {
+	imps := make([]float64, len(m.Traces))
+	for i, tr := range m.Traces {
+		imps[i] = traceImportance(tr, m.AIR)
+	}
+	return doiVisible(imps, m.TFocus, budget)
+}
+
 func (m Model) tracesListBody(w, h int) string {
 	visible := h - 2 // context + header
 	if visible < 1 {
 		visible = 1
 	}
-	start := 0
-	if len(m.Traces) > visible {
-		start = len(m.Traces) - visible // tail = newest by default
-		if m.TFocus < start {
-			start = m.TFocus
-		}
-		if m.TFocus >= start+visible {
-			start = m.TFocus - visible + 1
-		}
+	reserve := len(m.Traces) > visible && visible >= 2
+	budget := visible
+	if reserve {
+		budget = visible - 1 // reserve a cell for the "+N folded" marker so it can't be clipped
 	}
+	order, folded := m.traceDoiSelection(budget)
+
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString("  " + grammar.RenderTraceHeader() + "\n")
 	brushed := m.brushedTraces()
-	for i := start; i < start+visible && i < len(m.Traces); i++ {
+	for _, i := range order {
 		switch {
 		case i == m.TFocus:
 			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(grammar.RenderTraceRow(m.Traces[i], m.AIR), w-1) + "\n")
@@ -11029,6 +11049,11 @@ func (m Model) tracesListBody(w, h int) string {
 		default:
 			b.WriteString("  " + grammar.RenderTraceRow(m.Traces[i], m.AIR) + "\n")
 		}
+	}
+	if folded > 0 && reserve {
+		// older traces no longer drop silently off the top — the DOI fold selects by spend/latency and
+		// names the receded remainder honestly
+		b.WriteString(grammar.C("mut", fmt.Sprintf("  +%d folded (lower interest) · [j/k] to summon", folded)) + "\n")
 	}
 	return b.String()
 }
@@ -11337,14 +11362,15 @@ func (m Model) eventsWideBody(w, h int) string {
 // score (the derived-channel discipline). 0 ranks denied events on proximity-to-focus alone.
 const eventDeniedImportance = 0.0
 
-// eventDoiSelection runs the framework's ONE scaling mechanism — the Degree-of-Interest fold — over the
-// events to choose WHICH rows occupy the finite cell `budget`: importance (the served Score) minus
-// normalized distance-from-focus (Furnas). The focused row is PINNED visible. It returns the
-// chronological indices to render (selection decides membership; the reading order stays chronological)
-// plus the count folded into the "+N" tail. AIR-safe: a denied score contributes no importance signal,
-// so ordering cannot leak it.
-func (m Model) eventDoiSelection(budget int) (order []int, folded int) {
-	n := len(m.Events)
+// doiVisible is the framework's ONE scaling mechanism, pane-agnostic: given a per-item importance and a
+// finite cell `budget`, it chooses WHICH items occupy the budget by DOI = importance − normalized
+// distance-from-focus (Furnas), PINS the focused item visible, and returns the items to render in
+// CHRONOLOGICAL order (selection decides membership; reading order is never reordered) plus the count
+// folded into the "+N" tail. Every FEED pane (events, traces, …) folds through this same helper, so the
+// "scale by allocation, recede the rest" contract is structural, not copy-pasted. AIR-safety lives in the
+// CALLER's importance (a denied field must contribute a uniform value so ordering can't disclose it).
+func doiVisible(importances []float64, focus, budget int) (order []int, folded int) {
+	n := len(importances)
 	if n == 0 {
 		return nil, 0
 	}
@@ -11360,17 +11386,13 @@ func (m Model) eventDoiSelection(budget int) (order []int, folded int) {
 		span = 1
 	}
 	scored := make([]doi.Scored, n)
-	for i, ev := range m.Events {
+	for i := range importances {
 		var d float64
-		if i == m.EFocus {
+		if i == focus {
 			d = math.Inf(1) // the focal row is always retained, whatever its interest
 		} else {
-			imp := ev.Score
-			if m.AIR && ev.AIR["score"] != "ok" {
-				imp = eventDeniedImportance
-			}
-			dist := math.Abs(float64(i-m.EFocus)) / span // normalize so importance genuinely competes
-			d = doi.DOI(imp, dist)
+			dist := math.Abs(float64(i-focus)) / span // normalize so importance genuinely competes
+			d = doi.DOI(importances[i], dist)
 		}
 		scored[i] = doi.Scored{ID: strconv.Itoa(i), DOI: d}
 	}
@@ -11387,6 +11409,20 @@ func (m Model) eventDoiSelection(budget int) (order []int, folded int) {
 		}
 	}
 	return order, aggregated
+}
+
+// eventDoiSelection folds the events feed through doiVisible. Importance is the served Score; a denied
+// score on air contributes a uniform constant so the visible set's membership can't leak it.
+func (m Model) eventDoiSelection(budget int) (order []int, folded int) {
+	imps := make([]float64, len(m.Events))
+	for i, ev := range m.Events {
+		imp := ev.Score
+		if m.AIR && ev.AIR["score"] != "ok" {
+			imp = eventDeniedImportance
+		}
+		imps[i] = imp
+	}
+	return doiVisible(imps, m.EFocus, budget)
 }
 
 func (m Model) eventsListBody(w, h int) string {
