@@ -31,7 +31,7 @@ func (v Verdict) String() string {
 func pageVerdict(page int) Verdict {
 	switch page {
 	case PageEvents, PageTasks, PageSessions, PageYard, PageReadiness, PageIntake,
-		PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageIntent, PageSessionTurns:
+		PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageIntent, PageSessionTurns, PageDispatch:
 		return VerdictStanding
 	case PageTraces:
 		return VerdictPeek

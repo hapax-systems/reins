@@ -6,7 +6,8 @@ import "testing"
 // real-join pages stand, traces peeks, and the reference pages become honest-ambient DOORs — but the
 // page is ALWAYS a split regardless of verdict (only-split).
 func TestPageVerdictsMatchTheDecision(t *testing.T) {
-	standing := []int{PageEvents, PageTasks, PageSessions, PageYard, PageReadiness, PageIntake, PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageIntent}
+	standing := []int{PageEvents, PageTasks, PageSessions, PageYard, PageReadiness, PageIntake, PageCaps, PageCoordinator, PageEpistemics, PageDynamics, PageIntent,
+		PageLoops, PageAxes, PageIdentity, PageRelational, PageSessionTurns, PageDispatch}
 	for _, p := range standing {
 		if pageVerdict(p) != VerdictStanding {
 			t.Fatalf("page %d should be STANDING", p)
