@@ -50,6 +50,7 @@ const (
 	ModeFilter    = 4 // the filter input is focused — narrows the selectable rows by id substring
 	ModeCoordChat = 5 // the Yard Coordinator chat input is focused (coordinate over the lens selection)
 	ModeVerbMenu  = 6 // the object-verb menu — the focused task's STATE-LEGAL governed verbs (the [v] menu)
+	ModeSendGate  = 7 // the egress send-gate — review the AIR-safe egress preview, explicitly confirm/dump (send stubbed)
 )
 
 const splitContextMinWidth = 160
@@ -2504,6 +2505,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mode == ModeCoordChat {
 			return m.updateCoordChat(v)
 		}
+		if m.Mode == ModeSendGate {
+			return m.updateSendGate(v)
+		}
 		if m.Mode == ModeVerbMenu {
 			return m.updateVerbMenu(v)
 		}
@@ -3290,11 +3294,13 @@ func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.Type {
 	case tea.KeyEnter:
-		if msg := strings.TrimSpace(m.CoordChatInput); msg != "" {
-			m = m.AppendOperatorText(msg)
-			m.Status = "coordinate: queued locally (live dispatch awaits the CapabilityIO session backend)"
+		// no Enter-sends: a non-empty compose (text and/or basket) opens the egress SEND-GATE for an
+		// explicit AIR-safe review + confirm/dump; an empty compose just closes.
+		if len(m.composeParts()) > 0 {
+			m.Mode = ModeSendGate
+		} else {
+			m.Mode, m.CoordChatInput = ModeNormal, ""
 		}
-		m.Mode, m.CoordChatInput = ModeNormal, ""
 	case tea.KeyEsc:
 		m.Mode, m.CoordChatInput = ModeNormal, ""
 		m.Status = ":coordinator"

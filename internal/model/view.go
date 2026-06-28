@@ -1243,6 +1243,15 @@ func (m Model) coordinatorChatPane(w, h int) string {
 		line := grammar.C(roleTok, fmt.Sprintf(" %s %-8s ", mark, roleText)) + grammar.C("pri", sum)
 		b.WriteString(clipRunes(line, w) + "\n")
 	}
+	if m.Mode == ModeSendGate {
+		// the egress preview is AIR-safe by construction (RenderInjectionComposer redacts text bodies +
+		// paths on air; secrets surface off-air only). The send is a stub — explicit confirm/dump only.
+		for _, ln := range strings.Split(grammar.RenderInjectionComposer(m.composeParts(), m.AIR), "\n") {
+			b.WriteString(clipRunes(ln, w) + "\n")
+		}
+		b.WriteString(clipRunes(grammar.C("yel", " [enter/y] confirm send (stub) · [d] dump/kill · [esc] back to compose"), maxVisible(8, w)))
+		return strings.TrimRight(b.String(), "\n")
+	}
 	prompt := " › "
 	if m.Mode == ModeCoordChat {
 		prompt += m.CoordChatInput + "▌"

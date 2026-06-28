@@ -738,12 +738,21 @@ func TestCoordinatorChatInputQueuesLocally(t *testing.T) {
 			m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		}
 	}
+	// [Enter] on a non-empty compose opens the egress SEND-GATE (no Enter-sends) — nothing staged yet
+	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Mode != ModeSendGate || len(m.CoordChatLog) != 0 {
+		t.Fatalf("[Enter] must open the send-gate, not stage; mode=%d log=%v", m.Mode, m.CoordChatLog)
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "HOLD-BUFFER") {
+		t.Fatalf("the send-gate must show the AIR-safe egress preview:\n%s", ansi.Strip(m.View()))
+	}
+	// explicit confirm → stage locally + close (the send is a STUB — nothing is actually emitted)
 	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.Mode != ModeNormal || len(m.CoordChatLog) != 1 {
-		t.Fatalf("[Enter] must queue the message locally, log=%v mode=%d", m.CoordChatLog, m.Mode)
+		t.Fatalf("confirm must stage the message locally, log=%v mode=%d", m.CoordChatLog, m.Mode)
 	}
 	if got := m.CoordChatLog[0]; got.Role != "operator" || len(got.Parts) != 1 || got.Parts[0].Type != CoordChatPartText || got.Parts[0].Text != "hold release" || got.Parts[0].AIRProv != "operator" {
-		t.Fatalf("[Enter] must preserve flat-string back-compat as one operator text part, got %#v", got)
+		t.Fatalf("confirm must preserve flat-string back-compat as one operator text part, got %#v", got)
 	}
 	if !strings.Contains(ansi.Strip(m.View()), "hold release") {
 		t.Fatalf("the queued chat message must render as a turn:\n%s", ansi.Strip(m.View()))
