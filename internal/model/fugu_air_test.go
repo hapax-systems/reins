@@ -11,6 +11,38 @@ import (
 // AIR derived-channel leaks found by an independent codex-fugu review (panes the comprehensive audit
 // missed). Each test pins the off-air-includes / on-air-excludes contract.
 
+// The session-source pane (primary of every migrated Inc 2 page) leaked the related-event join
+// cardinality + the task-link/route-count topology over denied fields (fugu Inc 2 review).
+func TestSessionRelatedEventsJoinIsAirSafe(t *testing.T) {
+	s := grammar.Session{Role: "cx", AIR: map[string]string{"role": "deny"}}
+	ev := grammar.Event{Actor: "cx", Kind: "x", AIR: map[string]string{"actor": "ok"}}
+	m := New("R").FoldSessions([]grammar.Session{s}, false).Fold([]grammar.Event{ev}, false)
+
+	m.AIR = false
+	if len(m.sessionRelatedEvents(s)) != 1 {
+		t.Fatal("off air the actor join matches")
+	}
+	m.AIR = true
+	if len(m.sessionRelatedEvents(s)) != 0 {
+		t.Fatal("on air a denied role must not join → count 0 (no cardinality leak)")
+	}
+}
+
+func TestSplitSourceTopologyIsAirSafe(t *testing.T) {
+	s := grammar.Session{Role: "cx", ClaimedTask: "task-x", Platform: "codex", Readiness: "claim",
+		AIR: map[string]string{"role": "ok", "claimed_task": "deny", "platform": "deny", "readiness": "ok"}}
+	m := New("R").FoldSessions([]grammar.Session{s}, false).
+		FoldTasks([]grammar.Task{{TaskID: "task-x", AIR: map[string]string{"task_id": "ok"}}}, false)
+	m.AIR = true
+	rows := ansi.Strip(strings.Join(m.splitSourceTopologyRows(120, 8), " "))
+	if strings.Contains(rows, "task visible") || strings.Contains(rows, "task gap") {
+		t.Fatalf("on air a denied claimed_task must not disclose the task-link state: %s", rows)
+	}
+	if !strings.Contains(rows, "cap-routes:▒▒▒") {
+		t.Fatalf("on air a denied platform must redact the route count: %s", rows)
+	}
+}
+
 // On air, [V] class-select must not disclose a denied criticality class (the status named it, and the
 // migration unblocked this native control). It is withheld on air for a denied-criticality task.
 func TestClassSelectWithheldOnAirForDeniedCrit(t *testing.T) {

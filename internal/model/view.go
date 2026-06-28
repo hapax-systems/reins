@@ -1525,11 +1525,23 @@ func (m Model) splitSessionsPane(w, h int) string {
 		plat := sessionFieldValueForAir(s, "platform", m.AIR)
 		attn := sessionFieldValueForAir(s, "attention", m.AIR)
 		context := m.splitSessionContext(s)
+		// gate each derived HUE on its field's AIR — the value redacts above, but the heat/lane/
+		// readiness color is itself a derived channel that discloses the denied field (fugu review).
+		rdyTok, laneTok, attnTok := readinessPaneToken(s.Readiness), grammar.LaneToken(s.Role), attentionToken(s.Attention)
+		if m.AIR && s.AIR["readiness"] != "ok" {
+			rdyTok = "mut"
+		}
+		if m.AIR && s.AIR["role"] != "ok" {
+			laneTok = "mut"
+		}
+		if m.AIR && s.AIR["attention"] != "ok" {
+			attnTok = "mut"
+		}
 		row := grammar.C("yel", mark) +
-			grammar.C(readinessPaneToken(s.Readiness), fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
-			grammar.C(grammar.LaneToken(s.Role), fmt.Sprintf(" %-14s", clipRunes(role, 14))) +
+			grammar.C(rdyTok, fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
+			grammar.C(laneTok, fmt.Sprintf(" %-14s", clipRunes(role, 14))) +
 			grammar.C("2nd", fmt.Sprintf(" %-7s", clipRunes(plat, 7))) +
-			grammar.C(attentionToken(s.Attention), fmt.Sprintf(" %-6s", clipRunes(attn, 6))) +
+			grammar.C(attnTok, fmt.Sprintf(" %-6s", clipRunes(attn, 6))) +
 			grammar.C("mut", " "+clipRunes(context, maxVisible(8, w-42)))
 		if selected {
 			b.WriteString(focusBar(row, w) + "\n")
@@ -1563,18 +1575,26 @@ func (m Model) splitSourceTopologyRows(w, maxRows int) []string {
 	}
 	claim := strings.TrimSpace(s.ClaimedTask)
 	taskLink := "no claim"
-	if claim != "" {
+	if m.AIR && s.AIR["claimed_task"] != "ok" {
+		taskLink = "▒▒▒" // the visible/gap state discloses the denied claimed_task relationship
+	} else if claim != "" {
 		if _, found := m.taskByID(claim); found {
 			taskLink = "task visible"
 		} else {
 			taskLink = "task gap"
 		}
 	}
-	platform := strings.TrimSpace(s.Platform)
-	routeCount := len(m.capabilityRoutesForPlatform(platform))
-	writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{role, sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "), grammar.LaneToken(s.Role), w)
+	routeStr := "▒▒▒"
+	if !m.AIR || s.AIR["platform"] == "ok" {
+		routeStr = fmt.Sprintf("%d", len(m.capabilityRoutesForPlatform(strings.TrimSpace(s.Platform))))
+	}
+	srcTok := grammar.LaneToken(s.Role)
+	if m.AIR && s.AIR["role"] != "ok" {
+		srcTok = "mut"
+	}
+	writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{role, sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "), srcTok, w)
 	writeWrappedKV(&b, "relation", rel.RelationLabel()+" · "+rel.Contract, "org", w)
-	writeWrappedKV(&b, "links", fmt.Sprintf("events:%d · claim:%s · cap-routes:%d", len(m.sessionRelatedEvents(s)), taskLink, routeCount), "2nd", w)
+	writeWrappedKV(&b, "links", fmt.Sprintf("events:%d · claim:%s · cap-routes:%s", len(m.sessionRelatedEvents(s)), taskLink, routeStr), "2nd", w)
 	writeWrappedKV(&b, "controls", m.splitNavHint(rel, false), "mut", w)
 	return firstLines(b.String(), maxRows)
 }
@@ -9979,12 +9999,17 @@ func (m Model) sessionRelatedEvents(s grammar.Session) []grammar.Event {
 	var out []grammar.Event
 	role := strings.TrimSpace(s.Role)
 	task := strings.TrimSpace(s.ClaimedTask)
+	// AIR-aware join: on air, a join field denied on EITHER side (the session's role/claimed_task or
+	// the event's actor/subject) must not contribute — else the related-event CARDINALITY rendered by
+	// the yard/intake/caps cards + topology discloses the hidden role/claim relationship (fugu review).
+	roleOK := !m.AIR || s.AIR["role"] == "ok"
+	taskOK := !m.AIR || s.AIR["claimed_task"] == "ok"
 	for _, ev := range m.Events {
-		if role != "" && ev.Actor == role {
+		if role != "" && roleOK && ev.Actor == role && (!m.AIR || ev.AIR["actor"] == "ok") {
 			out = append(out, ev)
 			continue
 		}
-		if task != "" && ev.Subject == task {
+		if task != "" && taskOK && ev.Subject == task && (!m.AIR || ev.AIR["subject"] == "ok") {
 			out = append(out, ev)
 		}
 	}
