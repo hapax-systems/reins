@@ -816,12 +816,23 @@ func (m Model) composesViaAlgebra() bool {
 	return false
 }
 
+// isSessionAnchoredPage reports the ONLY pages where focusing a SESSION row drives a context pane —
+// the Inc-2 session-anchored split. Every other page is algebra-owned (self-anchored) or a
+// reference/door with no real session join. This positive predicate retires the authored split-pair
+// registry as the source of truth: the legacy split engages here and NOWHERE else (Inc-5).
+func isSessionAnchoredPage(page int) bool {
+	return page == PageCaps || page == PageYard || page == PageReadiness || page == PageIntake
+}
+
 func (m Model) splitContextActive() bool {
 	if !m.SplitContext {
 		return false
 	}
-	if m.composesViaAlgebra() {
-		return false // the algebra owns this page; the legacy split-context nav/render must not engage
+	if !isSessionAnchoredPage(m.Page) {
+		// only the four Inc-2 session-anchored pages engage the legacy split-context nav/render; the
+		// algebra-owned pages self-anchor, and the reference/door pages have no real session join, so
+		// their templates/yank bind to their OWN selection rather than the session source.
+		return false
 	}
 	if m.Width < splitContextMinWidth {
 		return false

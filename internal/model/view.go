@@ -578,12 +578,10 @@ func (m Model) bodyFor(w, h int) string {
 	if spec := m.composePage(w, h); spec != nil {
 		return layout.Render(spec, w, h)
 	}
-	// An algebra-owned page that returns a nil spec (e.g. dark events) must NOT fall back into the
-	// legacy session-frozen split — it renders its own dark-hint/single-pane body. Only genuinely
-	// non-migrated pages take the legacy split path.
-	if !m.composesViaAlgebra() && m.SplitContext && w >= splitContextMinWidth {
-		return m.splitContextBody(w, h)
-	}
+	// Inc-5: the legacy session-frozen splitContextBody fallback is RETIRED. The session-anchored pages
+	// (Caps/Yard/Readiness/Intake) render their split via composePage above; every other page — algebra
+	// pages that returned nil (dark/empty) AND the pure reference/door pages — renders its own body.
+	// Reference pages route to referenceBody (catalog │ ambient context), never a session-frozen anchor.
 	return m.bodyForPage(w, h)
 }
 
@@ -10394,13 +10392,12 @@ func (m Model) referencePageRailRows() []contextRow {
 			{"raw", "no bodies/transcripts", "grn"},
 		}
 	case PageHelp:
-		scroll := "[j/k] doc"
-		if m.splitContextActive() {
-			scroll += " · [J/K] ctx"
-		}
+		// Inc-5: reference pages render catalog│context via referenceBody with ONE catalog scroll
+		// ([j/k] doc). The legacy second "[J/K] ctx" scroll belonged to the abolished session-frozen
+		// reference split; session context scroll now lives only on the session-anchored pages' footer.
 		return []contextRow{
 			{"split marks", "▶ linked · ◆ anchor", "org"},
-			{"scroll", scroll, "yel"},
+			{"scroll", "[j/k] doc", "yel"},
 			{"discover", "no buried screens", "grn"},
 		}
 	case PageLegend:

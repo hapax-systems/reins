@@ -642,8 +642,9 @@ func TestSplitControlMatrixMatchesRegistry(t *testing.T) {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
 			m := base
 			m.Page = pair.Page
-			if m.composesViaAlgebra() {
-				return // migrated pages self-compose via the view-algebra, not the legacy split-control matrix
+			if !isSessionAnchoredPage(m.Page) {
+				return // Inc-5: only the four session-anchored pages use the legacy split-control matrix;
+				// algebra-owned + reference/door pages self-compose (the registry entry is now vestigial)
 			}
 			if !m.splitContextActive() {
 				t.Fatalf("split should be active for %s", pageLabel(pair.Page))
@@ -901,40 +902,16 @@ func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 				}
 				return
 			}
-			if !m.splitContextActive() {
-				t.Fatalf("%s should activate split at %dx%d", pageLabel(pair.Page), m.Width, m.Height)
-			}
+			// Inc-5: the remaining registry pages are the reference/door pages (Help/Legend/Commands/…) —
+			// they no longer session-anchor; they render their own catalog via referenceBody. Assert a
+			// coherent, width-bounded frame (the authored split-pair entry is now vestigial; deleted in 5c).
 			v := ansi.Strip(m.View())
-			for _, want := range []string{"split sessions", "cx-anchor", pair.Target, pair.Join} {
-				if !strings.Contains(v, want) {
-					t.Fatalf("split %s frame missing relationship marker %q:\n%s", pageLabel(pair.Page), want, v)
-				}
-			}
-			if pair.Reactive() {
-				if !strings.Contains(v, "source focus drives context") && !strings.Contains(v, "source drives ctx") {
-					t.Fatalf("linked split %s should explain source-driven context:\n%s", pageLabel(pair.Page), v)
-				}
-			} else if pair.TargetCursor == splitTargetMapElement {
-				if !strings.Contains(v, "[n/p] map") || !strings.Contains(v, "SELECTED MAP ELEMENT") {
-					t.Fatalf("dynamics split should expose its declared map target cursor:\n%s", v)
-				}
-			} else if pair.TargetCursor == splitTargetEpistemic {
-				if !strings.Contains(v, "[n/p] evidence") || !strings.Contains(v, "SELECTED EVIDENCE PATH") {
-					t.Fatalf("epistemics split should expose its declared evidence target cursor:\n%s", v)
-				}
-			} else if !strings.Contains(v, "context is independent reference") && !strings.Contains(v, "SPLIT RELATION") {
-				t.Fatalf("reference split %s should explain independent context:\n%s", pageLabel(pair.Page), v)
-			}
-			floor := ansi.Strip(m.viewFloor(m.Width))
-			if !strings.Contains(floor, "[←/→]ctx") {
-				t.Fatalf("split %s footer should expose context cycling, not generic window cycling:\n%s", pageLabel(pair.Page), floor)
-			}
-			if strings.Contains(floor, "[←/→]win") {
-				t.Fatalf("split %s footer should not show competing arrow semantics:\n%s", pageLabel(pair.Page), floor)
+			if strings.TrimSpace(v) == "" {
+				t.Fatalf("%s must render a non-empty reference frame", pageLabel(pair.Page))
 			}
 			for i, line := range strings.Split(m.View(), "\n") {
 				if got := ansi.StringWidth(line); got > m.Width {
-					t.Fatalf("split %s line %d exceeds frame width %d: %d %q", pageLabel(pair.Page), i, m.Width, got, line)
+					t.Fatalf("%s line %d exceeds frame width %d: %d %q", pageLabel(pair.Page), i, m.Width, got, line)
 				}
 			}
 		})
@@ -1828,18 +1805,18 @@ func TestSplitContextFooterCompactsActionsBeforeClipping(t *testing.T) {
 	}
 }
 
-// The split FOOTER (viewFloor) must never clip the [J/K]scroll token on a session-frozen scrollable
-// page. (Retargeted from the abolished epistemics session-frozen split — Inc 3 self-anchored it — to
-// PageSurfaces, which remains session-frozen at the footer until Inc 5 retires splitContextBody.)
+// The split FOOTER (viewFloor) must never clip the [J/K]scroll token on a scrollable split page.
+// (Inc-5 retargeted this from the abolished reference-page session-frozen split to PageCaps — a live
+// session-anchored page whose capability context pane scrolls; the footer-clip invariant is generic.)
 func TestSplitFooterDoesNotClipScrollToken(t *testing.T) {
 	m := New("REINS").
 		FoldSessions([]grammar.Session{{
 			Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageSurfaces, true
+	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageCaps, true
 	if !m.splitContextActive() || m.referenceScrollMax() == 0 {
-		t.Fatalf("test requires a scrollable session-frozen split, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
+		t.Fatalf("test requires a scrollable session-anchored split, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
 	}
 	first := strings.Split(ansi.Strip(m.viewFloor(m.Width)), "\n")[0]
 	if strings.Contains(first, "[J/K]") && !strings.Contains(first, "[J/K]scroll") && !strings.Contains(first, "[J/K]ctx-scroll") {
@@ -1863,11 +1840,13 @@ func TestSplitFooterDoesNotClipScrollToken(t *testing.T) {
 // TestEventsComposeViaAlgebraNativeNav below.)
 
 func TestSplitContextHandlesAggregatedRepeatedRuneKeys(t *testing.T) {
+	// Inc-5: retargeted from PageSurfaces (abolished reference-page split) to PageCaps — a live
+	// session-anchored split where j moves the SESSION source and J scrolls the capability context.
 	m := New("REINS").FoldSessions([]grammar.Session{
 		{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 		{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.50, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 	}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageSurfaces, true
+	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageCaps, true
 	if max := m.referenceScrollMax(); max < 3 {
 		t.Fatalf("test requires at least three context scroll rows, max=%d", max)
 	}
@@ -1904,26 +1883,23 @@ func TestSplitContextQueuedIndicatorAtNarrowWidth(t *testing.T) {
 // source, all ABOLISHED for events by the only-split view-algebra. The surviving behavior — events
 // always renders as a split and j moves the EVENT list — is pinned by TestEventsComposeViaAlgebraNativeNav.)
 
-func TestQueuedNarrowSplitDoesNotAdvertiseInactiveContextScroll(t *testing.T) {
-	m := New("REINS")
-	m.Page, m.Width, m.Height, m.SplitContext = PageHelp, splitContextMinWidth-1, 34, true
-	rows := m.referencePageRailRows()
-	var joined string
-	for _, row := range rows {
-		joined += row.value + "\n"
-	}
-	if strings.Contains(joined, "[J/K] ctx") {
-		t.Fatalf("queued narrow split should not advertise inactive context scroll:\n%s", joined)
-	}
-
-	m.Width = splitContextMinWidth
-	rows = m.referencePageRailRows()
-	joined = ""
-	for _, row := range rows {
-		joined += row.value + "\n"
-	}
-	if !strings.Contains(joined, "[J/K] ctx") {
-		t.Fatalf("active split should advertise context scroll when applicable:\n%s", joined)
+// Inc-5: reference pages (PageHelp) render catalog│context via referenceBody with ONE catalog scroll
+// ([j/k] doc). The legacy "[J/K] ctx" second scroll belonged to the abolished session-frozen reference
+// split — it must never appear in the reference rail, at any width.
+func TestReferenceRailAdvertisesSingleCatalogScrollNeverAbolishedContextScroll(t *testing.T) {
+	for _, w := range []int{splitContextMinWidth - 1, splitContextMinWidth, splitContextMinWidth + 40} {
+		m := New("REINS")
+		m.Page, m.Width, m.Height, m.SplitContext = PageHelp, w, 34, true
+		var joined string
+		for _, row := range m.referencePageRailRows() {
+			joined += row.value + "\n"
+		}
+		if strings.Contains(joined, "[J/K] ctx") {
+			t.Fatalf("reference rail at w=%d must not advertise the abolished context scroll:\n%s", w, joined)
+		}
+		if !strings.Contains(joined, "[j/k] doc") {
+			t.Fatalf("reference rail at w=%d must advertise the catalog scroll [j/k] doc:\n%s", w, joined)
+		}
 	}
 }
 
@@ -2178,8 +2154,14 @@ func TestSplitYardPinnedContextLeavesBodyRows(t *testing.T) {
 // session-anchored split is abolished for them. The legacy source-pane machinery is exercised by the
 // still-legacy Inc 3 pages until they migrate, then retired with splitContextBody at Inc 5.)
 
-func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
+// Inc-5: the reference catalog pages (commands/windows/surfaces/domains) are pure SELF-ANCHORED catalogs.
+// The legacy session-frozen reference split (j moved the SESSION source while the catalog stayed a passive
+// target) is ABOLISHED — j now moves the page's OWN catalog focus (CommandFocus/WindowFocus/…), the
+// session source never moves, and no "lane anchor" control is advertised. They render catalog │ ambient
+// context via referenceBody, never a session-frozen anchor.
+func TestReferenceCatalogsSelfAnchorTheirOwnFocus(t *testing.T) {
 	base := New("REINS").FoldSessions([]grammar.Session{
+		// sessions are present precisely to prove they do NOT drive these catalogs anymore.
 		{Role: "cx-one", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 		{Role: "cx-two", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.55,
@@ -2188,48 +2170,31 @@ func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
 	base.Width, base.Height, base.SplitContext = 220, 52, true
 
 	for _, tc := range []struct {
-		name       string
-		page       int
-		focus      func(Model) int
-		inactive   string
-		focusGlyph string
-		stale      []string
+		name  string
+		page  int
+		focus func(Model) int
 	}{
-		{"commands", PageCommands, func(m Model) int { return m.CommandFocus }, "[j/k]command", "▶ tasks", []string{"selected command"}},
-		{"windows", PageWindows, func(m Model) int { return m.WindowFocus }, "[j/k]window", "▶ 2 tasks", []string{"selected window"}},
-		{"surfaces", PageSurfaces, func(m Model) int { return m.SurfaceFocus }, "[j/k]surface", "▶ split-context", []string{"selected surface"}},
-		{"domains", PageDomains, func(m Model) int { return m.DomainFocus }, "[j/k]domain", "▶ capability-routing", []string{"selected capability-routing"}},
-		// (epistemics + intent removed — Inc 3 migrated them to SELF-ANCHORED algebra pages: j moves the
-		// page's own row/target, not the session source. Their self-anchored nav is pinned by the
-		// dedicated *_algebra_test.go suites — TestEpistemicsJMovesEvidenceRowNatively /
-		// TestIntentJMovesTargetNatively.)
+		{"commands", PageCommands, func(m Model) int { return m.CommandFocus }},
+		{"windows", PageWindows, func(m Model) int { return m.WindowFocus }},
+		{"surfaces", PageSurfaces, func(m Model) int { return m.SurfaceFocus }},
+		{"domains", PageDomains, func(m Model) int { return m.DomainFocus }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base
 			m.Page = tc.page
-			beforeSource, beforeTarget := m.SFocus, tc.focus(m)
+			beforeTarget := tc.focus(m)
 			m = step(m, "j")
-			if m.SFocus != beforeSource+1 {
-				t.Fatalf("split %s j should move source session focus, before=%d after=%d", tc.name, beforeSource, m.SFocus)
+			if got := tc.focus(m); got != beforeTarget+1 {
+				t.Fatalf("%s j must self-anchor its OWN catalog focus, before=%d after=%d", tc.name, beforeTarget, got)
 			}
-			if got := tc.focus(m); got != beforeTarget {
-				t.Fatalf("split %s j should not move inactive target focus, before=%d after=%d", tc.name, beforeTarget, got)
+			if m.SFocus != 0 {
+				t.Fatalf("%s must NOT drive the session source (abolished session-frozen anchor), SFocus=%d", tc.name, m.SFocus)
 			}
 			v := ansi.Strip(m.View())
-			if strings.Contains(v, tc.inactive) {
-				t.Fatalf("split %s should not advertise inactive target j/k control %q:\n%s", tc.name, tc.inactive, v)
-			}
-			if strings.Contains(v, tc.focusGlyph) {
-				t.Fatalf("split %s should not render inactive target focus glyph %q:\n%s", tc.name, tc.focusGlyph, v)
-			}
-			flat := strings.Join(strings.Fields(v), " ")
-			for _, stale := range tc.stale {
-				if strings.Contains(flat, stale) {
-					t.Fatalf("split %s should not emit stale passive target context %q:\n%s", tc.name, stale, v)
+			for _, abolished := range []string{"[j/k] lane anchor", "[j/k]lane anchor", "[j/k]anchor", "lane anchor"} {
+				if strings.Contains(v, abolished) {
+					t.Fatalf("%s must not advertise the abolished session lane-anchor %q:\n%s", tc.name, abolished, v)
 				}
-			}
-			if !strings.Contains(v, "[j/k] lane anchor") && !strings.Contains(v, "[j/k]lane anchor") && !strings.Contains(v, "[j/k]anchor") {
-				t.Fatalf("split %s should advertise lane-anchor navigation:\n%s", tc.name, v)
 			}
 		})
 	}
@@ -3029,16 +2994,17 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 	}}, false)
 	templateCmds.Width, templateCmds.Height, templateCmds.Page, templateCmds.SplitContext = 220, 96, PageCommands, true
 	templateView := ansi.Strip(templateCmds.View())
+	// Inc-5: PageCommands SELF-ANCHORS (no session source), so the template browser binds to PageCommands,
+	// not PageSessions. A command row is not a selectable data row, so the refs honestly report unavailable.
 	for _, want := range []string{
 		"TEMPLATE INJECTION",
-		"selection source PageSessions",
-		"{{focus}}       focused row identity -> cx-template",
-		"{{sel.field}}   selected field name -> role",
-		"{{sel.value}}   selected field value through AIR -> cx-template",
-		"{{ring.0}}      unavailable for PageSessions",
+		"selection source PageCommands",
+		"{{focus}}       unavailable for PageCommands · focused row identity",
+		"{{sel.field}}   unavailable for PageCommands · selected field name",
+		"{{ring.0}}      unavailable for PageCommands · last yanked AIR-safe value",
 	} {
 		if !strings.Contains(templateView, want) {
-			t.Fatalf("commands page live template browser missing %q:\n%s", want, templateView)
+			t.Fatalf("commands page self-anchored template browser missing %q:\n%s", want, templateView)
 		}
 	}
 
