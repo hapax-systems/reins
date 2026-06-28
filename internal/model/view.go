@@ -13144,9 +13144,9 @@ func fitBlockWithOverflowAndSlack(s string, w, h int, label string, slack []stri
 type slackSlot string
 
 const (
-	slackSlotWideContext   slackSlot = "wide-context"
-	slackSlotSessionContext  slackSlot = "split-context"
-	slackSlotReferenceMain slackSlot = "reference-main"
+	slackSlotWideContext    slackSlot = "wide-context"
+	slackSlotSessionContext slackSlot = "split-context"
+	slackSlotReferenceMain  slackSlot = "reference-main"
 )
 
 type trustSignal struct {
