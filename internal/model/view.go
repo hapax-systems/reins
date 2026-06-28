@@ -947,12 +947,12 @@ func (m Model) specDoor() *layout.Spec {
 		0.75, layout.Connector{Glyph: div, Relation: "ambient context"})
 }
 
-// eventsEmergentRelation anchors on the focused event; others = the rest of m.Events. AIR-aware via
-// emergentRelation (facet VALUES withheld on air).
-func (m Model) eventsEmergentRelation() string {
+// eventsRelation anchors on the focused event vs the rest of m.Events, deriving ONCE so the connector
+// label and the brush set agree. AIR-aware (facet VALUES/peers withheld on air).
+func (m Model) eventsRelation() (relate.Relation, bool) {
 	focused, ok := m.FocusedEvent()
 	if !ok {
-		return ""
+		return relate.Relation{}, false
 	}
 	anchor := eventEntity(focused, m.AIR)
 	others := make([]relate.Entity, 0, len(m.Events))
@@ -963,7 +963,34 @@ func (m Model) eventsEmergentRelation() string {
 		}
 		others = append(others, oe)
 	}
-	return m.emergentRelation(anchor, others, nil)
+	return relate.Derive(anchor, others, nil), true
+}
+
+// brushedEvents is the brush set: the composite ids of the events participating in the focused
+// event's emergent relation (relate.Peers). AIR-safe — air-aware facets feed the derive; positional.
+func (m Model) brushedEvents() map[string]bool {
+	rel, ok := m.eventsRelation()
+	if !ok || len(rel.Peers) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(rel.Peers))
+	for _, id := range rel.Peers {
+		set[id] = true
+	}
+	return set
+}
+
+// eventsEmergentRelation renders the connector label AIR-aware; decodes the ├ brush glyph in-band.
+func (m Model) eventsEmergentRelation() string {
+	rel, ok := m.eventsRelation()
+	if !ok {
+		return ""
+	}
+	label := m.airRelationLabel(rel)
+	if len(rel.Peers) > 0 {
+		label += " · ├ related"
+	}
+	return label
 }
 
 // tasksEmergentRelation anchors on the focused task; others = the visible task list (same derivation
@@ -10933,12 +10960,16 @@ func (m Model) eventsListBody(w, h int) string {
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString("  " + grammar.RenderEventHeader() + "\n") // 2-col gutter aligns under the cursor
+	brushed := m.brushedEvents()
 	for i := start; i < start+visible && i < len(m.Events); i++ {
 		switch {
 		case i == m.EFocus && m.Mode == ModeYank:
 			b.WriteString(fitWidth(eventPickRow(m.Events[i], m.AIR, m.Sel.Field), w) + "\n")
 		case i == m.EFocus:
 			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(grammar.RenderEventRow(m.Events[i], m.AIR), w-1) + "\n")
+		case brushed[eventEntity(m.Events[i], m.AIR).ID]:
+			// brushed: shares the focused event's strongest emergent facet (├ decoded by the connector)
+			b.WriteString(grammar.C("2nd", "├") + " " + grammar.RenderEventRow(m.Events[i], m.AIR) + "\n")
 		default:
 			b.WriteString("  " + grammar.RenderEventRow(m.Events[i], m.AIR) + "\n")
 		}

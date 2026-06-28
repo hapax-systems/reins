@@ -45,6 +45,35 @@ func TestCoordinatorBrushesRelatedTasks(t *testing.T) {
 	}
 }
 
+func TestEventsBrushRelatedRows(t *testing.T) {
+	// distinct subjects/kinds so actor=alpha is the UNIQUE strongest shared facet (no tie).
+	evs := []grammar.Event{
+		{TS: "t1", Kind: "k1", Subject: "s1", Actor: "alpha"},
+		{TS: "t2", Kind: "k2", Subject: "s2", Actor: "alpha"},
+		{TS: "t3", Kind: "k3", Subject: "s3", Actor: "beta"},
+		{TS: "t4", Kind: "k4", Subject: "s4", Actor: "alpha"},
+	}
+	m := New("REINS").Fold(evs, false)
+	m.Page = PageEvents
+	m.EFocus = 0 // focus e1 (actor=alpha); the strongest shared facet is actor=alpha → e2,e4
+
+	brushed := m.brushedEvents()
+	id := func(e grammar.Event) string { return eventEntity(e, false).ID }
+	if !brushed[id(evs[1])] || !brushed[id(evs[3])] {
+		t.Fatalf("the actor=alpha siblings must be brushed; got %v", brushed)
+	}
+	if brushed[id(evs[2])] || brushed[id(evs[0])] {
+		t.Fatalf("non-sharers and the focused event must not be brushed; got %v", brushed)
+	}
+	out := ansi.Strip(m.eventsListBody(140, 30))
+	if strings.Count(out, "├") < 2 {
+		t.Fatalf("the events list must draw a ├ gutter for each brushed row:\n%s", out)
+	}
+	if !strings.Contains(m.eventsEmergentRelation(), "├") {
+		t.Fatalf("the events connector label must decode ├ in-band; got %q", m.eventsEmergentRelation())
+	}
+}
+
 func TestCoordinatorBrushRedactedFacetDoesNotForm(t *testing.T) {
 	// when the shared facet's source field is DENIED on air, the relation must not form over it,
 	// so no rows are brushed on that facet (no derived-channel leak).
