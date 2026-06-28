@@ -19,7 +19,7 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 		cur = "present-at-hand (operator — cleartext)"
 	}
 
-	op, md, st, un := 0, 0, 0, 0
+	op, md, st, un, other := 0, 0, 0, 0, 0
 	for _, t := range m.TurnLadder {
 		switch t.Prov {
 		case "operator":
@@ -30,13 +30,18 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 			st++
 		case "untrusted":
 			un++
+		default:
+			other++ // non-canonical / empty provenance — ACCOUNTED (never silently dropped)
 		}
 	}
 
 	allow := len(config.Defaults().AIRAllowlist)
 	n := len(m.identityRoster())
 	authSummary := fmt.Sprintf("●%d ◐%d ◌%d ○%d", op, md, st, un)
-	if op+md+st+un == 0 {
+	if other > 0 {
+		authSummary += fmt.Sprintf(" ?%d", other) // unattributed bucket — totals always sum to len(ladder)
+	}
+	if len(m.TurnLadder) == 0 {
 		authSummary = "no turns in the ladder (load :session)"
 	}
 	stakeFlag := "consent ledger NOT landed → no per-stakeholder consented/withheld/deferred states yet"
@@ -45,6 +50,17 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 		dangerFlag = "∅ NO principals — UNILATERAL authority (dangerous: no one to consent or contest)"
 	}
 
+	authLines := []string{
+		fmt.Sprintf("● operator %d — free-text, ALWAYS denied on air", op),
+		fmt.Sprintf("◐ model %d — model-authored, airs per field", md),
+		fmt.Sprintf("◌ structured %d — registry/hardened, may air", st),
+		fmt.Sprintf("○ untrusted %d — MCP/web, shape-only on air", un),
+	}
+	if other > 0 {
+		authLines = append(authLines, fmt.Sprintf("? unattributed %d — non-canonical/empty provenance (accounted, never dropped)", other))
+	}
+	authLines = append(authLines, "the provenance glyph IS the consent-evidence channel (who authored each block)")
+
 	return []grammar.ConsentFacet{
 		{Key: "frame", Name: "broadcast frame", Summary: cur, Lines: []string{
 			"current: " + cur,
@@ -52,13 +68,7 @@ func (m Model) consentFacets() []grammar.ConsentFacet {
 			"on-air ⟵ broadcast · default-deny + N-sec hold + dump/kill (hold/kill NOT wired yet)",
 			"the toggle is the operator's standing consent decision for the stream",
 		}},
-		{Key: "authorship", Name: "authorship", Summary: authSummary, Lines: []string{
-			fmt.Sprintf("● operator %d — free-text, ALWAYS denied on air", op),
-			fmt.Sprintf("◐ model %d — model-authored, airs per field", md),
-			fmt.Sprintf("◌ structured %d — registry/hardened, may air", st),
-			fmt.Sprintf("○ untrusted %d — MCP/web, shape-only on air", un),
-			"the provenance glyph IS the consent-evidence channel (who authored each block)",
-		}},
+		{Key: "authorship", Name: "authorship", Summary: authSummary, Lines: authLines},
 		{Key: "gating", Name: "field gating", Summary: fmt.Sprintf("%d air · rest deny", allow), Lines: []string{
 			fmt.Sprintf("%d fields air by default (the structural skeleton)", allow),
 			"every OTHER field default-denies on air (consent-protected)",

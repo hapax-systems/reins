@@ -37,6 +37,22 @@ func TestConsentFacetsAuthorshipCountsProvenance(t *testing.T) {
 	}
 }
 
+// HONEST accounting: a non-canonical / empty provenance must be ACCOUNTED (an unattributed bucket),
+// never silently dropped — and the "no turns" message gates on an EMPTY ladder, not the classified
+// sum (a full ladder of non-canonical prov must not falsely report empty). The live FetchTurns feeds
+// Prov verbatim with no enum normalization, so this is reachable.
+func TestConsentFacetsAccountsForNonCanonicalProvenance(t *testing.T) {
+	m := New("REINS")
+	m.TurnLadder = []grammar.Turn{{Prov: "operator"}, {Prov: "weird"}, {Prov: "xyz"}}
+	auth := m.consentFacets()[1]
+	if strings.Contains(auth.Summary, "no turns") {
+		t.Fatalf("a non-empty ladder must NOT report 'no turns'; got %q", auth.Summary)
+	}
+	if !strings.Contains(auth.Summary, "?2") {
+		t.Fatalf("the 2 non-canonical turns must be accounted as unattributed (?2); got %q", auth.Summary)
+	}
+}
+
 func TestConsentFrameReflectsAIRToggle(t *testing.T) {
 	m := New("REINS")
 	if !strings.Contains(m.consentFacets()[0].Summary, "present-at-hand") {
