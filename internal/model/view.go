@@ -11086,66 +11086,74 @@ func (m Model) turnListBody(w, h int) string {
 	return b.String()
 }
 
+// turnLaneRail is the FLEET lane-rail above the turn split (E4.5 — the one-coordinating-session model):
+// EVERY lane (session) in the fleet is an ambient pulse, severity-ranked (blocked > awaiting > done >
+// streaming > idle), numbered for O(1) reference, with the focused lane (m.TurnRole, whose turns the
+// split below shows) marked ▌. AIR-safe by construction: role/state/readiness/blocker/stalled all air
+// per the allowlist; a DENIED field degrades that lane's rank to its safe default rather than letting
+// the ordering disclose the denied value (the derived-channel discipline).
 func (m Model) turnLaneRail(w int) string {
 	type lane struct {
 		role   string
 		status string
-		count  int
 		rank   int
+		focus  bool
 	}
-	rank := map[string]int{"gate": 5, "awaiting": 4, "done": 3, "streaming": 2, "idle": 1}
-	statusFor := func(t grammar.Turn) string {
-		if strings.TrimSpace(t.Gate) != "" {
-			return "gate"
+	rankFor := func(s grammar.Session) (string, int) {
+		denied := func(f string) bool { return m.AIR && s.AIR[f] != "ok" }
+		switch {
+		case s.Stalled && !denied("stalled"),
+			!denied("readiness") && (s.Readiness == "red" || s.Readiness == "stall"),
+			!denied("blocker") && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none":
+			return "blocked", 5
 		}
-		switch t.Kind {
-		case "approval":
-			return "awaiting"
-		case "tool_result", "diff", "refusal":
-			return "done"
-		case "assistant", "reasoning", "tool_call", "dispatch":
-			return "streaming"
-		default:
-			return "idle"
+		state := ""
+		if !denied("state") {
+			state = s.State
 		}
+		switch state {
+		case "awaiting":
+			return "awaiting", 4
+		case "streaming", "active":
+			return "streaming", 2
+		}
+		if !denied("readiness") && s.Readiness == "green" && (denied("state") || s.State == "idle") {
+			return "done", 3
+		}
+		if (s.Idle && !denied("idle")) || state == "idle" {
+			return "idle", 1
+		}
+		return "active", 2
 	}
-	lanes := map[string]*lane{}
-	order := []string{}
-	for _, t := range m.TurnLadder {
-		role := grammar.Redact(t.AIR, "role", t.Role, m.AIR)
+	lanes := make([]lane, 0, len(m.Sessions))
+	for _, s := range m.Sessions {
+		role := grammar.Redact(s.AIR, "role", s.Role, m.AIR)
 		if strings.TrimSpace(role) == "" {
 			role = "—"
 		}
-		l, ok := lanes[role]
-		if !ok {
-			l = &lane{role: role, status: "idle", rank: rank["idle"]}
-			lanes[role] = l
-			order = append(order, role)
-		}
-		l.count++
-		st := statusFor(t)
-		if rank[st] > l.rank {
-			l.status, l.rank = st, rank[st]
-		}
+		status, rk := rankFor(s)
+		lanes = append(lanes, lane{role: role, status: status, rank: rk, focus: s.Role == m.TurnRole})
 	}
-	sort.Slice(order, func(i, j int) bool {
-		li, lj := lanes[order[i]], lanes[order[j]]
-		if li.rank != lj.rank {
-			return li.rank > lj.rank
+	sort.SliceStable(lanes, func(i, j int) bool {
+		if lanes[i].rank != lanes[j].rank {
+			return lanes[i].rank > lanes[j].rank
 		}
-		return li.role < lj.role
+		return lanes[i].role < lanes[j].role
 	})
-	chips := make([]string, 0, len(order))
-	for _, role := range order {
-		l := lanes[role]
-		tok := map[string]string{"gate": "yel", "awaiting": "yel", "done": "grn", "streaming": "pri", "idle": "mut"}[l.status]
-		chips = append(chips, grammar.C(tok, fmt.Sprintf("[%s %s×%d]", role, l.status, l.count)))
+	tok := map[string]string{"blocked": "red", "awaiting": "yel", "done": "grn", "streaming": "pri", "active": "pri", "idle": "mut"}
+	chips := make([]string, 0, len(lanes))
+	for i, l := range lanes {
+		mark := " "
+		if l.focus {
+			mark = "▌"
+		}
+		chips = append(chips, grammar.C(tok[l.status], fmt.Sprintf("%s[%d %s %s]", mark, i+1, l.role, l.status)))
 	}
 	if len(chips) == 0 {
 		chips = append(chips, grammar.C("mut", "[no lanes]"))
 	}
-	head := " " + grammar.C("brt", "LANE-RAIL") + grammar.C("mut", "  distinct turn roles · ranked gate>awaiting>done>streaming>idle")
-	body := " " + strings.Join(chips, grammar.C("mut", "  "))
+	head := " " + grammar.C("brt", "LANE-RAIL") + grammar.C("mut", "  fleet · ranked blocked>awaiting>done>streaming>idle · ▌ = the lane the turn split shows")
+	body := " " + strings.Join(chips, grammar.C("mut", " "))
 	return fitWidth(head, w) + "\n" + fitWidth(body, w)
 }
 
