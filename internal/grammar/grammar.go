@@ -329,25 +329,30 @@ var _ = turnProvGloss // legended via RenderLegend follow-up; referenced to keep
 // (RenderLegend) decodes every one (class-closure: TestLegendCoversTurnGlyphs). Some marks
 // intentionally echo the event/criticality alphabet (◆ · ); the legend situates each reading.
 var turnGlyph = map[string]string{
-	"user": "❯", "assistant": "✦", "reasoning": "⟂",
+	"user": "❯", "attach": "▤", "slash": "/", "file": "@",
+	"assistant": "✦", "reasoning": "⟂",
 	"tool_call": "◆", "tool_result": "⎿", "diff": "±",
 	"plan": "⊞", "todo": "▢", "approval": "⊜",
 	"dispatch": "⇉", "interrupt": "⊘", "refusal": "⊗",
-	"status": "·", "mcp": "⊕", "web": "⊙",
+	"status": "·", "usage": "$", "mcp": "⊕", "web": "⊙", "lifecycle": "◴",
 }
 
-var turnKindOrder = []string{"user", "assistant", "reasoning", "tool_call", "tool_result",
-	"diff", "plan", "todo", "approval", "dispatch", "interrupt", "refusal", "status", "mcp", "web"}
+var turnKindOrder = []string{"user", "attach", "slash", "file", "assistant", "reasoning",
+	"tool_call", "tool_result", "diff", "plan", "todo", "approval", "dispatch", "interrupt",
+	"refusal", "status", "usage", "mcp", "web", "lifecycle"}
 
 var turnKindGloss = map[string]string{
-	"user": "operator prompt (free-text — denied on air)", "assistant": "agent message",
+	"user": "operator prompt (free-text — denied on air)", "attach": "attachment / pasted image (denied on air)",
+	"slash": "slash-command + output", "file": "@file mention",
+	"assistant": "agent message",
 	"reasoning": "thinking / reasoning (denied on air)", "tool_call": "tool invoked (name + args)",
 	"tool_result": "tool output (stdout/exit — body denied on air)", "diff": "file change (hunks)",
 	"plan": "plan — review before execute", "todo": "task / checklist item",
-	"approval": "approval / gate awaiting decision", "dispatch": "dispatched to a lane",
+	"approval": "approval / gate awaiting decision", "dispatch": "dispatched to a lane / sub-agent",
 	"interrupt": "interrupted / cancelled", "refusal": "refused (with category)",
-	"status": "status / heartbeat", "mcp": "MCP tool (external — untrusted)",
-	"web": "web / search result (external)",
+	"status": "status / heartbeat", "usage": "usage — tokens / cost / context%",
+	"mcp": "MCP tool (external — untrusted)", "web": "web / search result (external)",
+	"lifecycle": "turn lifecycle (start / end / refresh)",
 }
 
 func turnGlyphOr(kind string) string {
