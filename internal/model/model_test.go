@@ -739,11 +739,50 @@ func TestCoordinatorChatInputQueuesLocally(t *testing.T) {
 		}
 	}
 	m = send(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.Mode != ModeNormal || len(m.CoordChatLog) != 1 || m.CoordChatLog[0] != "hold release" {
+	if m.Mode != ModeNormal || len(m.CoordChatLog) != 1 {
 		t.Fatalf("[Enter] must queue the message locally, log=%v mode=%d", m.CoordChatLog, m.Mode)
+	}
+	if got := m.CoordChatLog[0]; got.Role != "operator" || len(got.Parts) != 1 || got.Parts[0].Type != CoordChatPartText || got.Parts[0].Text != "hold release" || got.Parts[0].AIRProv != "operator" {
+		t.Fatalf("[Enter] must preserve flat-string back-compat as one operator text part, got %#v", got)
 	}
 	if !strings.Contains(ansi.Strip(m.View()), "hold release") {
 		t.Fatalf("the queued chat message must render as a turn:\n%s", ansi.Strip(m.View()))
+	}
+	m.AIR = true
+	if onAir := ansi.Strip(m.coordinatorChatPane(180, 20)); strings.Contains(onAir, "hold release") || !strings.Contains(onAir, "▒▒▒") {
+		t.Fatalf("operator text must redact on AIR while still rendering the turn:\n%s", onAir)
+	}
+}
+
+func TestCoordinatorChatFilePartRendersAIRRedactedChip(t *testing.T) {
+	rawPath := "/srv/private/screenshots/secret-draft.png"
+	m := New("REINS")
+	m = m.AppendParts("operator", []CoordChatPart{{
+		Type:     CoordChatPartImage,
+		FilePath: rawPath,
+		MimeType: "image/png",
+		AIRProv:  "operator",
+	}})
+	offAir := ansi.Strip(m.coordinatorChatPane(200, 20))
+	if !strings.Contains(offAir, "▤ secret-draft.png (image/png)") {
+		t.Fatalf("file/image part must render as a metadata chip off-air:\n%s", offAir)
+	}
+	if !strings.Contains(offAir, rawPath) {
+		t.Fatalf("off-air file chip should include the path field for provenance:\n%s", offAir)
+	}
+	m.AIR = true
+	onAir := ansi.Strip(m.coordinatorChatPane(200, 20))
+	// On air the attachment's EXISTENCE + TYPE is the air-safe skeleton (▤ + mime, the same coarse
+	// tier the block-pixel image preview airs); the filename AND the path are both sensitive PII
+	// (a name like "secret-draft.png" is itself confidential) and must each deny.
+	if strings.Contains(onAir, "secret-draft.png") || strings.Contains(onAir, rawPath) {
+		t.Fatalf("on-air file chip must NOT leak the filename or path:\n%s", onAir)
+	}
+	if !strings.Contains(onAir, "image/png") || !strings.Contains(onAir, "▤") {
+		t.Fatalf("on-air file chip must retain the structural type skeleton (▤ + mime):\n%s", onAir)
+	}
+	if !strings.Contains(onAir, "▒▒▒") {
+		t.Fatalf("on-air file chip must show the redaction token for the denied name + path:\n%s", onAir)
 	}
 }
 

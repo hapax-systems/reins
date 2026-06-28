@@ -1132,14 +1132,73 @@ func (m Model) coordinatorChatTurns() []grammar.Turn {
 			grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR), t.Stage, crit, t.RelCount)
 		turns = append(turns, grammar.Turn{Role: "lens", Kind: "reasoning", Summary: ctx, AIR: sk})
 	}
+	hadLocal := false
 	for _, msg := range m.CoordChatLog {
-		turns = append(turns, grammar.Turn{Role: "operator", Kind: "user", Summary: msg, AIR: sk})
+		role := strings.TrimSpace(msg.Role)
+		if role == "" {
+			role = "operator"
+		}
+		messageHadPart := false
+		for _, part := range msg.Parts {
+			summary, air := m.coordChatPartSummary(part)
+			if strings.TrimSpace(summary) == "" {
+				continue
+			}
+			hadLocal, messageHadPart = true, true
+			turns = append(turns, grammar.Turn{Role: role, Kind: coordChatPartKind(part), Summary: summary, AIR: air})
+		}
+		if !messageHadPart {
+			continue
+		}
 		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "refusal", Summary: "queued · live dispatch awaits the CapabilityIO session backend (Phase-1 capture-output)", AIR: sk})
 	}
-	if len(m.CoordChatLog) == 0 {
+	if !hadLocal {
 		turns = append(turns, grammar.Turn{Role: "hapax", Kind: "assistant", Summary: "you steer DIRECTION (priority/hold/scope/accept); speed, provider, and fanout are derived — not yours to set", AIR: sk})
 	}
 	return turns
+}
+
+func coordChatPartKind(part CoordChatPart) string {
+	switch strings.ToLower(strings.TrimSpace(part.Type)) {
+	case CoordChatPartFile, CoordChatPartImage:
+		return "attachment"
+	default:
+		return "user"
+	}
+}
+
+func (m Model) coordChatPartSummary(part CoordChatPart) (string, map[string]string) {
+	switch strings.ToLower(strings.TrimSpace(part.Type)) {
+	case CoordChatPartFile, CoordChatPartImage:
+		return m.coordChatFileChip(part), map[string]string{"role": "ok", "summary": "ok"}
+	default:
+		return part.Text, map[string]string{"role": "ok"}
+	}
+}
+
+func (m Model) coordChatFileChip(part CoordChatPart) string {
+	path := strings.TrimSpace(part.FilePath)
+	name := strings.TrimSpace(part.Text)
+	if name == "" && path != "" {
+		name = filepath.Base(path)
+	}
+	if name == "" {
+		name = "attachment"
+	}
+	mime := strings.TrimSpace(part.MimeType)
+	if mime == "" {
+		mime = "unknown"
+	}
+	// The filename is sensitive PII — a name like "medical-results.png" leaks regardless of the path.
+	// Deny it on air (it shares the path's confidentiality); the mime is the structural TYPE and is
+	// the air-safe skeleton (the coarse tier the block-pixel preview airs), so it stays visible.
+	safeName := grammar.Redact(map[string]string{}, "file_name", name, m.AIR)
+	chip := fmt.Sprintf("▤ %s (%s)", safeName, mime)
+	if path == "" {
+		return chip
+	}
+	redactedPath := grammar.Redact(map[string]string{}, "file_path", path, m.AIR)
+	return chip + " · path " + redactedPath
 }
 
 // coordinatorLensPane: the Yard Coordinator's LEFT pane — a Miller-column lens over the selection

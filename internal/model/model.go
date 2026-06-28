@@ -467,50 +467,50 @@ type Model struct {
 	LoopFocus           int  // selected A5 causal loop in :loops
 	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height              int
-	Beat                int             // low-rate liveness frame; visual only, never authority/readiness
-	Focus               int             // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
-	EFocus              int             // selected row index into m.Events (the :events cursor) — selection is page-aware
-	SFocus              int             // selected row index into m.Sessions (the :sessions cursor)
-	TFocus              int             // selected row index into m.Traces (the :traces cursor)
-	TurnFocus           int             // selected row index into m.TurnLadder (the :session-turns cursor)
-	DetailScroll        int             // reserved detail-pane scroll for expanded turn blocks
-	IFocus              int             // selected row index into visibleIntakeRows (the :intake bucket cursor)
-	CFocus              int             // selected capability/status row index into the grouped :capabilities projection
-	CommandFocus        int             // selected command registry row
-	WindowFocus         int             // selected window registry row
-	SurfaceFocus        int             // selected surface registry row
-	DomainFocus         int             // selected domain registry row
-	LifecycleFocus      int             // selected lifecycle contract row
-	EpiFocus            int             // selected epistemic posture row
-	IntentFocus         int             // selected governed target row on :intent
-	RefScroll           int             // scroll offset for full-width reference pages (:dynamics/:help/:legend/:commands/:windows)
-	Ring                []RingEntry     // the yank kill-ring (most-recent first)
-	DoorOpen            bool            // the /whois full-screen drill-in is open for the focused task
-	SessionDoorOpen     bool            // the /session full-screen lane card is open for the focused session
-	IntakeDoorOpen      bool            // the /intake full-screen aggregate provenance door is open
-	LastlogDoorOpen     bool            // the /lastlog scrollback door is open (retained event history)
-	EventScrollback     Scrollback      // per-window event-history ring (the /lastlog affordance), fed on poll
-	LastlogOlder        []grammar.Event // transient backward-paged events (PgUp); cleared on close
-	LastlogPaging       bool            // a /lastlog backward-page fetch is in flight
-	WindowSeen          map[int]string  // per-window state signature at last visit (activity ladder)
-	Sel                 Selection       // the cursor-of-attention's rank/field/type (row index stays in Focus)
-	CoordChatInput      string          // the Yard Coordinator chat input buffer (ModeCoordChat)
-	CoordChatLog        []string        // the operator's local coordination messages (send gated · CapabilityIO session backend)
-	LensZone            string          // active coordinator-lens zone ("" / "tasks" = task rows; "files" = the filebrowser)
-	FilesCwd            string          // filebrowser current directory (lazily defaulted on first entry)
-	FilesCursor         int             // filebrowser row cursor into FilesEntries
-	FilesEntries        []files.Entry   // the current directory listing (loaded on zone entry / cwd change)
-	FilesErr            string          // last filebrowser load error (honest, shown in the pane)
-	Filter              string          // active :tasks filter (id substring); narrows the selectable set
-	CritFilter          string          // active criticality-class filter (ok|warn|major|crit) — a selected count
-	IntakeSourceFilter  string          // active :intake source filter; empty means all sources
-	CompIdx             int             // fish-style completion: the highlighted candidate in the navigable list
-	Flash               string          // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
-	FlashSeq            int             // monotonic flash id — a stale tick only clears the flash it was armed for
-	IntentTarget        string          // currently reviewed governed intent target, e.g. resume/dispatch/show-route
-	IntentSubject       string          // AIR-safe subject captured before switching to the intent review page
-	SplitContext        bool            // visible session source + declared relation/context projection
-	SuppressSplitPinned bool            // render-only: split body clone omits the pinned selected-source block
+	Beat                int                // low-rate liveness frame; visual only, never authority/readiness
+	Focus               int                // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
+	EFocus              int                // selected row index into m.Events (the :events cursor) — selection is page-aware
+	SFocus              int                // selected row index into m.Sessions (the :sessions cursor)
+	TFocus              int                // selected row index into m.Traces (the :traces cursor)
+	TurnFocus           int                // selected row index into m.TurnLadder (the :session-turns cursor)
+	DetailScroll        int                // reserved detail-pane scroll for expanded turn blocks
+	IFocus              int                // selected row index into visibleIntakeRows (the :intake bucket cursor)
+	CFocus              int                // selected capability/status row index into the grouped :capabilities projection
+	CommandFocus        int                // selected command registry row
+	WindowFocus         int                // selected window registry row
+	SurfaceFocus        int                // selected surface registry row
+	DomainFocus         int                // selected domain registry row
+	LifecycleFocus      int                // selected lifecycle contract row
+	EpiFocus            int                // selected epistemic posture row
+	IntentFocus         int                // selected governed target row on :intent
+	RefScroll           int                // scroll offset for full-width reference pages (:dynamics/:help/:legend/:commands/:windows)
+	Ring                []RingEntry        // the yank kill-ring (most-recent first)
+	DoorOpen            bool               // the /whois full-screen drill-in is open for the focused task
+	SessionDoorOpen     bool               // the /session full-screen lane card is open for the focused session
+	IntakeDoorOpen      bool               // the /intake full-screen aggregate provenance door is open
+	LastlogDoorOpen     bool               // the /lastlog scrollback door is open (retained event history)
+	EventScrollback     Scrollback         // per-window event-history ring (the /lastlog affordance), fed on poll
+	LastlogOlder        []grammar.Event    // transient backward-paged events (PgUp); cleared on close
+	LastlogPaging       bool               // a /lastlog backward-page fetch is in flight
+	WindowSeen          map[int]string     // per-window state signature at last visit (activity ladder)
+	Sel                 Selection          // the cursor-of-attention's rank/field/type (row index stays in Focus)
+	CoordChatInput      string             // the Yard Coordinator chat input buffer (ModeCoordChat)
+	CoordChatLog        []CoordChatMessage // local structured coordination messages (send gated · CapabilityIO session backend)
+	LensZone            string             // active coordinator-lens zone ("" / "tasks" = task rows; "files" = the filebrowser)
+	FilesCwd            string             // filebrowser current directory (lazily defaulted on first entry)
+	FilesCursor         int                // filebrowser row cursor into FilesEntries
+	FilesEntries        []files.Entry      // the current directory listing (loaded on zone entry / cwd change)
+	FilesErr            string             // last filebrowser load error (honest, shown in the pane)
+	Filter              string             // active :tasks filter (id substring); narrows the selectable set
+	CritFilter          string             // active criticality-class filter (ok|warn|major|crit) — a selected count
+	IntakeSourceFilter  string             // active :intake source filter; empty means all sources
+	CompIdx             int                // fish-style completion: the highlighted candidate in the navigable list
+	Flash               string             // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
+	FlashSeq            int                // monotonic flash id — a stale tick only clears the flash it was armed for
+	IntentTarget        string             // currently reviewed governed intent target, e.g. resume/dispatch/show-route
+	IntentSubject       string             // AIR-safe subject captured before switching to the intent review page
+	SplitContext        bool               // visible session source + declared relation/context projection
+	SuppressSplitPinned bool               // render-only: split body clone omits the pinned selected-source block
 }
 
 // FlashClearMsg clears a flash after its lifetime, but only if it's still the current one (seq match).
@@ -3098,7 +3098,7 @@ func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.Type {
 	case tea.KeyEnter:
 		if msg := strings.TrimSpace(m.CoordChatInput); msg != "" {
-			m.CoordChatLog = append(m.CoordChatLog, msg)
+			m = m.AppendOperatorText(msg)
 			m.Status = "coordinate: queued locally (live dispatch awaits the CapabilityIO session backend)"
 		}
 		m.Mode, m.CoordChatInput = ModeNormal, ""
