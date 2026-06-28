@@ -1981,7 +1981,8 @@ func (m Model) splitSessionContext(s grammar.Session) string {
 		if len(related) > 0 {
 			failures := 0
 			for _, ev := range related {
-				if strings.Contains(strings.ToLower(ev.Kind), "fail") {
+				// a denied kind must not be classified into the fail tally — the count discloses it
+				if (!m.AIR || ev.AIR["kind"] == "ok") && strings.Contains(strings.ToLower(ev.Kind), "fail") {
 					failures++
 				}
 			}
@@ -2112,7 +2113,9 @@ func labeledPart(label, value string) string {
 }
 
 func fallbackSplitSessionContext(s grammar.Session, air bool) string {
-	if strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
+	// gate the blocker branch on AIR: a denied blocker must fall through to claimed_task/state, else the
+	// branch selection (▒▒▒ vs the next field) discloses that a blocker is present (presence leak)
+	if strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" && (!air || s.AIR["blocker"] == "ok") {
 		return sessionFieldValueForAir(s, "blocker", air)
 	}
 	if strings.TrimSpace(s.ClaimedTask) != "" {
@@ -7056,7 +7059,9 @@ func (m Model) yardFleetCounts() yardFleet {
 		if s.Readiness == "off" || s.Readiness == "offline" || s.State == "offline" {
 			f.off++
 		}
-		if s.Stalled || s.Readiness == "stall" {
+		// readiness is already hide-gated above; gate the raw Stalled term so a denied stalled is not
+		// classified into the per-class count (the count discloses the denied field)
+		if (s.Stalled && (!m.AIR || s.AIR["stalled"] == "ok")) || s.Readiness == "stall" {
 			f.stalled++
 		}
 		switch s.Platform {
