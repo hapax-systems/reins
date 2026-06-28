@@ -1780,42 +1780,8 @@ func TestSplitEpistemicsFooterDoesNotClipScrollToken(t *testing.T) {
 	}
 }
 
-func TestSplitReferenceContextHasSeparateScrollKeys(t *testing.T) {
-	m := New("REINS").FoldSessions([]grammar.Session{
-		{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-		{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.50, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-	}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageSurfaces, true
-	if !m.splitContextActive() {
-		t.Fatal("test requires active split context")
-	}
-	if max := m.referenceScrollMax(); max == 0 {
-		t.Fatal("surfaces split context should overflow in a short frame")
-	}
-	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "ctx surface registry · affordance registry") ||
-		!strings.Contains(v, "[j/k]anchor") || !strings.Contains(v, "[J/K]scroll") || strings.Contains(v, "[j/k/J/K]ctx-scroll") {
-		t.Fatalf("split reference view should advertise a lane anchor and separate right-pane scroll keys:\n%s", v)
-	}
-	for _, line := range strings.Split(v, "\n") {
-		if strings.Contains(line, "surface registry") && strings.Contains(line, "…") {
-			t.Fatalf("compact split relation header should not clip into ellipsis:\n%s", v)
-		}
-	}
-
-	m = step(m, "j")
-	if m.SFocus != 1 || m.RefScroll != 0 {
-		t.Fatalf("lowercase j should move the left source row, sFocus=%d refScroll=%d status=%q", m.SFocus, m.RefScroll, m.Status)
-	}
-	m = step(m, "J")
-	if m.SFocus != 1 || m.RefScroll != 1 || !strings.Contains(m.Status, "context scroll") {
-		t.Fatalf("uppercase J should scroll right context only, sFocus=%d refScroll=%d status=%q", m.SFocus, m.RefScroll, m.Status)
-	}
-	m = step(m, "K")
-	if m.SFocus != 1 || m.RefScroll != 0 {
-		t.Fatalf("uppercase K should scroll right context back up without moving source, sFocus=%d refScroll=%d", m.SFocus, m.RefScroll)
-	}
-}
+// (Removed TestSplitReferenceContextHasSeparateScrollKeys — it pinned the legacy session-frozen split
+// for PageSurfaces, an engine page now DEMOTED to a door (catalog │ ambient, no session source).)
 
 // (Removed TestSplitLinkedContextMarksRightPaneOverflow and TestSplitCompactLinkedPanesIgnoreRight
 // ScrollKeys — they pinned the legacy session-frozen events split mechanics ("context rows hidden"
@@ -2132,72 +2098,12 @@ func TestSplitYardPinnedContextLeavesBodyRows(t *testing.T) {
 	}
 }
 
-func TestSourceOnlySplitRowsCarryLaneAnchorSignals(t *testing.T) {
-	m := New("REINS").
-		FoldSessions([]grammar.Session{
-			{Role: "cx-claim", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
-				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-			{Role: "cx-stale", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.50,
-				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
-		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 18, PageDomains, true
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"claim-ready · domain lens", "stale relay · domain lens"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("source-only split rows should show lane-specific anchor signal %q:\n%s", want, v)
-		}
-	}
-}
-
-func TestSourceOnlySplitPanesRenderRelationCard(t *testing.T) {
-	m := New("REINS").
-		FoldSessions([]grammar.Session{{
-			Role: "cx-anchor", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
-		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 24, PageDomains, true
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"SPLIT RELATION", "sessions + domain registry as domain lens", "cx-anchor · claim-ready", "domain lens situates selected lane", "[j/k] lane anchor"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("source-only split relation card missing %q:\n%s", want, v)
-		}
-	}
-}
-
-func TestSplitSourceLivePulseTracksBeatWithoutMovingSelection(t *testing.T) {
-	m := New("REINS").
-		FoldSessions([]grammar.Session{{
-			Role: "cx-live", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, Alive: true,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"},
-		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 24, PageDomains, true
-
-	v0 := ansi.Strip(m.View())
-	if !strings.Contains(v0, "cx-live · claim-ready · live ·") || !strings.Contains(v0, "◆ claim   cx-live") {
-		t.Fatalf("live source split should show anchored selection plus live pulse:\n%s", v0)
-	}
-	m.Beat = 2
-	v2 := ansi.Strip(m.View())
-	if !strings.Contains(v2, "cx-live · claim-ready · live •") || !strings.Contains(v2, "◆ claim   cx-live") {
-		t.Fatalf("live source pulse should change with Beat without moving selection:\n%s", v2)
-	}
-}
-
-func TestSplitSourceLivePulseAllowsHealthyNoClaimLane(t *testing.T) {
-	m := New("REINS").
-		FoldSessions([]grammar.Session{{
-			Role: "cx-live", Platform: "codex", State: "active", Readiness: "live", Blocker: "no_claim", Attention: 0.21, Alive: true,
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"},
-		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 24, PageDomains, true
-
-	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "no claim · domain lens · live ·") {
-		t.Fatalf("healthy no_claim lanes should still show a live pulse:\n%s", v)
-	}
-}
+// (Removed TestSourceOnlySplitRowsCarryLaneAnchorSignals / …RenderRelationCard / …LivePulse… ×2 —
+// they pinned the legacy session-frozen split for the ENGINE/reference pages (PageDomains: "· domain
+// lens" lane signals, the SPLIT RELATION card, the source live-pulse). The only-split view-algebra
+// DEMOTES those pages to honest doors (specDoor: catalog │ ambient, NO session source), so the
+// session-anchored split is abolished for them. The legacy source-pane machinery is exercised by the
+// still-legacy Inc 3 pages until they migrate, then retired with splitContextBody at Inc 5.)
 
 func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
 	base := New("REINS").FoldSessions([]grammar.Session{
@@ -2254,32 +2160,8 @@ func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
 	}
 }
 
-func TestSplitSessionsPaneUsesSlackForTopology(t *testing.T) {
-	m := New("REINS").
-		Fold([]grammar.Event{{
-			TS: "10:00", Kind: "coord_dispatch.launch_started", Subject: "task-a", Actor: "cx-anchor", Score: 0.21,
-			AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok"},
-		}}, false).
-		FoldTasks([]grammar.Task{{TaskID: "task-a", AIR: map[string]string{"task_id": "ok"}}}, false).
-		FoldCapabilities(grammar.CapabilitySummary{
-			Routes: []grammar.CapabilityRoute{{
-				RouteID: "codex.full", Platform: "codex", RouteState: "active",
-				AIR: map[string]string{"route_id": "ok", "platform": "ok", "route_state": "ok"},
-			}},
-		}, false).
-		FoldSessions([]grammar.Session{{
-			Role: "cx-anchor", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, ClaimedTask: "task-a",
-			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok"},
-		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 34, PageDomains, true
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"cx-anchor · claim-ready", "sessions + domain registry as domain lens", "events:1 · claim:task visible · cap-routes:1", "[j/k] lane anchor"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split session slack topology missing %q:\n%s", want, v)
-		}
-	}
-}
+// (Removed TestSplitSessionsPaneUsesSlackForTopology — it pinned the legacy session-frozen split's
+// source-pane topology slack for PageDomains, an engine page now DEMOTED to a door.)
 
 func TestSplitReadinessExplainsSelectedLaneGate(t *testing.T) {
 	m := New("REINS").

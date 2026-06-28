@@ -650,6 +650,14 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.splitContextPane(pw, ph) }}),
 			ratio, layout.Connector{Glyph: div, Relation: rel})
+	case PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces, PageDomains, PageLifecycles:
+		// Inc 4 — DEMOTE-TO-DOOR. These engine/reference pages have NO real session join, so when the
+		// legacy split would session-anchor them (the anti-pattern), render the honest catalog │ ambient
+		// door instead. Gated on splitContextActive (off → referenceBody already does catalog│context).
+		if !m.splitContextActive() {
+			return nil
+		}
+		return m.specDoor()
 	case PageDispatch:
 		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
 		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
@@ -805,6 +813,20 @@ func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, r
 	div := grammar.C("border", "│")
 	return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio,
 		layout.Connector{Glyph: div, Relation: relation})
+}
+
+// specDoor is the shared DEMOTE-TO-DOOR shape (Inc 4): an engine/reference page has NO real session
+// join, so its secondary is honest AMBIENT context — the page catalog (referenceSlice) │ its
+// contract/source state (referenceContextPane), a constant "ambient context" relation that asserts
+// nothing it cannot back. This swaps the session-frozen splitContextBody anti-pattern (a help page
+// anchored on a session) for the only-split door; referenceBody already renders this same
+// catalog│context shape when SplitContext is off.
+func (m Model) specDoor() *layout.Spec {
+	div := grammar.C("border", "│")
+	return layout.Split(
+		layout.Leaf(&layout.Pane{MinW: 96, Render: func(pw, ph int) string { return m.referenceSlice(pw, ph) }}),
+		layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.referenceContextPane(pw) }}),
+		0.75, layout.Connector{Glyph: div, Relation: "ambient context"})
 }
 
 // eventsEmergentRelation anchors on the focused event; others = the rest of m.Events. AIR-aware via
