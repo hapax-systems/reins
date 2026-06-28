@@ -614,6 +614,21 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.sessionsListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.sessionConstraintPane(pw) }},
 			0.62, m.sessionsEmergentRelation())
+	case PageCaps:
+		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
+		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
+		// the primary IS the sessions list and the session-source nav/binding must STAY. We therefore only
+		// swap the legacy splitContextBody RENDER for the algebra fold (gated on splitContextActive, so
+		// splitContextActive/commandSelectionPage/nav are unchanged — no silent binding inversion), and
+		// abolish the authored split-pair: the connector is the honest literal self-elucidation join.
+		if !m.splitContextActive() {
+			return nil // narrow / split-off → the legacy reference body (caps is not yet only-split)
+		}
+		div := grammar.C("border", "│")
+		return layout.Split(
+			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
+			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderCapabilitySplitPane(pw, ph) }}),
+			0.55, layout.Connector{Glyph: div, Relation: "selected lane → capability fit"})
 	case PageDispatch:
 		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
 		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
