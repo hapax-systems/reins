@@ -82,6 +82,31 @@ func TestRelationHeaderOwnsTopRow(t *testing.T) {
 	}
 }
 
+// The connector header states the typed-join VERDICT honestly: a real-join split appends its asserted
+// join key (⋈), and a DOOR appends "no join" — the honesty floor: a Door must never imply a join the
+// data does not carry. Verdict/JoinKey unset preserves the bare-relation header (back-compat).
+func TestRelationHeaderStatesJoinVerdict(t *testing.T) {
+	joined := Split(Leaf(block("A", 1)), Leaf(block("B", 1)), 0.5,
+		Connector{Glyph: "│", Relation: "focused event → neighborhood", Verdict: "Standing", JoinKey: "selection -> detail"})
+	jh := lines(Render(joined, 80, 3))[0]
+	if !strings.Contains(jh, "focused event → neighborhood") {
+		t.Fatalf("the emergent relation must still head the connector: %q", jh)
+	}
+	if !strings.Contains(jh, "⋈") || !strings.Contains(jh, "selection -> detail") {
+		t.Fatalf("a real-join split must assert its join key: %q", jh)
+	}
+
+	door := Split(Leaf(block("A", 1)), Leaf(block("B", 1)), 0.5,
+		Connector{Glyph: "│", Relation: "ambient context", Verdict: "Door", JoinKey: ""})
+	dh := lines(Render(door, 80, 3))[0]
+	if strings.Contains(dh, "⋈") {
+		t.Fatalf("a DOOR must NOT assert a join key (honesty floor): %q", dh)
+	}
+	if !strings.Contains(dh, "no join") {
+		t.Fatalf("a DOOR must declare it carries no join: %q", dh)
+	}
+}
+
 func TestNestedSplitMakesThreeColumns(t *testing.T) {
 	inner := Split(Leaf(block("B", 1)), Leaf(block("C", 1)), 0.5, Connector{Glyph: "│"})
 	s := Split(Leaf(block("A", 1)), inner, 0.34, Connector{Glyph: "│"})

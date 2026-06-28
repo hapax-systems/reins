@@ -43,10 +43,15 @@ type HSplit struct {
 
 // Connector is the divider column + the always-on relation header. Relation is the EMERGENT
 // relationship between the two panes (derived by the info-processing systems, never authored);
-// empty renders no header.
+// empty renders no header. Verdict/JoinKey carry the typed-join gate's ruling (relate.Gate /
+// JoinKeyFor, computed by the model): the header states whether the split honestly carries a join.
+// A "Door" verdict with an empty JoinKey is the honesty floor — the header declares "no join" and
+// must never imply a coordination the data does not carry. Both empty = bare-relation header.
 type Connector struct {
 	Glyph    string
 	Relation string
+	Verdict  string
+	JoinKey  string
 }
 
 // Leaf wraps a pane as a spec node.
@@ -86,7 +91,7 @@ func render(s *Spec, w, h int) []string {
 	ch := h
 	var out []string
 	if sp.Connector.Relation != "" && h > 1 {
-		out = append(out, relationHeader(sp.Connector.Relation, w))
+		out = append(out, relationHeader(sp.Connector, w))
 		ch = h - 1
 	}
 	left := render(sp.Primary, pw, ch)
@@ -103,15 +108,30 @@ func render(s *Spec, w, h int) []string {
 	return out
 }
 
-// relationHeader is the connector's emergent-relation row: the relation centered between ─ rules.
-func relationHeader(rel string, w int) string {
-	label := " " + rel + " "
+// relationHeader is the connector's emergent-relation row: the relation centered between ─ rules,
+// suffixed with the typed-join clause so the split states its join honestly. A real-join verdict
+// asserts its key (⋈ <key>); a Door declares "no join"; an unset verdict keeps the bare relation.
+func relationHeader(c Connector, w int) string {
+	label := " " + c.Relation + joinClause(c) + " "
 	lw := ansi.StringWidth(label)
 	if lw >= w {
 		return fitLine(label, w)
 	}
 	side := (w - lw) / 2
 	return strings.Repeat("─", side) + label + strings.Repeat("─", w-lw-side)
+}
+
+// joinClause renders the gate's ruling: nothing when the verdict is unset (bare relation), "· no join"
+// for a Door (the honesty floor — no coordination asserted), else "· ⋈ <key>" naming the asserted join.
+func joinClause(c Connector) string {
+	switch {
+	case c.Verdict == "":
+		return ""
+	case c.JoinKey == "": // Door / any keyless verdict
+		return " · no join"
+	default:
+		return " · ⋈ " + c.JoinKey
+	}
 }
 
 // fit forces a block to exactly h lines, each exactly w columns (ANSI-width-aware).

@@ -15,6 +15,17 @@ const (
 	VerdictDoor
 )
 
+func (v Verdict) String() string {
+	switch v {
+	case VerdictStanding:
+		return "Standing"
+	case VerdictPeek:
+		return "Peek"
+	default:
+		return "Door"
+	}
+}
+
 // pageVerdict returns the gate verdict for a page — the decision's 19-page classification. The page
 // is ALWAYS rendered as a split; this selects the secondary's materialization, never "split vs not".
 func pageVerdict(page int) Verdict {

@@ -737,11 +737,10 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if !m.sessionSplit() {
 			return nil // narrow / split-off → the legacy reference body (caps is not yet only-split)
 		}
-		div := grammar.C("border", "│")
 		return layout.Split(
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderCapabilitySplitPane(pw, ph) }}),
-			0.55, layout.Connector{Glyph: div, Relation: "selected lane → capability fit"})
+			0.55, m.verdictConnector("selected lane → capability fit"))
 	case PageYard, PageReadiness, PageIntake:
 		// Inc 2 — the SESSION-ANCHORED drilldowns. Same safe recipe as caps: swap the legacy
 		// splitContextBody RENDER for the algebra fold (gated on the session-anchored split → session-source
@@ -758,11 +757,10 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			PageIntake:    "selected lane → intake observations",
 		}[m.Page]
 		ratio := map[int]float64{PageYard: 0.58, PageReadiness: 0.57, PageIntake: 0.56}[m.Page]
-		div := grammar.C("border", "│")
 		return layout.Split(
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.splitContextPane(pw, ph) }}),
-			ratio, layout.Connector{Glyph: div, Relation: rel})
+			ratio, m.verdictConnector(rel))
 	case PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces, PageDomains, PageLifecycles:
 		// Inc 4 — DEMOTE-TO-DOOR. These engine/reference pages have NO real session join, so when the
 		// legacy split would session-anchor them (the anti-pattern), render the honest catalog │ ambient
@@ -775,11 +773,10 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		// STANDING: the dispatch LEDGER (primary) │ its MEASUREMENT rollup (secondary). The secondary is
 		// genuinely DERIVED from the primary (utilization + blind-spots over the same records) — a real
 		// elucidation, not a minted join, so the connector relation is honest.
-		div := grammar.C("border", "│")
 		return layout.Split(
 			layout.Leaf(&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.dispatchLedgerPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.dispatchMeasurementPane(pw) }}),
-			0.62, layout.Connector{Glyph: div, Relation: "measurement derived from the ledger"})
+			0.62, m.verdictConnector("measurement derived from the ledger"))
 	}
 	return nil
 }
@@ -839,7 +836,7 @@ func (m Model) specCoordinator() *layout.Spec {
 	// in the middle COORD pane, the chat keeps its column.
 	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
 	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
-	return layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
+	return layout.Split(layout.Leaf(lens), inner, 0.4, m.verdictConnector(m.coordinatorEmergentRelation()))
 }
 
 // coordinatorRelation derives the lens selection's emergent relationship to the rest of the visible
@@ -952,9 +949,26 @@ func sessionEntity(s grammar.Session, airOn bool) relate.Entity {
 // secondary, joined by the EMERGENT connector relation. Every self-anchored cohort page composes
 // through this — the generalization of specCoordinator's split.
 func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, relation string) *layout.Spec {
-	div := grammar.C("border", "│")
-	return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio,
-		layout.Connector{Glyph: div, Relation: relation})
+	return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio, m.verdictConnector(relation))
+}
+
+// verdictConnector stamps the connector with the PAGE'S typed-join verdict — pageVerdict, the tested
+// 19-page decision classification (gate.go) — and the matching honesty clause. Standing/Peek carry a
+// real join keyed to the operator's SELECTION, so the header asserts that key; a DOOR carries NO real
+// join, so the key is dropped and the header declares "no join" (the never-mint honesty floor). This
+// is what lets only-split-by-default co-hold with honesty: a door page can't imply a coordination.
+func (m Model) verdictConnector(relation string) layout.Connector {
+	v := pageVerdict(m.Page)
+	key := "selection → detail"
+	if v == VerdictDoor {
+		key = "" // honesty floor: a Door asserts no join
+	}
+	return layout.Connector{
+		Glyph:    grammar.C("border", "│"),
+		Relation: relation,
+		Verdict:  v.String(),
+		JoinKey:  key,
+	}
 }
 
 // specDoor is the shared DEMOTE-TO-DOOR shape (Inc 4): an engine/reference page has NO real session
@@ -964,11 +978,10 @@ func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, r
 // anchored on a session) for the only-split door; referenceBody already renders this same
 // catalog│context shape (no session-frozen anchor).
 func (m Model) specDoor() *layout.Spec {
-	div := grammar.C("border", "│")
 	return layout.Split(
 		layout.Leaf(&layout.Pane{MinW: 96, Render: func(pw, ph int) string { return m.referenceSlice(pw, ph) }}),
 		layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.referenceContextPane(pw) }}),
-		0.75, layout.Connector{Glyph: div, Relation: "ambient context"})
+		0.75, m.verdictConnector("ambient context"))
 }
 
 // eventsRelation anchors on the focused event vs the rest of m.Events, deriving ONCE so the connector
