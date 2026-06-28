@@ -11294,6 +11294,14 @@ func (m Model) turnDetailBody(w int) string {
 	if !ok {
 		return grammar.C("mut", " turn detail\n\n no selected turn\n")
 	}
+	// E4.6 two-frame broadcast (session-pane design §3.4 / forks B+D): an in-flight turn is NOT settled,
+	// so it renders the broadcast frame — off air the present-at-hand cleartext partial; on air ONLY the
+	// shape '▸ generating… [N tok]', never a live token. Settled turns fall through to the normal block
+	// stream below. The hold-buffer/dump-key is the E4.8 activation layer (gated on CapabilityIO Phase 1).
+	if t.Streaming {
+		frame := grammar.BroadcastStreamFrame(t.Summary, t.Tokens, m.AIR, maxVisible(8, w-4))
+		return " " + frame + "\n" + m.turnImpingeAffordances(t)
+	}
 	var detail string
 	blocks := m.TurnBlocks[TurnID(t)]
 	if len(blocks) == 0 {

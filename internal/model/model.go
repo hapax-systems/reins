@@ -2173,6 +2173,7 @@ func SessionTurnFixture() ([]grammar.Turn, map[string][]grammar.TurnBlock) {
 		{TS: "2026-06-26T18:40:21Z", Role: "cc-reins", Kind: "approval", Prov: "structured", Summary: "apply edit to grammar_test.go?", Magnitude: 0.2, Model: "—", Route: "claude.code.full", Gate: "pending", AIR: sk()},
 		{TS: "2026-06-26T18:40:30Z", Role: "lane-beta", Kind: "dispatch", Prov: "structured", Summary: "dispatched: open PR for the trace fix", Magnitude: 0.4, Model: "codex", Route: "codex.spark.full", Gate: "pass", AIR: sk()},
 		{TS: "2026-06-26T18:40:45Z", Role: "lane-beta", Kind: "refusal", Prov: "model", Summary: "push blocked: authorization-packet-validator", Magnitude: 0.5, Model: "codex", Route: "codex.spark.full", Gate: "deny", AIR: sk()},
+		{TS: "2026-06-26T18:40:52Z", Role: "cc-reins", Kind: "reasoning", Prov: "model", Summary: "re-running the validator preflight with the corrected packet role", Magnitude: 0.3, Model: "claude-opus-4", Route: "claude.code.full", Streaming: true, Tokens: 142, AIR: sk()}, // in-flight → two-frame broadcast (E4.6 §3.4)
 	}
 	blk := func(kind, prov, summary string, magnitude float64, meta string) grammar.TurnBlock {
 		return grammar.TurnBlock{Kind: kind, Prov: prov, Summary: summary, Magnitude: magnitude, Meta: meta,

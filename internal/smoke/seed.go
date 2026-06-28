@@ -76,6 +76,7 @@ func SeedModel(w, h int) model.Model {
 		{Role: "cc-reins", Kind: "tool_call", Summary: "Bash(go test ./...)", Prov: "structured", Model: "claude-opus-4"},
 		{Role: "cc-reins", Kind: "tool_result", Summary: "ok internal/grammar", Prov: "untrusted"},
 		{Role: "cc-reins", Kind: "assistant", Summary: "the test is widened + green", Prov: "model", Model: "claude-opus-4"},
+		{Role: "cc-reins", Kind: "reasoning", Summary: "now auditing the adjacent fold path for the same race", Prov: "model", Model: "claude-opus-4", Streaming: true, Tokens: 142}, // in-flight → two-frame broadcast (E4.6)
 	}
 
 	// Give each item the AIR map the live READ API would (the allowlisted structural fields air;

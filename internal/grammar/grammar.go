@@ -279,6 +279,8 @@ type Turn struct {
 	Model     string            `json:"model"`     // served model ("x via y") (skeleton)
 	Route     string            `json:"route"`     // route_id (skeleton)
 	Gate      string            `json:"gate"`      // pass|deny|pending|"" — gate_output result (skeleton)
+	Streaming bool              `json:"streaming"` // in-flight (still generating) — drives the two-frame broadcast (E4.6)
+	Tokens    int               `json:"tokens"`    // tokens produced so far (the [N tok] shape; skeleton magnitude)
 	AIR       map[string]string `json:"air"`
 }
 
