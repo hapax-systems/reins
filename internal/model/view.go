@@ -509,12 +509,9 @@ func (m Model) viewVital(w int) string {
 			dot + lbl("M") + grammar.C("org", fmt.Sprintf("%d major", maj)) + dot + lbl("C") + grammar.C("red", fmt.Sprintf("%d crit", crit))
 	}
 	splitChip := ""
-	if m.splitContextActive() {
+	if m.sessionSplit() {
+		// Inc-5 only-split: the four session-anchored pages always compose sessions │ drilldown.
 		splitChip = grammar.C("mut", "  │  ") + grammar.C("yel", "split:ctx")
-	} else if m.SplitContext && !m.composesViaAlgebra() {
-		// only show the queued-split chip on non-migrated pages; an algebra-owned page is ALREADY split,
-		// so "split:wide" (legacy split queued) would be a lie.
-		splitChip = grammar.C("mut", "  │  ") + grammar.C("mut", "split:wide")
 	}
 	r1 := " " + mode + grammar.C("mut", "  │  tasks ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Tasks))) +
 		grammar.C("mut", " = ") + counts + grammar.C("mut", "  │  events ") + grammar.C("brt", fmt.Sprintf("%d", len(m.Events))) +
@@ -645,7 +642,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 	case PageEpistemics:
 		// Inc 3 TRANSFORM — SELF-ANCHORED like tasks/events (own EpiFocus). The legacy session-frozen
 		// split-pair (sessions │ evidence) is ABOLISHED: the primary IS the posture list, [j/k] moves the
-		// epistemic row natively (composesViaAlgebra → splitContextActive false → the updateSplitSource
+		// epistemic row natively (composesViaAlgebra → not session-anchored → the updateSplitSource
 		// intercept is skipped → j falls through to epistemicFocusTo), and the secondary is the focused
 		// row's evidence path. The connector is the EMERGENT row-to-siblings relation, never authored.
 		if len(m.epistemicRows()) == 0 {
@@ -656,7 +653,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedEpistemicPath(pw) }},
 			0.62, m.epistemicsEmergentRelation())
 	case PageTraces:
-		// Inc 3 TRANSFORM — SELF-ANCHORED like events/tasks (own TFocus, ungated by splitContextActive).
+		// Inc 3 TRANSFORM — SELF-ANCHORED like events/tasks (own TFocus, ungated by the session-anchored split).
 		// The legacy session-frozen reference split (sessions │ trace feed) is ABOLISHED: the primary IS
 		// the trace list, [j/k] moves the trace row natively, and the secondary is the focused trace's
 		// authored spend/latency detail (the narrow list clips trailing cost). Connector = shared model.
@@ -732,10 +729,10 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
 		// the primary IS the sessions list and the session-source nav/binding must STAY. We therefore only
-		// swap the legacy splitContextBody RENDER for the algebra fold (gated on splitContextActive, so
-		// splitContextActive/commandSelectionPage/nav are unchanged — no silent binding inversion), and
+		// swap the legacy splitContextBody RENDER for the algebra fold (gated on the session-anchored split, so
+		// the session-anchored split/commandSelectionPage/nav are unchanged — no silent binding inversion), and
 		// abolish the authored split-pair: the connector is the honest literal self-elucidation join.
-		if !m.splitContextActive() {
+		if !m.sessionSplit() {
 			return nil // narrow / split-off → the legacy reference body (caps is not yet only-split)
 		}
 		div := grammar.C("border", "│")
@@ -745,12 +742,12 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			0.55, layout.Connector{Glyph: div, Relation: "selected lane → capability fit"})
 	case PageYard, PageReadiness, PageIntake:
 		// Inc 2 — the SESSION-ANCHORED drilldowns. Same safe recipe as caps: swap the legacy
-		// splitContextBody RENDER for the algebra fold (gated on splitContextActive → session-source
+		// splitContextBody RENDER for the algebra fold (gated on the session-anchored split → session-source
 		// nav/binding unchanged). The secondary is splitContextPane (the per-page drilldown dispatcher
 		// the legacy split already used, including the pinned card via splitReferenceSlice). The primary
 		// is splitSessionsPane, so these projection pages need NO own row-list / custom spec — the
 		// session IS the cursor (yard anchored session-per the playbook, operator-confirmed).
-		if !m.splitContextActive() {
+		if !m.sessionSplit() {
 			return nil // narrow / split-off → the legacy reference body
 		}
 		rel := map[int]string{
@@ -767,8 +764,8 @@ func (m Model) composePage(w, h int) *layout.Spec {
 	case PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces, PageDomains, PageLifecycles:
 		// Inc 4 — DEMOTE-TO-DOOR. These engine/reference pages have NO real session join, so when the
 		// legacy split would session-anchor them (the anti-pattern), render the honest catalog │ ambient
-		// door instead. Gated on splitContextActive (off → referenceBody already does catalog│context).
-		if !m.splitContextActive() {
+		// door instead. Gated on the session-anchored split (off → referenceBody already does catalog│context).
+		if !m.sessionSplit() {
 			return nil
 		}
 		return m.specDoor()
@@ -963,7 +960,7 @@ func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, r
 // contract/source state (referenceContextPane), a constant "ambient context" relation that asserts
 // nothing it cannot back. This swaps the session-frozen splitContextBody anti-pattern (a help page
 // anchored on a session) for the only-split door; referenceBody already renders this same
-// catalog│context shape when SplitContext is off.
+// catalog│context shape (no session-frozen anchor).
 func (m Model) specDoor() *layout.Spec {
 	div := grammar.C("border", "│")
 	return layout.Split(
@@ -1670,7 +1667,7 @@ func (m Model) splitRelation() SplitPairDef {
 }
 
 func (m Model) targetRowFocusActive() bool {
-	if !m.splitContextActive() {
+	if !m.sessionSplit() {
 		return true
 	}
 	rel := m.splitRelation()
@@ -1678,7 +1675,7 @@ func (m Model) targetRowFocusActive() bool {
 }
 
 func (m Model) passiveReferenceSplitActive() bool {
-	if !m.splitContextActive() {
+	if !m.sessionSplit() {
 		return false
 	}
 	rel := m.splitRelation()
@@ -1874,7 +1871,7 @@ func (m Model) splitSessionsPane(w, h int) string {
 	for i := start; i < start+visible && i < len(m.Sessions); i++ {
 		rendered++
 		s := m.Sessions[i]
-		if i == m.SFocus && (m.Page == PageSessions || m.splitContextActive()) && m.Mode == ModeYank {
+		if i == m.SFocus && (m.Page == PageSessions || m.sessionSplit()) && m.Mode == ModeYank {
 			b.WriteString(fitWidth(sessionPickRow(s, m.AIR, m.Sel.Field), w) + "\n")
 			continue
 		}
@@ -2329,7 +2326,7 @@ func (m Model) referenceContent(w int) string {
 					b.WriteString(summary)
 					b.WriteString(rule + "\n")
 				}
-				selectedBeforeRail := !m.splitContextActive() && !m.SuppressSplitPinned
+				selectedBeforeRail := !m.sessionSplit() && !m.SuppressSplitPinned
 				if selectedBeforeRail {
 					b.WriteString(m.renderDynamicsSelectedElement(w))
 					b.WriteString(rule + "\n")
@@ -2803,7 +2800,7 @@ func (m Model) renderEpistemicsProjection(w int) string {
 		b.WriteString(rule + "\n")
 	}
 	rowControl := "[j/k] moves the row; rows are derived projections, not source excerpts"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		rowControl = "[n/p] moves the evidence target; rows are derived projections, not source excerpts"
 	}
 	writeSectionHeader(&b, w, "POSTURE ROWS", rowControl, fmt.Sprintf("%d rows", len(rows)))
@@ -2965,7 +2962,7 @@ func (m Model) renderSelectedEpistemicPath(w int) string {
 	selected := rows[idx]
 	var b strings.Builder
 	controls := "[j/k] evidence focus · [J/K] scroll"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		controls = m.splitNavHint(m.splitRelation(), false)
 	}
 	writeSectionHeader(&b, w, "SELECTED EVIDENCE PATH", fmt.Sprintf("row %d/%d; evidence, not authority", idx+1, len(rows)), selected.Family)
@@ -3131,7 +3128,7 @@ func (m Model) dynamicsFocusRows() []dynamicsFocusRow {
 }
 
 func (m Model) dynamicsCompactFirstViewport() bool {
-	return !m.splitContextActive() && !m.SuppressSplitPinned && m.Height < 65
+	return !m.sessionSplit() && !m.SuppressSplitPinned && m.Height < 65
 }
 
 func (m Model) renderDynamicsGraphRail(w, scale int) string {
@@ -3290,7 +3287,7 @@ func (m Model) renderDynamicsSelectedElement(w int) string {
 	row := rows[idx]
 	var b strings.Builder
 	control := "[j/k] focus, [J/K] scroll, [E]/[Enter] epistemics"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		control = "lane anchor active; [n/p] map focus, [J/K] scroll, [E] epistemics"
 	}
 	writeSectionHeader(&b, w, "SELECTED MAP ELEMENT", fmt.Sprintf("row %d/%d; %s", idx+1, len(rows), control), row.Kind)
@@ -3326,13 +3323,13 @@ func (m Model) renderDynamicsSelectedElement(w int) string {
 		writeWrappedKV(&b, "tags", row.Tags, "mut", w)
 	}
 	writeWrappedKV(&b, "detail", row.Detail, "mut", w)
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		b.WriteString(m.renderDynamicsReferencePaths(row, w))
 	}
 	if neighborhood := m.renderDynamicsNeighborhood(row, w); neighborhood != "" {
 		b.WriteString(neighborhood)
 	}
-	if m.splitContextActive() || m.Height >= 44 {
+	if m.sessionSplit() || m.Height >= 44 {
 		b.WriteString(m.renderDynamicsEpistemicBridge(row, w))
 	} else {
 		b.WriteString(m.renderDynamicsCompactBridge(row, w))
@@ -4031,7 +4028,7 @@ func (m Model) renderDynamicsEpistemicBridge(row dynamicsFocusRow, w int) string
 	var b strings.Builder
 	writeSectionHeader(&b, w, "EPISTEMIC BRIDGE", "why this map cell matters, what evidence supports it, and what remains unproven", "evidence bridge")
 	openHint := "[E]/[Enter]"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		openHint = "[E]"
 	}
 	writeWrappedKV(&b, "meaning", dynamicsFocusMeaning(row), "2nd", w)
@@ -4744,7 +4741,7 @@ func dynamicsEdgeSourceRefLabelsForAir(e grammar.Edge, air bool) []string {
 func (m Model) dynamicsRenderScale(w int) (int, string) {
 	// Fit the map to a NARROW render width regardless of the (abolished, for dynamics) session-frozen
 	// split: the migrated dynamics primary is itself a sub-full-width pane, so the fit must key off the
-	// actual render width, not splitContextActive().
+	// actual render width, not the session-anchored split.
 	if m.DynScale == 0 && w < 130 {
 		return 2, "all→domain fit"
 	}
@@ -5211,7 +5208,7 @@ func (m Model) renderYardCockpit(w int) string {
 		m.readSourceChip("dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark, m.DynamicsSeq) + "\n")
 	b.WriteString(rule + "\n")
 
-	if m.splitContextActive() && !m.SuppressSplitPinned {
+	if m.sessionSplit() && !m.SuppressSplitPinned {
 		b.WriteString(m.renderSelectedYardLane(w) + "\n")
 		b.WriteString(rule + "\n")
 	}
@@ -5966,7 +5963,7 @@ func (m Model) renderReadinessProjection(w int) string {
 		m.readSourceChip("dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark, m.DynamicsSeq) + "\n")
 	b.WriteString(rule + "\n")
 
-	if m.splitContextActive() && !m.SuppressSplitPinned {
+	if m.sessionSplit() && !m.SuppressSplitPinned {
 		b.WriteString(m.renderSelectedReadinessGate(w) + "\n")
 		b.WriteString(rule + "\n")
 	}
@@ -6166,7 +6163,7 @@ func (m Model) renderIntakeProjection(w int) string {
 		m.readSourceChip("sessions", len(m.Sessions), m.SessionsDark, m.SessionsSeq) + "\n")
 	bucketKeys := "[j/k]bucket"
 	detailKey := "[Enter]detail"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		bucketKeys = "[n/p]bucket"
 		detailKey = "[Enter]source detail"
 	}
@@ -6174,7 +6171,7 @@ func (m Model) renderIntakeProjection(w int) string {
 		grammar.C("pri", m.intakeFilterLabel()) + grammar.C("mut", fmt.Sprintf(" · %d/%d buckets · %s · [s/S]source · %s", len(m.visibleIntakeRows()), len(m.Intake.Rows), bucketKeys, detailKey)) + "\n")
 	b.WriteString(rule + "\n")
 
-	if m.splitContextActive() && !m.SuppressSplitPinned {
+	if m.sessionSplit() && !m.SuppressSplitPinned {
 		b.WriteString(m.renderSelectedIntakeLane(w) + "\n")
 		b.WriteString(rule + "\n")
 	}
@@ -6318,7 +6315,7 @@ func (m Model) renderSelectedIntakeBucket(w int) string {
 	writeSectionHeader(&b, w, "SELECTED BUCKET", "focused intake bucket; source filter controls row set", "focused intake bucket")
 	writeWrappedKV(&b, "cursor", fmt.Sprintf("%d/%d", m.IFocus+1, total), "2nd", w)
 	legalNext := "[Enter] aggregate detail · [s/S] source filter · :intent show-route"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		legalNext = "[n/p] bucket · [E] evidence path · [s/S] source filter · [Enter] source detail"
 	}
 	if w < 118 {
@@ -7107,7 +7104,7 @@ func (m Model) renderCapabilityProjection(w int) string {
 		b.WriteString(rule + "\n")
 	}
 
-	if m.splitContextActive() && !m.SuppressSplitPinned {
+	if m.sessionSplit() && !m.SuppressSplitPinned {
 		b.WriteString(m.renderSelectedCapabilityFit(w) + "\n")
 		b.WriteString(rule + "\n")
 	}
@@ -7783,7 +7780,7 @@ func (m Model) capabilityFocusScrollOffset(focus int) int {
 		}
 		line++ // rule
 	}
-	if m.splitContextActive() && !m.SuppressSplitPinned {
+	if m.sessionSplit() && !m.SuppressSplitPinned {
 		line += 2 // selected lane fit + rule
 	}
 	if len(m.Capabilities.Sources) > 0 {
@@ -9694,7 +9691,7 @@ func (m Model) renderIntentReview(w int) string {
 }
 
 func (m Model) intentReviewSubject() string {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if s, ok := m.FocusedSession(); ok {
 			role := sessionFieldValueForAir(s, "role", m.AIR)
 			if strings.TrimSpace(role) == "" {
@@ -10064,7 +10061,7 @@ func (m Model) referenceScrollMax() int {
 		return max
 	}
 	leftW, _, _ := m.referenceLayoutWidths(w)
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if _, rightW, ok := splitContextWidths(w); ok {
 			leftW = rightW
 		}
@@ -10073,7 +10070,7 @@ func (m Model) referenceScrollMax() int {
 	if midH < 1 {
 		midH = 1
 	}
-	if m.splitContextActive() && m.Page == PageCaps {
+	if m.sessionSplit() && m.Page == PageCaps {
 		max := len(m.capabilitySplitPaneLines(leftW)) - m.splitContextBodyRows(midH)
 		if max < 0 {
 			return 0
@@ -10081,7 +10078,7 @@ func (m Model) referenceScrollMax() int {
 		return max
 	}
 	lines := m.referenceLines(leftW)
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if pinned, ok := m.splitPinnedContextBlock(leftW); ok {
 			midH -= len(strings.Split(strings.TrimRight(pinned, "\n"), "\n")) + 1
 			if midH < 1 {
@@ -10138,7 +10135,7 @@ func (m Model) referenceScrollLabel() string {
 		return fmt.Sprintf("%d-%d/%d", off+1, end, lines)
 	}
 	leftW, _, _ := m.referenceLayoutWidths(w)
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if _, rightW, ok := splitContextWidths(w); ok {
 			leftW = rightW
 		}
@@ -10154,7 +10151,7 @@ func (m Model) referenceScrollLabel() string {
 		visible = 1
 	}
 	linesForCount := m.referenceLines(leftW)
-	if m.splitContextActive() && m.Page == PageCaps {
+	if m.sessionSplit() && m.Page == PageCaps {
 		visible = m.splitContextBodyRows(visible)
 		linesForCount = m.capabilitySplitPaneLines(leftW)
 		lines = len(linesForCount)
@@ -10164,7 +10161,7 @@ func (m Model) referenceScrollLabel() string {
 		}
 		return fmt.Sprintf("%d-%d/%d", off+1, end, lines)
 	}
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if pinned, ok := m.splitPinnedContextBlock(leftW); ok {
 			visible -= len(strings.Split(strings.TrimRight(pinned, "\n"), "\n")) + 1
 			if visible < 1 {
@@ -10251,7 +10248,7 @@ func (m Model) referenceContextHeading() string {
 	case PageIntake:
 		return "observation context"
 	case PageCaps:
-		if m.splitContextActive() && !m.targetRowFocusActive() {
+		if m.sessionSplit() && !m.targetRowFocusActive() {
 			return "lane capability fit"
 		}
 		if row, ok := m.FocusedCapabilityRow(); ok {
@@ -10421,7 +10418,7 @@ func (m Model) referenceContextRows() []contextRow {
 		}
 	case PageCaps:
 		total, gaps := m.capabilityTitleCounts()
-		if m.splitContextActive() && !m.targetRowFocusActive() {
+		if m.sessionSplit() && !m.targetRowFocusActive() {
 			if s, ok := m.FocusedSession(); ok {
 				fit, fitTok := m.selectedLaneCapabilityPosture(s)
 				return []contextRow{
@@ -10680,7 +10677,7 @@ func (m Model) referenceLegalRows() []contextRow {
 	if ok {
 		prevID, nextID = ":"+prev.ID, ":"+next.ID
 	}
-	if m.splitContextActive() && !m.targetRowFocusActive() {
+	if m.sessionSplit() && !m.targetRowFocusActive() {
 		rel := m.splitRelation()
 		rows := []contextRow{
 			{"[←/→]", prevID + " / " + nextID, "yel"},
@@ -10729,7 +10726,7 @@ func (m Model) referenceLegalRows() []contextRow {
 			{"[:]", "command + template refs", "yel"},
 			{"[?]", "legend", "yel"},
 		}
-		if m.splitContextActive() {
+		if m.sessionSplit() {
 			rows = append([]contextRow{{"[J/K]", "scroll context", "yel"}}, rows...)
 		}
 		return rows
@@ -11230,7 +11227,7 @@ func (m Model) eventsListBody(w, h int) string {
 }
 
 func (m Model) eventContextPane(w int) string {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		return m.sessionEventContextPane(w)
 	}
 	ev, ok := m.FocusedEvent()
@@ -12063,7 +12060,7 @@ func (m Model) tasksListBody(w, h int) string {
 func (m Model) taskWorkDomainPane(w int) string {
 	t, ok := m.FocusedTask()
 	source := "selected task, constraints, legal next moves"
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		s, hasSession := m.FocusedSession()
 		if !hasSession {
 			return grammar.C("mut", " work domain\n\n no selected session\n")
@@ -12103,7 +12100,7 @@ func (m Model) taskWorkDomainPane(w int) string {
 	b.WriteString(" " + grammar.C("brt", "WORK DOMAIN") + grammar.C("mut", "  "+source) + "\n")
 	b.WriteString(rule + "\n")
 	line("task", id, "pri")
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if s, ok := m.FocusedSession(); ok {
 			line("source", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 		}
@@ -12651,7 +12648,7 @@ func (m Model) viewFloor(w int) string {
 		lens = grammar.C("fch", "AIR ▮allowlist")
 	}
 	focus := grammar.C("mut", "—")
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if s, ok := m.FocusedSession(); ok {
 			ref := grammar.Redact(s.AIR, "role", s.Role, m.AIR)
 			if r := []rune(ref); len(r) > 24 {
@@ -12742,7 +12739,7 @@ func (m Model) viewFloor(w int) string {
 	globals := grammar.C("yel", "[:]") + "cmd "
 	if m.Mode == ModeYank {
 		globals += grammar.C("yel", "[[/]]") + "win "
-	} else if m.splitContextActive() {
+	} else if m.sessionSplit() {
 		globals += grammar.C("yel", "[←/→]") + "ctx "
 	} else {
 		globals += grammar.C("yel", "[←/→]") + "win "
@@ -12849,7 +12846,7 @@ func (m Model) commandInputDisplay() string {
 
 func (m Model) floorActions(w int) string {
 	var parts []string
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		if len(m.Sessions) > 0 {
 			compact := w <= 120
 			rel := m.splitRelation()
@@ -13148,7 +13145,7 @@ type slackSlot string
 
 const (
 	slackSlotWideContext   slackSlot = "wide-context"
-	slackSlotSplitContext  slackSlot = "split-context"
+	slackSlotSessionContext  slackSlot = "split-context"
 	slackSlotReferenceMain slackSlot = "reference-main"
 )
 
@@ -13383,7 +13380,7 @@ func (m Model) slackRowsForPage(w, maxRows int, slot slackSlot) []string {
 	b.WriteString(rule + "\n")
 	if slot == slackSlotReferenceMain {
 		writeSectionHeader(&b, w, "SCREEN SLACK", "relationships, source status, and available controls", "relations + controls")
-	} else if slot == slackSlotSplitContext {
+	} else if slot == slackSlotSessionContext {
 		writeSectionHeader(&b, w, "CONTEXT SLACK", "relationship, source status, and lifecycle totals", "relationship + totals")
 		rel := m.splitRelation()
 		writeWrappedKV(&b, "pair", rel.RelationLabel(), "org", w)
@@ -13493,7 +13490,7 @@ func (m Model) genericSlackRows(w int) []string {
 		len(m.Events), m.EventsSeq, len(m.Tasks), m.TasksSeq, len(m.Sessions), m.SessionsSeq,
 		len(m.Capabilities.Rows), m.CapabilitiesSeq, len(m.Domains.Rows), m.DomainsSeq,
 		len(m.Dynamics.AtResolution(dynScale).Nodes), m.DynamicsSeq), "2nd", w)
-	showLaneContext := m.splitContextActive() || m.Page == PageSessions || m.Page == PageYard
+	showLaneContext := m.sessionSplit() || m.Page == PageSessions || m.Page == PageYard
 	if s, ok := m.FocusedSession(); ok && showLaneContext {
 		writeWrappedKV(&b, "lane", fmt.Sprintf("%s · events:%d · cap-routes:%d",
 			strings.Join(nonEmptyParts([]string{sessionFieldValueForAir(s, "role", m.AIR), sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "),
@@ -13738,7 +13735,7 @@ func (m Model) capabilitySlackRows(w int) []string {
 		}
 		writeWrappedKV(&b, "class gaps", strings.Join(parts, " · "), countWarnToken(gaps), w)
 	}
-	if m.splitContextActive() && !m.targetRowFocusActive() {
+	if m.sessionSplit() && !m.targetRowFocusActive() {
 		if s, ok := m.FocusedSession(); ok {
 			fit, fitTok := m.selectedLaneCapabilityPosture(s)
 			writeWrappedKV(&b, "selected lane", fmt.Sprintf("%s · %s · readiness=%s", sessionFieldValueForAir(s, "role", m.AIR), sessionFieldValueForAir(s, "platform", m.AIR), sessionFieldValueForAir(s, "readiness", m.AIR)), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), w)

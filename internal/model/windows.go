@@ -199,7 +199,7 @@ var windowRegistry = []WindowDef{
 	{Key: "?", ID: "legend", Name: "legend", Short: "legend", Page: PageLegend, Scope: "engine", Lifecycle: "engine", Kind: "reference"},
 }
 
-var splitPairRegistry = []SplitPairDef{
+var sessionSplitDefs = []SplitPairDef{
 	{Page: PageEvents, Source: "sessions", Target: "events", Join: "actor/task", Mode: splitModeLinked, SourceCursor: splitSourceSessionRow, TargetReactivity: splitTargetLinked, TargetCursor: splitTargetNone, SourceOwnedVerbs: splitSessionVerbs(), Contract: "lane focus brushes event neighborhood"},
 	{Page: PageTasks, Source: "sessions", Target: "task work", Join: "claimed_task", Mode: splitModeLinked, SourceCursor: splitSourceSessionRow, TargetReactivity: splitTargetLinked, TargetCursor: splitTargetNone, SourceOwnedVerbs: splitSessionVerbs(), Contract: "lane focus resolves claimed task"},
 	{Page: PageSessions, Source: "sessions", Target: "lane readiness", Join: "role", Mode: splitModeLinked, SourceCursor: splitSourceSessionRow, TargetReactivity: splitTargetLinked, TargetCursor: splitTargetNone, SourceOwnedVerbs: splitSessionVerbs(), Contract: "lane focus explains readiness constraints"},
@@ -316,13 +316,13 @@ func registeredWindows() []WindowDef {
 }
 
 func registeredSplitPairs() []SplitPairDef {
-	out := make([]SplitPairDef, len(splitPairRegistry))
-	copy(out, splitPairRegistry)
+	out := make([]SplitPairDef, len(sessionSplitDefs))
+	copy(out, sessionSplitDefs)
 	return out
 }
 
 func splitPairForPage(page int) (SplitPairDef, bool) {
-	for _, s := range splitPairRegistry {
+	for _, s := range sessionSplitDefs {
 		if s.Page == page {
 			return s, true
 		}
@@ -332,7 +332,7 @@ func splitPairForPage(page int) (SplitPairDef, bool) {
 
 func splitPairSummary() string {
 	linked, reference := 0, 0
-	for _, s := range splitPairRegistry {
+	for _, s := range sessionSplitDefs {
 		if s.Reactive() {
 			linked++
 		} else {

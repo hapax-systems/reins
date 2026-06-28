@@ -10,7 +10,7 @@ import (
 
 func relationalPageModel() Model {
 	m := New("REINS")
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageRelational, true
+	m.Width, m.Height, m.Page = 180, 44, PageRelational
 	m = m.FoldSessions([]grammar.Session{
 		{Role: "cc-secret-lane"},
 		{Role: "cc-beta"},
@@ -30,7 +30,7 @@ func TestRelationalComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageRelational must compose via the view algebra")
 	}
-	if m.splitContextActive() {
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("PageRelational must not activate the legacy session-frozen split")
 	}
 	if m.commandSelectionPage() != PageRelational {

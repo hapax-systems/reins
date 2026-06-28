@@ -18,7 +18,7 @@ func loopsAIROK() map[string]string {
 
 func loopsPageModel(edges []grammar.Edge, nodes ...grammar.Node) Model {
 	m := New("REINS").FoldDynamics(grammar.Graph{Nodes: nodes, Edges: edges}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageLoops, true
+	m.Width, m.Height, m.Page = 180, 44, PageLoops
 	return m
 }
 
@@ -33,7 +33,7 @@ func TestLoopsComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageLoops must compose via the view algebra")
 	}
-	if m.splitContextActive() {
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("PageLoops must not activate the legacy session-frozen split")
 	}
 	if m.commandSelectionPage() != PageLoops {

@@ -693,7 +693,8 @@ func main() {
 			case a == "--air":
 				m.AIR = true
 			case a == "split":
-				m.SplitContext = true
+				// Inc-5 only-split: the split is structural now (always on for the session-anchored pages);
+				// this legacy drive directive is a no-op, kept so older drive specs do not error.
 			case strings.HasPrefix(a, "size:"):
 				if w, h, ok := parseProbeSize(a); ok {
 					m.Width, m.Height = w, h

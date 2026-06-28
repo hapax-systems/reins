@@ -155,7 +155,7 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 		}(),
 		"split-readiness": func() Model {
 			m := wide
-			m.Page, m.SplitContext = PageReadiness, true
+			m.Page = PageReadiness
 			return m
 		}(),
 		"intake": func() Model {
@@ -165,7 +165,7 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 		}(),
 		"split-intake": func() Model {
 			m := wide
-			m.Page, m.SplitContext = PageIntake, true
+			m.Page = PageIntake
 			return m
 		}(),
 		"intake-door": func() Model {
@@ -180,7 +180,7 @@ func TestNoAirDeniedValueEverLeaks(t *testing.T) {
 		}(),
 		"split-capabilities": func() Model {
 			m := wide
-			m.Page, m.SplitContext = PageCaps, true
+			m.Page = PageCaps
 			return m
 		}(),
 		"traces":      func() Model { m := base; m.Page = PageTraces; return m }(),

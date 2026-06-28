@@ -460,8 +460,8 @@ func TestWindowRegistrySeparatesEngineAndInstanceLifecycleWindows(t *testing.T) 
 }
 
 // split-pairs are being ABOLISHED (operator ruling 2026-06-27): any split is an implicit pair, the
-// pane-to-pane relation is EMERGENT (relate.Derive), and the splitPairRegistry/SplitPairDef/
-// splitContextActive machinery retires at migration Inc 5. Algebra-composed pages (coordinator,
+// pane-to-pane relation is EMERGENT (relate.Derive), and the sessionSplitDefs/SplitPairDef/
+// the session-anchored split machinery retires at migration Inc 5. Algebra-composed pages (coordinator,
 // dispatch, …) declare NO authored split-pair, so the former "every registered window must declare
 // split-pair semantics" invariant is RETIRED — it perpetuated the model being abolished. This now only
 // checks the REMAINING legacy entries are well-formed while they exist; the registry shrinks toward
@@ -636,7 +636,7 @@ func TestSplitControlMatrixMatchesRegistry(t *testing.T) {
 			{RowID: "map-node:node-a", Family: "map-node", SubjectKind: "map-node", SubjectRef: "node-a", Status: "observed", AIR: map[string]string{"row_id": "ok", "family": "ok", "subject_kind": "ok", "subject_ref": "ok", "status": "ok"}},
 			{RowID: "map-node:node-b", Family: "map-node", SubjectKind: "map-node", SubjectRef: "node-b", Status: "observed", AIR: map[string]string{"row_id": "ok", "family": "ok", "subject_kind": "ok", "subject_ref": "ok", "status": "ok"}},
 		}}, false)
-	base.Width, base.Height, base.SplitContext = 220, 42, true
+	base.Width, base.Height = 220, 42
 
 	for _, pair := range registeredSplitPairs() {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
@@ -646,7 +646,7 @@ func TestSplitControlMatrixMatchesRegistry(t *testing.T) {
 				return // Inc-5: only the four session-anchored pages use the legacy split-control matrix;
 				// algebra-owned + reference/door pages self-compose (the registry entry is now vestigial)
 			}
-			if !m.splitContextActive() {
+			if !isSessionAnchoredPage(m.Page) {
 				t.Fatalf("split should be active for %s", pageLabel(pair.Page))
 			}
 			nav := ansi.Strip(m.splitNavHint(pair, false))
@@ -873,7 +873,7 @@ func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 			LifecycleID: "sdlc", State: "source_backed", Posture: "source-backed", Plant: "trainyard", Scope: "tenant", AuthorityCeiling: "governed_route_required",
 			AIR: map[string]string{"lifecycle_id": "ok", "state": "ok", "posture": "ok", "plant": "ok", "scope": "ok", "authority_ceiling": "ok"},
 		}}}, false)
-	base.Width, base.Height, base.SplitContext = 220, 38, true
+	base.Width, base.Height = 220, 38
 
 	for _, pair := range registeredSplitPairs() {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
@@ -1508,7 +1508,7 @@ func TestReferenceContextRailUsesSemanticHeading(t *testing.T) {
 			AIR: map[string]string{"capability_id": "ok", "status": "ok", "authority": "ok", "capability_class": "ok", "surface_family": "ok", "route_count": "ok", "ok_count": "ok", "blocked_count": "ok", "evidence_count": "ok", "source_ref_labels": "ok"}},
 	}}
 	m := New("REINS").FoldCapabilities(caps, false)
-	m.Width, m.Height, m.Page = 220, 42, PageCaps
+	m.Width, m.Height, m.Page = 150, 42, PageCaps // medium: session-anchored split is off → semantic projection rail
 	if got := m.referenceContextHeading(); got != "capability class" {
 		t.Fatalf("selected class row should label context as capability class, got %q", got)
 	}
@@ -1689,7 +1689,10 @@ func TestSourceBackedDomainCursorDrivesRailAndFloor(t *testing.T) {
 	}
 }
 
-func TestSplitContextPinsSessionsWhileCyclingContext(t *testing.T) {
+// Inc-5 only-split: the session-anchored caps page ALWAYS composes sessions │ capability-fit (no toggle),
+// and cycling right to the migrated PageDynamics renders dynamics' OWN algebra body (map │ focused
+// element), never the abolished session-frozen "sessions left" layout.
+func TestSessionAnchoredCapsSplitsAndCyclingToDynamicsSelfAnchors(t *testing.T) {
 	m := New("REINS").
 		FoldTasks([]grammar.Task{{TaskID: "task-a", AIR: map[string]string{"task_id": "ok"}}}, false).
 		FoldSessions([]grammar.Session{{
@@ -1697,30 +1700,20 @@ func TestSplitContextPinsSessionsWhileCyclingContext(t *testing.T) {
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
 	m.Width, m.Height, m.Page = 220, 44, PageCaps
-	m = step(m, "|")
-	if !m.SplitContext || !strings.Contains(m.Status, "split context on") {
-		t.Fatalf("[|] should enable split context, split=%v status=%q", m.SplitContext, m.Status)
-	}
-	floor := ansi.Strip(m.viewFloor(m.Width))
-	if !strings.Contains(floor, "split context on") || !strings.Contains(floor, "press [:] command line") {
-		t.Fatalf("status flashes must keep the command bar affordance visible:\n%s", floor)
-	}
 	v := ansi.Strip(m.View())
 	for _, want := range []string{"split:ctx", "split sessions", "cx-p0", "SELECTED LANE FIT", "CAPABILITY MATCH", "▶ claim   cx-p0"} {
 		if !strings.Contains(v, want) {
-			t.Fatalf("split context missing %q:\n%s", want, v)
+			t.Fatalf("session-anchored caps must ALWAYS render the split (no toggle), missing %q:\n%s", want, v)
 		}
 	}
 
-	// Cycle right to PageDynamics. The SplitContext flag PERSISTS, but dynamics is Inc-3 MIGRATED: it is
-	// self-anchored and composes its OWN algebra split (map │ focused element), no longer the session-
-	// frozen "sessions left" layout. (Session-pinning during cycling is still demonstrated by the caps
-	// half above, which remains an Inc-2 session-anchored page.)
+	// Cycle right to PageDynamics: it is self-anchored and composes its OWN algebra split (map │ focused
+	// element), never the session-frozen "sessions left" layout.
 	m = step(m, "right")
-	if !m.SplitContext || m.Page != PageDynamics {
-		t.Fatalf("window cycling should change the context pane while preserving split, page=%d split=%v", m.Page, m.SplitContext)
+	if m.Page != PageDynamics {
+		t.Fatalf("window cycling should advance to dynamics, page=%d", m.Page)
 	}
-	if m.splitContextActive() {
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("cycling to the migrated dynamics page must not session-freeze it")
 	}
 	flat := flattenSplitColumns(ansi.Strip(m.View()))
@@ -1744,7 +1737,7 @@ func TestSplitContextSourceVerbsAreLabeledAndOwnedBySessionPane(t *testing.T) {
 			Source: "request_state", Kind: "request_attention", Status: "attention", Severity: "warn", Count: 1,
 			AIR: map[string]string{"source": "ok", "kind": "ok", "status": "ok", "severity": "ok", "count": "ok"},
 		}}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 42, PageIntake, true
+	m.Width, m.Height, m.Page = 220, 42, PageIntake
 
 	floor := ansi.Strip(m.viewFloor(m.Width))
 	for _, want := range []string{"[↵]src-detail", "[y]src-yank", "[s/S]flt"} {
@@ -1783,9 +1776,9 @@ func TestSplitContextFooterCompactsActionsBeforeClipping(t *testing.T) {
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false).
 		FoldCapabilities(grammar.CapabilitySummary{Rows: rows}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 18, PageCaps, true
-	if !m.splitContextActive() || m.referenceScrollMax() == 0 {
-		t.Fatalf("test requires active split with scrollable right context, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
+	m.Width, m.Height, m.Page = 170, 18, PageCaps
+	if !isSessionAnchoredPage(m.Page) || m.referenceScrollMax() == 0 {
+		t.Fatalf("test requires active split with scrollable right context, split=%v max=%d", isSessionAnchoredPage(m.Page), m.referenceScrollMax())
 	}
 	floor := ansi.Strip(m.viewFloor(m.Width))
 	first := strings.Split(floor, "\n")[0]
@@ -1814,9 +1807,9 @@ func TestSplitFooterDoesNotClipScrollToken(t *testing.T) {
 			Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageCaps, true
-	if !m.splitContextActive() || m.referenceScrollMax() == 0 {
-		t.Fatalf("test requires a scrollable session-anchored split, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
+	m.Width, m.Height, m.Page = 180, 16, PageCaps
+	if !isSessionAnchoredPage(m.Page) || m.referenceScrollMax() == 0 {
+		t.Fatalf("test requires a scrollable session-anchored split, split=%v max=%d", isSessionAnchoredPage(m.Page), m.referenceScrollMax())
 	}
 	first := strings.Split(ansi.Strip(m.viewFloor(m.Width)), "\n")[0]
 	if strings.Contains(first, "[J/K]") && !strings.Contains(first, "[J/K]scroll") && !strings.Contains(first, "[J/K]ctx-scroll") {
@@ -1846,7 +1839,7 @@ func TestSplitContextHandlesAggregatedRepeatedRuneKeys(t *testing.T) {
 		{Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 		{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.50, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 	}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageCaps, true
+	m.Width, m.Height, m.Page = 180, 16, PageCaps
 	if max := m.referenceScrollMax(); max < 3 {
 		t.Fatalf("test requires at least three context scroll rows, max=%d", max)
 	}
@@ -1862,19 +1855,24 @@ func TestSplitContextHandlesAggregatedRepeatedRuneKeys(t *testing.T) {
 	}
 }
 
-func TestSplitContextQueuedIndicatorAtNarrowWidth(t *testing.T) {
+// Inc-5 only-split: with the [|] toggle abolished there is no "queued split" state. At narrow width a
+// session-anchored page simply renders its OWN semantic body — it must NOT claim the split is active and
+// the abolished "split:wide" queued chip must never appear (width alone decides; narrow → own body).
+func TestNarrowSessionAnchoredPageShowsBodyNotSplitNorQueuedChip(t *testing.T) {
 	m := New("REINS").FoldSessions([]grammar.Session{{
 		Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 	}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 120, 32, PageCaps, true
+	m.Width, m.Height, m.Page = 120, 32, PageCaps
 
 	v := ansi.Strip(m.View())
-	if strings.Contains(v, "split:ctx") || strings.Contains(v, "split sessions") {
-		t.Fatalf("narrow width should not claim split context is active:\n%s", v)
+	for _, abolished := range []string{"split:ctx", "split sessions", "split:wide"} {
+		if strings.Contains(v, abolished) {
+			t.Fatalf("narrow session-anchored page must not show %q (no toggle, no queued split):\n%s", abolished, v)
+		}
 	}
-	if !strings.Contains(v, "split:wide") {
-		t.Fatalf("narrow width should show split is queued on width, not active:\n%s", v)
+	if strings.TrimSpace(v) == "" {
+		t.Fatalf("narrow caps must still render its own body")
 	}
 }
 
@@ -1889,7 +1887,7 @@ func TestSplitContextQueuedIndicatorAtNarrowWidth(t *testing.T) {
 func TestReferenceRailAdvertisesSingleCatalogScrollNeverAbolishedContextScroll(t *testing.T) {
 	for _, w := range []int{splitContextMinWidth - 1, splitContextMinWidth, splitContextMinWidth + 40} {
 		m := New("REINS")
-		m.Page, m.Width, m.Height, m.SplitContext = PageHelp, w, 34, true
+		m.Page, m.Width, m.Height = PageHelp, w, 34
 		var joined string
 		for _, row := range m.referencePageRailRows() {
 			joined += row.value + "\n"
@@ -1984,7 +1982,7 @@ func TestEventsAlgebraFrameHandlesLongFields(t *testing.T) {
 			{TS: "10:05", Kind: "coord_dispatch.launch_failed", Subject: longSubject, Actor: "cx-other", Summary: longSummary + "-failure", Score: 0.82,
 				AIR: map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "summary": "ok", "score": "ok"}},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 50, PageEvents, true
+	m.Width, m.Height, m.Page = 170, 50, PageEvents
 
 	v := ansi.Strip(m.View())
 	if !strings.Contains(v, "event-subject-alpha-beta-gamma-delta-epsilon-") {
@@ -1998,7 +1996,7 @@ func TestEventsAlgebraFrameHandlesLongFields(t *testing.T) {
 }
 
 // Events composes via the view-algebra (only-split): it always renders as a split (eventsListBody │
-// eventContextPane), the legacy session-frozen split is INERT (splitContextActive()==false), and j
+// eventContextPane), the legacy session-frozen split is INERT (not session-anchored), and j
 // moves the EVENT list cursor NATIVELY — not a frozen session source. This is the migrated behavior
 // that replaces the abolished session-source nav.
 func TestEventsComposeViaAlgebraNativeNav(t *testing.T) {
@@ -2014,12 +2012,11 @@ func TestEventsComposeViaAlgebraNativeNav(t *testing.T) {
 				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok"}},
 		}, false)
 	m.Width, m.Height, m.Page = 220, 44, PageEvents
-	m.SplitContext = true // even with the legacy toggle ON, the algebra page ignores it
 	m.EFocus, m.SFocus = 0, 0
 
 	// the algebra owns the page → the legacy split-context machinery is inert
-	if m.splitContextActive() {
-		t.Fatal("a migrated (algebra) events page must report splitContextActive()==false")
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("a migrated (algebra) events page must report not session-anchored")
 	}
 	if m.composePage(m.Width, m.Height) == nil {
 		t.Fatal("events must compose via the view-algebra (composePage != nil)")
@@ -2093,7 +2090,7 @@ func TestSplitYardUsesSelectedSessionAsTrainyardDrilldown(t *testing.T) {
 			Role: "cx-yard", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: "linked-task", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "claimed_task": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageYard, true
+	m.Width, m.Height, m.Page = 220, 44, PageYard
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -2134,7 +2131,7 @@ func TestSplitYardPinnedContextLeavesBodyRows(t *testing.T) {
 			Role: "cx-yard", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: "linked-task", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "claimed_task": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageYard, true
+	m.Width, m.Height, m.Page = 180, 16, PageYard
 
 	v := ansi.Strip(m.View())
 	// At this very short height (16) the algebra secondary collapses the pinned card to its summary
@@ -2167,7 +2164,7 @@ func TestReferenceCatalogsSelfAnchorTheirOwnFocus(t *testing.T) {
 		{Role: "cx-two", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.55,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 	}, false)
-	base.Width, base.Height, base.SplitContext = 220, 52, true
+	base.Width, base.Height = 220, 52
 
 	for _, tc := range []struct {
 		name  string
@@ -2213,7 +2210,7 @@ func TestSplitReadinessExplainsSelectedLaneGate(t *testing.T) {
 			Role: "cx-ready", Platform: "codex", State: "active", Readiness: "claim", ClaimedTask: "linked-task", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "claimed_task": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageReadiness, true
+	m.Width, m.Height, m.Page = 220, 44, PageReadiness
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -2249,7 +2246,7 @@ func TestLinkedSplitPinsSelectedContextWhileRightPaneScrolls(t *testing.T) {
 			{GateID: "command.dispatch", Domain: "command", State: "preview-only", Severity: "warn", Authority: "methodology dispatch", Evidence: "verbs registered", Missing: "authority_case,parent_spec,preflight,receipt",
 				AIR: map[string]string{"gate_id": "ok", "domain": "ok", "state": "ok", "severity": "ok", "authority": "ok", "evidence": "ok", "missing": "ok"}},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 34, PageReadiness, true
+	m.Width, m.Height, m.Page = 180, 34, PageReadiness
 	if max := m.referenceScrollMax(); max == 0 {
 		t.Fatal("test requires scrollable readiness body below pinned selected context")
 	}
@@ -2294,7 +2291,7 @@ func TestIntakeProjectionRendersSourceBackedMetadataAndSplit(t *testing.T) {
 			},
 			Totals: map[string]int{"request_attention": 7, "planning_attention": 3, "p0_incidents": 2},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 55, PageIntake, true
+	m.Width, m.Height, m.Page = 220, 55, PageIntake
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -2361,7 +2358,7 @@ func TestIntakeProjectionNavigatesBucketsAndSourceFilter(t *testing.T) {
 		},
 		Totals: map[string]int{"request_attention": 5, "planning_attention": 3, "p0_incidents": 1},
 	}, false)
-	m.Width, m.Height, m.Page = 170, 48, PageIntake
+	m.Width, m.Height, m.Page = 150, 48, PageIntake
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -2463,7 +2460,7 @@ func TestWideIntakeContextRailAdvertisesBucketCursor(t *testing.T) {
 		},
 		Totals: map[string]int{"request_attention": 4, "p0_incidents": 9},
 	}, false)
-	m.Width, m.Height, m.Page = 220, 52, PageIntake
+	m.Width, m.Height, m.Page = 150, 52, PageIntake
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{"legal next", "[j/k]", "bucket 1/2", "[s/S]", "source filter", "[Enter]", "aggregate detail"} {
@@ -2551,7 +2548,7 @@ func TestSplitContextYankUsesSessionSource(t *testing.T) {
 		{Role: "cx-b", Platform: "claude", State: "active", Readiness: "stale", Blocker: "none", Attention: 0.55,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "session": "ok", "output_age_s": "ok", "relay_age_s": "ok"}},
 	}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageCaps, true
+	m.Width, m.Height, m.Page = 220, 44, PageCaps
 
 	m = step(m, "y")
 	if m.Mode != ModeYank || m.Sel.Field != "role" {
@@ -2575,7 +2572,7 @@ func TestSplitYankFloorDoesNotAdvertiseArrowWindowOrContext(t *testing.T) {
 		Role: "cx-a", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.70,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok", "session": "ok", "output_age_s": "ok", "relay_age_s": "ok"},
 	}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageCaps, true
+	m.Width, m.Height, m.Page = 220, 44, PageCaps
 	m = step(m, "y")
 	if m.Mode != ModeYank {
 		t.Fatalf("expected yank mode, got %d", m.Mode)
@@ -2992,7 +2989,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		Role: "cx-template", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 	}}, false)
-	templateCmds.Width, templateCmds.Height, templateCmds.Page, templateCmds.SplitContext = 220, 96, PageCommands, true
+	templateCmds.Width, templateCmds.Height, templateCmds.Page = 220, 96, PageCommands
 	templateView := ansi.Strip(templateCmds.View())
 	// Inc-5: PageCommands SELF-ANCHORS (no session source), so the template browser binds to PageCommands,
 	// not PageSessions. A command row is not a selectable data row, so the refs honestly report unavailable.
@@ -3062,50 +3059,10 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		}
 	}
 
-	yard := m.Exec("yard")
-	if yard.Page != PageYard {
-		t.Fatalf(":yard must open yard cockpit page, got %d", yard.Page)
-	}
-	yardView := ansi.Strip(yard.View())
-	for _, want := range []string{"YARD", "read-only projection", "LADDER", "ATTENTION RAIL", "FLEET MATRIX", "GATES / READINESS", "REPRESENTATION"} {
-		if !strings.Contains(yardView, want) {
-			t.Fatalf("yard page missing %q:\n%s", want, yardView)
-		}
-	}
-
-	readiness := m.Exec("readiness")
-	if readiness.Page != PageReadiness {
-		t.Fatalf(":readiness must open readiness page, got %d", readiness.Page)
-	}
-	readyView := ansi.Strip(readiness.View())
-	for _, want := range []string{"READINESS", "SOURCE FRESHNESS", "TASK GATES", "LANE READINESS", "COMMAND ROUTE", "GAPS / NEXT CONTRACT", "read-only projection"} {
-		if !strings.Contains(readyView, want) {
-			t.Fatalf("readiness page missing %q:\n%s", want, readyView)
-		}
-	}
-
-	intake := m.Exec("intake")
-	if intake.Page != PageIntake {
-		t.Fatalf(":intake must open intake observation page, got %d", intake.Page)
-	}
-	intakeView := ansi.Strip(intake.View())
-	for _, want := range []string{"INTAKE", "read-only projection", "SOURCE FRESHNESS", "DEMAND TOTALS", "OBSERVATION BUCKETS", "GAPS / NEXT CONTRACT"} {
-		if !strings.Contains(intakeView, want) {
-			t.Fatalf("intake page missing %q:\n%s", want, intakeView)
-		}
-	}
-
-	m.Width, m.Height = 180, 80
-	caps := m.Exec("capabilities")
-	if caps.Page != PageCaps {
-		t.Fatalf(":capabilities must open capability projection page, got %d", caps.Page)
-	}
-	capView := ansi.Strip(caps.View())
-	for _, want := range []string{"CAPABILITIES", "FABRIC SCOPE", "CAPABILITY STATUS", "HKP SUPPORT CONTEXT", "PLATFORM EVIDENCE", "ROUTE ADMISSION", "SESSION FIT RAIL", "spend", "fugu/fugu-ultra", "read-only projection"} {
-		if !strings.Contains(capView, want) {
-			t.Fatalf("capabilities page missing %q:\n%s", want, capView)
-		}
-	}
+	// Inc-5: the session-anchored projection pages (yard/readiness/intake/capabilities) are NOT catalog
+	// pages — they split (sessions │ drilldown) at wide width and render their full projection only at
+	// medium/narrow width. Their projection content is pinned by the dedicated TestYardCockpitRendersLive
+	// ReadModel / TestReadiness… / TestIntakeProjection… / TestCapabilityProjection… suites, not here.
 }
 
 func TestReferenceCatalogsUseSemanticRowsAtMediumWidth(t *testing.T) {
@@ -3240,7 +3197,7 @@ func TestCapabilityProjectionRendersObservedLaneFit(t *testing.T) {
 			{Role: "theta", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.54,
 				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 		}, false)
-	m.Width, m.Height, m.Page = 180, 120, PageCaps
+	m.Width, m.Height, m.Page = 150, 120, PageCaps
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{"CAPABILITIES", "CAPABILITY STATUS", "route envelope", "request ha", "HKP SUPPORT CONTEXT", "codex", "claude", "resume-preview", "verify-first", "ROUTE ADMISSION", "preview", "support-only", "learning e"} {
@@ -3298,7 +3255,7 @@ func TestCapabilityProjectionUsesSourceBackedCapabilityRows(t *testing.T) {
 		Totals: map[string]int{"capabilities": 3, "routes": 1, "tools": 1},
 	}
 	m := New("REINS").FoldCapabilities(caps, false)
-	m.Width, m.Height, m.Page = 160, 100, PageCaps
+	m.Width, m.Height, m.Page = 158, 100, PageCaps
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -3387,7 +3344,7 @@ func TestSplitCapabilitiesShowSelectedLaneFit(t *testing.T) {
 			{Role: "theta", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.54, ClaimedTask: longTask,
 				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok"}},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext, m.SFocus = 220, 44, PageCaps, true, 1
+	m.Width, m.Height, m.Page, m.SFocus = 220, 44, PageCaps, 1
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -3463,7 +3420,7 @@ func TestSplitCapabilitiesUseExactRouteBindingForTools(t *testing.T) {
 			RouteID: "codex.headless.full", RouteMode: "headless", RouteProfile: "full", RouteBindingState: "bound",
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok", "route_id": "ok", "mode": "ok", "profile": "ok", "route_binding_state": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 42, PageCaps, true
+	m.Width, m.Height, m.Page = 220, 42, PageCaps
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -3501,7 +3458,7 @@ func TestSplitCapabilitiesPolicyOnlyRouteRemainsUnconfirmed(t *testing.T) {
 			RouteID: "codex.headless.full", RouteBindingState: "policy_only",
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok", "route_id": "ok", "route_binding_state": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 42, PageCaps, true
+	m.Width, m.Height, m.Page = 220, 42, PageCaps
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{"policy-only route codex.headless.full", "1 policy-only route tools", "launch not session-confirmed"} {
@@ -3534,7 +3491,7 @@ func TestSplitCapabilitiesSeparatesSourceAndContextScroll(t *testing.T) {
 			{Role: "cx-two", Platform: "claude", State: "active", Readiness: "stale", Attention: 0.50,
 				AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"}},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageCaps, true
+	m.Width, m.Height, m.Page = 180, 16, PageCaps
 	if rel := m.splitRelation(); rel.PaneProfile() != PaneLinkedScrollable || !rel.TargetScrollable {
 		t.Fatalf("capability split should be linked-scrollable, got profile=%s scroll=%v", rel.PaneProfile(), rel.TargetScrollable)
 	}
@@ -3744,7 +3701,7 @@ func TestCapabilityPageCursorSelectsCapabilityContext(t *testing.T) {
 		},
 	}
 	m := New("REINS").FoldCapabilities(caps, false)
-	m.Width, m.Height, m.Page = 160, 48, PageCaps
+	m.Width, m.Height, m.Page = 150, 48, PageCaps
 
 	if row, ok := m.FocusedCapabilityRow(); !ok || row.Name != "source_acquisition" {
 		t.Fatalf("initial capability focus = %#v ok=%v", row, ok)
@@ -4041,7 +3998,7 @@ func TestYardCockpitRendersLiveReadModel(t *testing.T) {
 			Totals: map[string]int{"blocked": 1},
 		}, false).
 		FoldDynamics(grammar.Graph{Nodes: []grammar.Node{{ID: "n1", Res: "1"}}, Edges: []grammar.Edge{{Source: "a", Target: "b"}}}, false)
-	m.Width, m.Height, m.Page = 180, 50, PageYard
+	m.Width, m.Height, m.Page = 150, 50, PageYard
 
 	v := ansi.Strip(m.View())
 	for _, want := range []string{
@@ -4198,17 +4155,17 @@ func TestWideIntentContextRailAndFooterAdvertiseTargetCursor(t *testing.T) {
 	}
 }
 
-// Inc 3 — intent is SELF-ANCHORED. Even with SplitContext set, the page is no longer session-frozen:
-// it composes via the algebra (splitContextActive false) and ADVERTISES the target Enter-preview (the
+// Inc 3 — intent is SELF-ANCHORED. The page is self-anchored, never session-frozen:
+// it composes via the algebra (not session-anchored) and ADVERTISES the target Enter-preview (the
 // abolished session-frozen split suppressed it because the session source owned [Enter]).
 func TestIntentSelfAnchoredAdvertisesTargetEnter(t *testing.T) {
 	m := New("REINS").FoldSessions([]grammar.Session{{
 		Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 	}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageIntent, true
-	if m.splitContextActive() {
-		t.Fatal("migrated intent must not be session-frozen even with SplitContext set")
+	m.Width, m.Height, m.Page = 220, 44, PageIntent
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("migrated intent must not be session-frozen")
 	}
 	flat := flattenSplitColumns(ansi.Strip(m.View()))
 	if !strings.Contains(flat, "[Enter] preview selected target") {
@@ -4230,7 +4187,7 @@ func TestIntentSubjectIsCapturedNotSessionTracked(t *testing.T) {
 		{Role: "cx-two", Platform: "claude", State: "active", Readiness: "stale", Blocker: "stale_relay", Attention: 0.55,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
 	}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageIntent, true
+	m.Width, m.Height, m.Page = 220, 44, PageIntent
 	m.IntentTarget, m.IntentSubject = "dispatch", "task stale-task"
 
 	flat := flattenSplitColumns(ansi.Strip(m.View()))
@@ -5125,13 +5082,13 @@ func TestSplitDynamicsKeepsLaneAnchorAndMovesMapTarget(t *testing.T) {
 				}},
 			},
 		}, false)
-	// Inc 3 — dynamics is SELF-ANCHORED: even with SplitContext set it composes via the algebra
-	// (splitContextActive false), so j moves the map element (DynFocus) directly — NOT a session lane —
+	// Inc 3 — dynamics is SELF-ANCHORED: composes via the algebra
+	// (not session-anchored), so j moves the map element (DynFocus) directly — NOT a session lane —
 	// and the focused element is the secondary. The abolished session-frozen split moved a session lane
 	// with j and the map target with n.
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageDynamics, true
-	if m.splitContextActive() {
-		t.Fatal("migrated dynamics must not be session-frozen even with SplitContext set")
+	m.Width, m.Height, m.Page = 180, 44, PageDynamics
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("migrated dynamics must not be session-frozen")
 	}
 	beforeDyn := m.DynFocus
 	m = step(m, "j")
@@ -5157,7 +5114,7 @@ func TestSplitDynamicsKeepsLaneAnchorAndMovesMapTarget(t *testing.T) {
 // Inc 3 TRANSFORM — epistemics is now SELF-ANCHORED: j moves the evidence ROW (EpiFocus) directly and
 // the secondary pins that row's evidence path. The abolished session-frozen split-pair made j move the
 // session LANE and n move the evidence target; that authored sessions→evidence pair is gone (even with
-// SplitContext set, the page composes via the algebra, so j binds to the epistemic row natively).
+// the page composes via the algebra, so j binds to the epistemic row natively).
 func TestEpistemicsSelfAnchoredJMovesEvidenceRow(t *testing.T) {
 	m := New("REINS").
 		FoldSessions([]grammar.Session{
@@ -5176,9 +5133,9 @@ func TestEpistemicsSelfAnchoredJMovesEvidenceRow(t *testing.T) {
 				}},
 			},
 		}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageEpistemics, true
-	if m.splitContextActive() {
-		t.Fatal("migrated epistemics must not be session-frozen even with SplitContext set")
+	m.Width, m.Height, m.Page = 180, 44, PageEpistemics
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("migrated epistemics must not be session-frozen")
 	}
 	beforeEpi := m.EpiFocus
 	m = step(m, "j")
@@ -5229,7 +5186,7 @@ func TestSplitDynamicsAllScaleRendersDomainFitInNarrowContext(t *testing.T) {
 		},
 	}
 	m := New("REINS").FoldDynamics(g, false)
-	m.Width, m.Height, m.Page, m.SplitContext, m.DynScale = 180, 40, PageDynamics, true, 0
+	m.Width, m.Height, m.Page, m.DynScale = 180, 40, PageDynamics, 0
 	v := ansi.Strip(m.referenceContent(100))
 	if !strings.Contains(v, "scale all→domain fit") {
 		t.Fatalf("narrow split dynamics should label the fit scale:\n%s", v)

@@ -16,11 +16,10 @@ func TestDarkEventsStayAlgebraOwnedNoLegacySplit(t *testing.T) {
 	m.Page = PageEvents
 	m.EventsDark = true
 	m.EventsError = "feed-down-marker"
-	m.SplitContext = true
 	m.Width, m.Height = 220, 40
 
-	if m.splitContextActive() {
-		t.Fatal("dark events must be algebra-owned (splitContextActive()==false), not the legacy split")
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("dark events must be algebra-owned (not session-anchored), not the legacy split")
 	}
 	if m.commandSelectionPage() != PageEvents {
 		t.Fatalf("dark events templates/yank must bind to PageEvents, not the session source")
@@ -39,7 +38,6 @@ func TestDarkEventsStayAlgebraOwnedNoLegacySplit(t *testing.T) {
 func TestMigratedEventsSplitAffordanceIsHonest(t *testing.T) {
 	m := New("R")
 	m.Page = PageEvents
-	m.SplitContext = true
 	m.Width, m.Height = 220, 40
 	if strings.Contains(ansi.Strip(m.viewVital(m.Width)), "split:wide") {
 		t.Fatal("migrated events must not show the misleading legacy split:wide chip")

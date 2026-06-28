@@ -30,8 +30,8 @@ func TestTracesComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageTraces must compose via the view-algebra (only-split)")
 	}
-	if m.splitContextActive() {
-		t.Fatal("a migrated page must NOT be session-frozen (splitContextActive==false)")
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("a migrated page must NOT be session-frozen (not session-anchored)")
 	}
 	if m.commandSelectionPage() != PageTraces {
 		t.Fatalf("templates/yank must bind to PageTraces, got page %d", m.commandSelectionPage())

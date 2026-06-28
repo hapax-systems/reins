@@ -9,7 +9,7 @@ import (
 
 func axesPageModel() Model {
 	m := New("REINS")
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageAxes, true
+	m.Width, m.Height, m.Page = 180, 44, PageAxes
 	return m
 }
 
@@ -19,7 +19,7 @@ func TestAxesComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageAxes must compose via the view algebra")
 	}
-	if m.splitContextActive() {
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("PageAxes must not activate the legacy session-frozen split")
 	}
 	if m.commandSelectionPage() != PageAxes {

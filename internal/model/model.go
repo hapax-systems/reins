@@ -273,7 +273,7 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 }
 
 func (m Model) commandSelectionPage() int {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		return PageSessions
 	}
 	return m.Page
@@ -520,7 +520,6 @@ type Model struct {
 	FlashSeq            int                // monotonic flash id — a stale tick only clears the flash it was armed for
 	IntentTarget        string             // currently reviewed governed intent target, e.g. resume/dispatch/show-route
 	IntentSubject       string             // AIR-safe subject captured before switching to the intent review page
-	SplitContext        bool               // visible session source + declared relation/context projection
 	SuppressSplitPinned bool               // render-only: split body clone omits the pinned selected-source block
 }
 
@@ -758,11 +757,11 @@ func (m Model) lifecycleRowCount() int {
 
 // composesViaAlgebra reports whether the current page renders through the view-algebra (composePage)
 // rather than the legacy split / single-pane path. Migrated pages own their own navigation (native
-// row nav) and rendering (the layout.Spec fold), so the legacy SplitContext machinery must NOT engage
-// for them — this predicate is the single switch that keeps the ~45 splitContextActive() sites
+// row nav) and rendering (the layout.Spec fold), so the legacy session-split machinery must NOT engage
+// for them — this predicate is the single switch that keeps the ~45 the session-anchored split sites
 // consistent with composePage as cohorts migrate. It mirrors composePage's per-page logic (incl. the
 // events dark fall-through, where the page reverts to the legacy dark-hint body). Crucially, flipping
-// splitContextActive() false for events makes commandSelectionPage() return PageEvents (not the
+// not session-anchored for events makes commandSelectionPage() return PageEvents (not the
 // session source), so {{focus}}/{{sel.*}}/yank/paste bind to the focused EVENT natively — no separate
 // wiring needed.
 func (m Model) composesViaAlgebra() bool {
@@ -774,7 +773,7 @@ func (m Model) composesViaAlgebra() bool {
 		// commandSelectionPage). The dark fall-through is handled in bodyFor, gated on this predicate.
 		return true
 	case PageEpistemics:
-		// Inc 3 TRANSFORM — self-anchored. Flipping splitContextActive() false makes commandSelectionPage()
+		// Inc 3 TRANSFORM — self-anchored. Flipping not session-anchored makes commandSelectionPage()
 		// return PageEpistemics, so {{focus}}/{{sel.*}}/yank bind to the focused posture ROW natively (the
 		// templateValue/selectedPasteValue/yankFields PageEpistemics blocks), and the updateSplitSource
 		// intercept is skipped so j moves EpiFocus. composePage() returns nil only when there are no rows
@@ -824,17 +823,13 @@ func isSessionAnchoredPage(page int) bool {
 	return page == PageCaps || page == PageYard || page == PageReadiness || page == PageIntake
 }
 
-func (m Model) splitContextActive() bool {
-	if !m.SplitContext {
-		return false
-	}
-	if !isSessionAnchoredPage(m.Page) {
-		// only the four Inc-2 session-anchored pages engage the legacy split-context nav/render; the
-		// algebra-owned pages self-anchor, and the reference/door pages have no real session join, so
-		// their templates/yank bind to their OWN selection rather than the session source.
-		return false
-	}
-	if m.Width < splitContextMinWidth {
+// sessionSplit reports whether the session-anchored split (sessions │ drilldown) is actually rendering:
+// one of the four Inc-2 pages AND the terminal is wide enough for two panes. Inc-5 only-split removed the
+// [|] toggle, so WIDTH alone decides — wide terminals split; medium/narrow render the page's own semantic
+// body (composePage returns nil → bodyForPage). This is the old splitContext gate minus the abolished
+// toggle.
+func (m Model) sessionSplit() bool {
+	if !isSessionAnchoredPage(m.Page) || m.Width < splitContextMinWidth {
 		return false
 	}
 	_, _, ok := splitContextWidths(m.Width)
@@ -1254,21 +1249,21 @@ func (m Model) cycleIntakeSourceFilter(delta int) Model {
 }
 
 func (m Model) yankFocusTo(i int) Model {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		return m.sessionFocusTo(i)
 	}
 	return m.focusTo(i)
 }
 
 func (m Model) yankCurFocus() int {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		return m.SFocus
 	}
 	return m.curFocus()
 }
 
 func (m Model) yankRows() int {
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		return len(m.Sessions)
 	}
 	return m.pageRows()
@@ -2532,7 +2527,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if nm, cmd, ok := m.updateGlobal(v); ok {
 			return nm, cmd
 		}
-		if m.splitContextActive() {
+		if m.sessionSplit() {
 			if nm, cmd, ok := m.updateSplitSource(v); ok {
 				return nm, cmd
 			}
@@ -3100,24 +3095,16 @@ func (m Model) updateGlobal(v tea.KeyMsg) (Model, tea.Cmd, bool) {
 		nm, cmd := m.flash(state)
 		return nm, cmd, true
 	case "|":
-		if m.composesViaAlgebra() {
-			// an algebra-owned page is ALREADY split (emergent, only-split); the legacy [|] toggle is
-			// meaningless here — don't lie about "queued: need N columns".
-			m.Status = "this page is page-composed (always split); the legacy split toggle does not apply"
-			nm, cmd := m.flash(m.Status)
-			return nm, cmd, true
+		// Inc-5 only-split: the split is STRUCTURAL now — there is no toggle. The four session-anchored
+		// pages (caps/yard/readiness/intake) always compose sessions │ drilldown; every other page
+		// composes its own panes (algebra list │ context, or reference catalog │ context). [|] only
+		// reports this.
+		if m.sessionSplit() {
+			m.Status = "session-anchored split is always on (only-split; no toggle)"
+		} else {
+			m.Status = "this page composes its own panes (only-split; no split toggle)"
 		}
-		m.SplitContext = !m.SplitContext
-		state := "split context off"
-		if m.SplitContext {
-			if m.splitContextActive() {
-				state = "split context on"
-			} else {
-				state = fmt.Sprintf("split context queued: need %d columns", splitContextMinWidth)
-			}
-		}
-		m.Status = state
-		nm, cmd := m.flash(state)
+		nm, cmd := m.flash(m.Status)
 		return nm, cmd, true
 	case ",":
 		if m.Page == PageDynamics {
@@ -3625,7 +3612,7 @@ func (m Model) yankFieldByKey(key string) (Model, tea.Cmd) {
 		}
 	}
 	page := m.Page
-	if m.splitContextActive() {
+	if m.sessionSplit() {
 		page = PageSessions
 	}
 	if page == PageEvents { // events have their own field set (the pick row is page-aware)

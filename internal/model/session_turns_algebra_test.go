@@ -9,7 +9,7 @@ import (
 
 func sessionTurnsModel() Model {
 	m := New("REINS")
-	m.Width, m.Height, m.SplitContext = 180, 44, true
+	m.Width, m.Height = 180, 44
 	m = m.switchPage(PageSessionTurns)
 	return m
 }
@@ -19,7 +19,7 @@ func TestSessionTurnsComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageSessionTurns must compose via the view-algebra (only-split)")
 	}
-	if m.splitContextActive() {
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("PageSessionTurns must not activate the legacy session-frozen split")
 	}
 	if m.commandSelectionPage() != PageSessionTurns {

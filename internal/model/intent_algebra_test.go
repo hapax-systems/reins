@@ -25,8 +25,8 @@ func TestIntentComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageIntent must compose via the view-algebra (only-split)")
 	}
-	if m.splitContextActive() {
-		t.Fatal("a migrated page must NOT be session-frozen (splitContextActive==false)")
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("a migrated page must NOT be session-frozen (not session-anchored)")
 	}
 	if m.commandSelectionPage() != PageIntent {
 		t.Fatalf("templates/yank must bind to PageIntent, got page %d", m.commandSelectionPage())

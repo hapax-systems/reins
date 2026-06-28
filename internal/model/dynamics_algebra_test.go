@@ -35,8 +35,8 @@ func TestDynamicsComposesViaAlgebraNativeBinding(t *testing.T) {
 	if !m.composesViaAlgebra() {
 		t.Fatal("PageDynamics must compose via the view-algebra (only-split)")
 	}
-	if m.splitContextActive() {
-		t.Fatal("a migrated page must NOT be session-frozen (splitContextActive==false)")
+	if isSessionAnchoredPage(m.Page) {
+		t.Fatal("a migrated page must NOT be session-frozen (not session-anchored)")
 	}
 	if m.commandSelectionPage() != PageDynamics {
 		t.Fatalf("templates/yank must bind to PageDynamics, got page %d", m.commandSelectionPage())

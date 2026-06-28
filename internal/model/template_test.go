@@ -137,7 +137,7 @@ func TestSessionTemplateHonorsAir(t *testing.T) {
 	}
 }
 
-// Post-migration, events composes via the view-algebra → splitContextActive()==false →
+// Post-migration, events composes via the view-algebra → not session-anchored →
 // commandSelectionPage() returns PageEvents, so {{focus}}/{{sel.*}}/intent bind to the focused EVENT
 // natively. The session-source binding was purely an artifact of the (abolished) legacy split.
 func TestEventsTemplatesBindToEventFocusNatively(t *testing.T) {
@@ -153,8 +153,8 @@ func TestEventsTemplatesBindToEventFocusNatively(t *testing.T) {
 				"role": "ok", "session": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "claimed_task": "ok",
 			},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 40, PageEvents, true
-	if m.splitContextActive() {
+	m.Width, m.Height, m.Page = 170, 40, PageEvents
+	if isSessionAnchoredPage(m.Page) {
 		t.Fatal("a migrated events page must not be split-context-active")
 	}
 	if got := m.resolveTemplate("{{focus}}"); got != "hidden-event" {
@@ -178,7 +178,7 @@ func TestEventsSelectedFieldTemplatesAndPasteUseEventRow(t *testing.T) {
 			Role: "cx-source", Session: "tmux-source", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "session": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 		}}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 170, 40, PageEvents, true
+	m.Width, m.Height, m.Page = 170, 40, PageEvents
 	m.Sel.Rank, m.Sel.Field = RankField, "actor" // an EVENT field, not a session field
 
 	if got := m.resolveTemplate("{{sel.field}}={{sel.value}}"); got != "actor=cx-source" {
