@@ -1,9 +1,12 @@
 package model
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/hapax-systems/reins/internal/grammar"
 )
 
 // The {{sel}} inline selection-template language (handoff §9, #18 — the consolidation payoff seed).
@@ -251,6 +254,46 @@ func (m Model) templateValue(key string) (string, bool) {
 		return "", false
 	}
 
+	if page == PageTraces {
+		tr, has := m.FocusedTrace()
+		field := func(f string) (string, bool) {
+			if !has {
+				return "", false
+			}
+			if f == "id" {
+				f = "trace_id"
+			}
+			switch f {
+			case "trace_id":
+				return grammar.Redact(tr.AIR, "trace_id", tr.TraceID, m.AIR), true
+			case "model":
+				return grammar.Redact(tr.AIR, "model", tr.Model, m.AIR), true
+			case "ts":
+				return grammar.Redact(tr.AIR, "ts", tr.TS, m.AIR), true
+			case "cost":
+				return grammar.Redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), m.AIR), true
+			case "latency", "latency_ms":
+				return grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR), true
+			case "tokens", "total_tok":
+				return grammar.Redact(tr.AIR, "total_tok", fmt.Sprintf("%d", tr.TotalTok), m.AIR), true
+			default:
+				return "", false
+			}
+		}
+		selectedField := m.selectedFieldForPage(page, "trace_id")
+		switch {
+		case key == "sel", key == "sel.value":
+			return field(selectedField)
+		case key == "sel.id", key == "focus":
+			return field("trace_id")
+		case key == "sel.field":
+			return selectedField, true
+		case strings.HasPrefix(key, "sel."):
+			return field(strings.TrimPrefix(key, "sel."))
+		}
+		return "", false
+	}
+
 	if page == PageDomains {
 		if row, has := m.FocusedDomainRow(); has {
 			field := func(f string) (string, bool) {
@@ -438,6 +481,25 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			value = row.Privacy
 		case "detail":
 			value = row.Detail
+		default:
+			return "", "", false
+		}
+	case PageTraces:
+		tr, has := m.FocusedTrace()
+		if !has {
+			return "", "", false
+		}
+		switch field {
+		case "trace_id":
+			value = grammar.Redact(tr.AIR, "trace_id", tr.TraceID, m.AIR)
+		case "model":
+			value = grammar.Redact(tr.AIR, "model", tr.Model, m.AIR)
+		case "ts":
+			value = grammar.Redact(tr.AIR, "ts", tr.TS, m.AIR)
+		case "cost":
+			value = grammar.Redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), m.AIR)
+		case "latency_ms":
+			value = grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR)
 		default:
 			return "", "", false
 		}

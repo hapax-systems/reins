@@ -627,6 +627,18 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.epistemicListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedEpistemicPath(pw) }},
 			0.62, m.epistemicsEmergentRelation())
+	case PageTraces:
+		// Inc 3 TRANSFORM — SELF-ANCHORED like events/tasks (own TFocus, ungated by splitContextActive).
+		// The legacy session-frozen reference split (sessions │ trace feed) is ABOLISHED: the primary IS
+		// the trace list, [j/k] moves the trace row natively, and the secondary is the focused trace's
+		// authored spend/latency detail (the narrow list clips trailing cost). Connector = shared model.
+		if m.TracesDark || len(m.Traces) == 0 {
+			return nil // dark/empty → tracesBody (dark hint / empty list)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.tracesListBody(pw, ph) }},
+			&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.renderSelectedTrace(pw) }},
+			0.62, m.tracesEmergentRelation())
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -915,6 +927,35 @@ func (m Model) epistemicsEmergentRelation() string {
 		others = append(others, epistemicEntity(r))
 	}
 	return m.emergentRelation(epistemicEntity(rows[idx]), others, nil)
+}
+
+// traceEntity builds the relate facets for an LLM trace row. Cost/latency are continuous (not facets);
+// the meaningful shared dimension is the MODEL (these N calls hit the same model). Denied facets are
+// omitted so the connector never derives over a withheld field.
+func traceEntity(tr grammar.Trace, airOn bool) relate.Entity {
+	facets := map[string]string{}
+	if tr.Model != "" && !(airOn && tr.AIR["model"] != "ok") {
+		facets["model"] = tr.Model
+	}
+	return relate.Entity{ID: tr.TraceID + "|" + tr.TS, Facets: facets}
+}
+
+// tracesEmergentRelation anchors on the focused trace; others = the rest of the feed. The self-anchored
+// connector is the honest "how this call relates to its neighbors" join (shared model), never an
+// authored sessions→trace-feed split-pair.
+func (m Model) tracesEmergentRelation() string {
+	focused, ok := m.FocusedTrace()
+	if !ok {
+		return ""
+	}
+	others := make([]relate.Entity, 0, len(m.Traces))
+	for i, tr := range m.Traces {
+		if i == m.TFocus {
+			continue
+		}
+		others = append(others, traceEntity(tr, m.AIR))
+	}
+	return m.emergentRelation(traceEntity(focused, m.AIR), others, nil)
 }
 
 // sessionsEmergentRelation anchors on the focused session; others = the rest of the fleet.
@@ -9922,6 +9963,26 @@ func (m Model) tracesListBody(w, h int) string {
 			b.WriteString("  " + grammar.RenderTraceRow(m.Traces[i], m.AIR) + "\n")
 		}
 	}
+	return b.String()
+}
+
+// renderSelectedTrace is the algebra secondary for :traces — the focused trace's full spend + latency
+// breakdown, every field AIR-gated. The narrow primary list clips trailing columns (cost); this pane is
+// where the operator reads the spend without clipping.
+func (m Model) renderSelectedTrace(w int) string {
+	tr, ok := m.FocusedTrace()
+	if !ok {
+		return grammar.C("mut", " trace detail\n\n no selected trace\n")
+	}
+	var b strings.Builder
+	writeSectionHeader(&b, w, "TRACE DETAIL", "the focused LLM call — spend + latency, metadata-only", grammar.Redact(tr.AIR, "model", tr.Model, m.AIR))
+	writeWrappedKV(&b, "trace", grammar.Redact(tr.AIR, "trace_id", tr.TraceID, m.AIR), "pri", w)
+	writeWrappedKV(&b, "ts", grammar.Redact(tr.AIR, "ts", tr.TS, m.AIR), "2nd", w)
+	writeWrappedKV(&b, "model", grammar.Redact(tr.AIR, "model", tr.Model, m.AIR), "org", w)
+	writeWrappedKV(&b, "tokens", grammar.Redact(tr.AIR, "total_tok", fmt.Sprintf("prompt=%d completion=%d total=%d", tr.PromptTok, tr.CompletionTok, tr.TotalTok), m.AIR), "2nd", w)
+	writeWrappedKV(&b, "cost", grammar.Redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), m.AIR), "yel", w)
+	writeWrappedKV(&b, "latency", grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR), "2nd", w)
+	writeWrappedKV(&b, "contract", "metadata-only LLM observability; no prompt/response body, no tool I/O — cost + latency are the held signals", "mut", w)
 	return b.String()
 }
 

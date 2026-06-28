@@ -191,6 +191,10 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 			{"s", "subject"}, {"f", "family"}, {"t", "status"}, {"a", "authority"},
 			{"e", "evidence"}, {"r", "freshness"}, {"p", "privacy"}, {"d", "detail"},
 		}
+	case PageTraces:
+		return []yankFieldDef{
+			{"i", "trace_id"}, {"m", "model"}, {"t", "ts"}, {"c", "cost"}, {"l", "latency_ms"},
+		}
 	}
 	return nil
 }
@@ -661,6 +665,11 @@ func (m Model) composesViaAlgebra() bool {
 		// templateValue/selectedPasteValue/yankFields PageEpistemics blocks), and the updateSplitSource
 		// intercept is skipped so j moves EpiFocus. composePage() returns nil only when there are no rows
 		// (empty/dark), where bodyForPage renders the NO EPISTEMIC ROWS disclosure.
+		return true
+	case PageTraces:
+		// Inc 3 TRANSFORM — self-anchored (own TFocus). Same lever: the flip self-anchors [j/k] (traces is
+		// not an isReferencePage, so j → focusTo → TFocus) and binds {{focus}}/yank to the focused trace.
+		// composePage() returns nil when dark/empty, where bodyForPage renders tracesBody (dark hint).
 		return true
 	}
 	return false

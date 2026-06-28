@@ -808,11 +808,13 @@ func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 		t.Run(pageLabel(pair.Page), func(t *testing.T) {
 			m := base
 			m.Page = pair.Page
-			if m.composePage(m.Width, m.Height) != nil {
-				// A page that composes via the view-algebra (Inc 1 self-anchored events/tasks/sessions,
-				// or Inc 2 session-anchored caps/…) no longer uses the authored split-pair as a
-				// composition source — split-pairs are being ABOLISHED. Its two-pane render + nav are
-				// covered by the page's dedicated algebra tests; here just assert the frame renders.
+			if m.composesViaAlgebra() || m.composePage(m.Width, m.Height) != nil {
+				// A page that composes via the view-algebra (Inc 1/3 self-anchored events/tasks/sessions/
+				// epistemics/traces, or Inc 2 session-anchored caps/…) no longer uses the authored
+				// split-pair as a composition source — split-pairs are being ABOLISHED. Its two-pane render
+				// + nav are covered by the page's dedicated algebra tests; here just assert the frame
+				// renders. (composesViaAlgebra is checked first so a migrated page whose data is empty in
+				// this fixture — e.g. traces, no FoldTraces — is still recognized as migrated, not legacy.)
 				if v := ansi.Strip(m.View()); strings.TrimSpace(v) == "" {
 					t.Fatalf("%s algebra frame must render a non-empty two-pane view", pageLabel(pair.Page))
 				}
