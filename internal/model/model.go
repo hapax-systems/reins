@@ -186,6 +186,11 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 			{"i", "task_id"}, {"s", "stage"}, {"o", "owner"}, {"w", "prior_stage"},
 			{"n", "predicted_stage"}, {"c", "criticality"}, {"a", "authority_case"},
 		}
+	case PageEpistemics:
+		return []yankFieldDef{
+			{"s", "subject"}, {"f", "family"}, {"t", "status"}, {"a", "authority"},
+			{"e", "evidence"}, {"r", "freshness"}, {"p", "privacy"}, {"d", "detail"},
+		}
 	}
 	return nil
 }
@@ -649,6 +654,13 @@ func (m Model) composesViaAlgebra() bool {
 		// the page renders the dark-hint body (bodyForPage), but the legacy session-frozen split must
 		// NEVER re-engage (which would also re-bind templates/yank to the session source via
 		// commandSelectionPage). The dark fall-through is handled in bodyFor, gated on this predicate.
+		return true
+	case PageEpistemics:
+		// Inc 3 TRANSFORM — self-anchored. Flipping splitContextActive() false makes commandSelectionPage()
+		// return PageEpistemics, so {{focus}}/{{sel.*}}/yank bind to the focused posture ROW natively (the
+		// templateValue/selectedPasteValue/yankFields PageEpistemics blocks), and the updateSplitSource
+		// intercept is skipped so j moves EpiFocus. composePage() returns nil only when there are no rows
+		// (empty/dark), where bodyForPage renders the NO EPISTEMIC ROWS disclosure.
 		return true
 	}
 	return false

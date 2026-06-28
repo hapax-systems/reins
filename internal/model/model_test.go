@@ -1748,25 +1748,18 @@ func TestSplitContextFooterCompactsActionsBeforeClipping(t *testing.T) {
 	}
 }
 
-func TestSplitEpistemicsFooterDoesNotClipScrollToken(t *testing.T) {
-	rows := make([]grammar.EpistemicReadRow, 0, 36)
-	for i := 0; i < 36; i++ {
-		rows = append(rows, grammar.EpistemicReadRow{
-			RowID: fmt.Sprintf("map-node:node-%02d", i), Family: "dynamics", SubjectKind: "map-node", SubjectRef: fmt.Sprintf("node-%02d", i),
-			Status: "observed", Posture: "source-backed", AuthorityCase: "CASE-DYN", EvidenceCount: 1, Source: "seed",
-			MapKind: "node", MapID: fmt.Sprintf("node-%02d", i),
-			AIR: map[string]string{"row_id": "ok", "family": "ok", "subject_kind": "ok", "subject_ref": "ok", "status": "ok", "posture": "ok", "authority_case": "ok", "evidence_count": "ok", "source": "ok", "map_kind": "ok", "map_id": "ok"},
-		})
-	}
+// The split FOOTER (viewFloor) must never clip the [J/K]scroll token on a session-frozen scrollable
+// page. (Retargeted from the abolished epistemics session-frozen split — Inc 3 self-anchored it — to
+// PageSurfaces, which remains session-frozen at the footer until Inc 5 retires splitContextBody.)
+func TestSplitFooterDoesNotClipScrollToken(t *testing.T) {
 	m := New("REINS").
 		FoldSessions([]grammar.Session{{
 			Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"},
-		}}, false).
-		FoldEpistemics(grammar.EpistemicsSummary{Rows: rows}, false)
-	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageEpistemics, true
+		}}, false)
+	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageSurfaces, true
 	if !m.splitContextActive() || m.referenceScrollMax() == 0 {
-		t.Fatalf("test requires scrollable split epistemics, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
+		t.Fatalf("test requires a scrollable session-frozen split, split=%v max=%d", m.splitContextActive(), m.referenceScrollMax())
 	}
 	first := strings.Split(ansi.Strip(m.viewFloor(m.Width)), "\n")[0]
 	if strings.Contains(first, "[J/K]") && !strings.Contains(first, "[J/K]scroll") && !strings.Contains(first, "[J/K]ctx-scroll") {
@@ -2127,7 +2120,9 @@ func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
 		{"surfaces", PageSurfaces, func(m Model) int { return m.SurfaceFocus }, "[j/k]surface", "▶ split-context", []string{"selected surface"}},
 		{"domains", PageDomains, func(m Model) int { return m.DomainFocus }, "[j/k]domain", "▶ capability-routing", []string{"selected capability-routing"}},
 		{"intent", PageIntent, func(m Model) int { return m.IntentFocus }, "[j/k]intent", "▶ dispatch", []string{"intent target dispatch"}},
-		{"epistemics", PageEpistemics, func(m Model) int { return m.EpiFocus }, "[j/k]evidence", "▶ dynamics", nil},
+		// (epistemics removed — Inc 3 migrated it to a SELF-ANCHORED algebra page: j moves the epistemic
+		// row, not the session source. Self-anchored nav is pinned by TestEpistemicsJMovesEvidenceRow-
+		// Natively and TestEpistemicsPageRendersDerivedEvidenceAndAIR.)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base
@@ -4458,6 +4453,22 @@ func TestDynamicsShortWorkbenchViewportStillShowsInspectionAndRail(t *testing.T)
 	}
 }
 
+// flattenSplitColumns collapses an algebra-split view into per-column flattened text so concept-presence
+// checks stay independent of pane-width wrapping: phrases wrap in the narrower split panes, and the two
+// columns interleave per line. The left and right columns are flattened separately and joined with ┆.
+func flattenSplitColumns(v string) string {
+	var lcol, rcol strings.Builder
+	for _, line := range strings.Split(v, "\n") {
+		if i := strings.Index(line, "│"); i >= 0 {
+			lcol.WriteString(line[:i] + " ")
+			rcol.WriteString(line[i+len("│"):] + " ")
+		} else {
+			lcol.WriteString(line + " ")
+		}
+	}
+	return strings.Join(strings.Fields(lcol.String()), " ") + " ┆ " + strings.Join(strings.Fields(rcol.String()), " ")
+}
+
 func TestEpistemicsPageRendersDerivedEvidenceAndAIR(t *testing.T) {
 	g := grammar.Graph{
 		Package: grammar.DynamicsPackage{
@@ -4495,6 +4506,10 @@ func TestEpistemicsPageRendersDerivedEvidenceAndAIR(t *testing.T) {
 	m.Width, m.Height, m.AIR = 150, 60, true
 
 	v := ansi.Strip(m.View())
+	// Concept-presence is wrapping-independent: the algebra split renders narrower panes than the old
+	// single-pane body, so phrases wrap mid-string and the two columns interleave per line. Flatten each
+	// column independently before asserting (leak checks below stay on the raw view).
+	flat := flattenSplitColumns(v)
 	for _, want := range []string{
 		"EPISTEMICS",
 		"derived from existing read folds",
@@ -4509,7 +4524,6 @@ func TestEpistemicsPageRendersDerivedEvidenceAndAIR(t *testing.T) {
 		"metadata-only raw=false",
 		"ldlc",
 		"hkp_bundle:sdlc",
-		"cache-only HKP",
 		"fugu-raw",
 		"not-dispatchable",
 		"no raw transcript",
@@ -4517,7 +4531,7 @@ func TestEpistemicsPageRendersDerivedEvidenceAndAIR(t *testing.T) {
 		"source body",
 		"dispatch authority",
 	} {
-		if !strings.Contains(v, want) {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("epistemics page missing %q:\n%s", want, v)
 		}
 	}
@@ -4525,6 +4539,17 @@ func TestEpistemicsPageRendersDerivedEvidenceAndAIR(t *testing.T) {
 		if strings.Contains(v, leak) {
 			t.Fatalf("epistemics page must not leak denied source paths under AIR:\n%s", v)
 		}
+	}
+
+	// The per-row DETAIL is now a focused-row SECONDARY (the algebra list clips details to the narrow
+	// primary). Navigate a copy to the capability-source row and confirm its full non-secret detail
+	// renders in the evidence path — coverage the old single-pane body got for free.
+	mh := m
+	for i := 0; i < 4; i++ {
+		mh = step(mh, "j")
+	}
+	if sec := ansi.Strip(mh.renderSelectedEpistemicPath(150)); !strings.Contains(sec, "cache-only HKP") {
+		t.Fatalf("focusing the capability-source row should show its detail in the evidence path:\n%s", sec)
 	}
 
 	m = step(m, "j")
@@ -4585,10 +4610,17 @@ func TestEpistemicsPreferSourceBackedMapRowsAndExactMapJoin(t *testing.T) {
 		t.Fatalf("source-backed epistemic row should keep bounded source refs, row=%+v", row)
 	}
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"SELECTED EVIDENCE PATH", "edge-alpha-beta", "source refs", "seed:3 refs", "claims.md#edge-alpha-beta", "POSTURE ROWS", "source-backed"} {
-		if !strings.Contains(v, want) {
+	flat := flattenSplitColumns(v)
+	for _, want := range []string{"SELECTED EVIDENCE PATH", "edge-alpha-beta", "source refs", "seed:3 refs", "POSTURE ROWS", "source-backed"} {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("source-backed epistemics view missing %q:\n%s", want, v)
 		}
+	}
+	// The bounded ref labels hard-wrap by runes in the narrow algebra secondary; verify they are EXPOSED
+	// in the evidence path at a width where the long ref token stays on one line (exposure is the contract,
+	// not the pane geometry — the dynamics-bridge assertion above pins them at full single-pane width too).
+	if sec := ansi.Strip(m.renderSelectedEpistemicPath(120)); !strings.Contains(sec, "claims.md#edge-alpha-beta") {
+		t.Fatalf("the source-backed evidence path should expose the bounded ref label:\n%s", sec)
 	}
 	localMapRows := 0
 	for _, er := range m.epistemicRows() {
@@ -5052,7 +5084,11 @@ func TestSplitDynamicsKeepsLaneAnchorAndMovesMapTarget(t *testing.T) {
 	}
 }
 
-func TestSplitEpistemicsKeepsLaneAnchorAndMovesEvidenceTarget(t *testing.T) {
+// Inc 3 TRANSFORM — epistemics is now SELF-ANCHORED: j moves the evidence ROW (EpiFocus) directly and
+// the secondary pins that row's evidence path. The abolished session-frozen split-pair made j move the
+// session LANE and n move the evidence target; that authored sessions→evidence pair is gone (even with
+// SplitContext set, the page composes via the algebra, so j binds to the epistemic row natively).
+func TestEpistemicsSelfAnchoredJMovesEvidenceRow(t *testing.T) {
 	m := New("REINS").
 		FoldSessions([]grammar.Session{
 			{Role: "cx-one", Platform: "codex", State: "active", Readiness: "claim", Attention: 0.88, AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "attention": "ok"}},
@@ -5071,23 +5107,22 @@ func TestSplitEpistemicsKeepsLaneAnchorAndMovesEvidenceTarget(t *testing.T) {
 			},
 		}, false)
 	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageEpistemics, true
+	if m.splitContextActive() {
+		t.Fatal("migrated epistemics must not be session-frozen even with SplitContext set")
+	}
 	beforeEpi := m.EpiFocus
 	m = step(m, "j")
-	if m.SFocus != 1 || m.EpiFocus != beforeEpi {
-		t.Fatalf("split epistemics j should move lane anchor only, SFocus=%d EpiFocus=%d", m.SFocus, m.EpiFocus)
+	if m.EpiFocus != beforeEpi+1 || !strings.Contains(m.Status, "epistemic row 2/") {
+		t.Fatalf("self-anchored epistemics j should move the evidence row, EpiFocus=%d status=%q", m.EpiFocus, m.Status)
 	}
-	m = step(m, "n")
-	if m.SFocus != 1 || m.EpiFocus != beforeEpi+1 || !strings.Contains(m.Status, "epistemic row 2/") {
-		t.Fatalf("split epistemics n should move right-pane evidence target only, SFocus=%d EpiFocus=%d status=%q", m.SFocus, m.EpiFocus, m.Status)
+	if m.SFocus != 0 {
+		t.Fatalf("self-anchored epistemics j must NOT move a session lane anchor, SFocus=%d", m.SFocus)
 	}
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"SELECTED EVIDENCE PATH", "[n/p] evidence", "node:authority"} {
+	for _, want := range []string{"SELECTED EVIDENCE PATH", "[j/k] moves the row", "node:authority"} {
 		if !strings.Contains(v, want) {
-			t.Fatalf("split epistemics should pin evidence target and advertise controls %q:\n%s", want, v)
+			t.Fatalf("self-anchored epistemics should pin the evidence path + native row control %q:\n%s", want, v)
 		}
-	}
-	if strings.Contains(v, "[j/k] moves the row") {
-		t.Fatalf("split epistemics should not claim j/k moves the evidence row:\n%s", v)
 	}
 }
 

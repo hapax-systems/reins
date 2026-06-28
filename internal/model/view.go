@@ -614,6 +614,19 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.sessionsListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.sessionConstraintPane(pw) }},
 			0.62, m.sessionsEmergentRelation())
+	case PageEpistemics:
+		// Inc 3 TRANSFORM — SELF-ANCHORED like tasks/events (own EpiFocus). The legacy session-frozen
+		// split-pair (sessions │ evidence) is ABOLISHED: the primary IS the posture list, [j/k] moves the
+		// epistemic row natively (composesViaAlgebra → splitContextActive false → the updateSplitSource
+		// intercept is skipped → j falls through to epistemicFocusTo), and the secondary is the focused
+		// row's evidence path. The connector is the EMERGENT row-to-siblings relation, never authored.
+		if len(m.epistemicRows()) == 0 {
+			return nil // empty/dark → the legacy single-pane body (NO EPISTEMIC ROWS disclosure)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.epistemicListBody(pw, ph) }},
+			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedEpistemicPath(pw) }},
+			0.62, m.epistemicsEmergentRelation())
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -863,6 +876,45 @@ func (m Model) tasksEmergentRelation() string {
 		others = append(others, taskEntity(t, m.AIR))
 	}
 	return m.emergentRelation(taskEntity(focused, m.AIR), others, nil)
+}
+
+// epistemicEntity builds the relate facets for an epistemic posture row. The row is ALREADY
+// AIR-projected (epistemicRows applied m.AIR), so a denied field is the redaction token; we OMIT any
+// redacted/empty facet so relate.Derive can never derive over a denied dimension (the connector would
+// otherwise disclose "shares family (N)" over a withheld field — the derived-channel leak the audit
+// closes everywhere else). Subject is the row IDENTITY (and the PII-risk field) — not a shared facet.
+func epistemicEntity(row epistemicRow) relate.Entity {
+	facets := map[string]string{}
+	put := func(facet, val string) {
+		if val == "" || strings.Contains(val, "▒") { // empty or AIR-redacted → never relate over it
+			return
+		}
+		facets[facet] = val
+	}
+	put("family", row.Family)
+	put("status", row.Status)
+	put("authority", row.Authority)
+	put("privacy", row.Privacy)
+	return relate.Entity{ID: row.RowID + "|" + row.Family + "|" + row.Subject, Facets: facets}
+}
+
+// epistemicsEmergentRelation anchors on the focused posture row; others = the rest of the rows. The
+// self-anchored connector is the honest "how this evidence row relates to its siblings" join — never an
+// authored sessions→evidence split-pair.
+func (m Model) epistemicsEmergentRelation() string {
+	rows := m.epistemicRows()
+	if len(rows) == 0 {
+		return ""
+	}
+	idx := clamp(m.EpiFocus, 0, len(rows)-1)
+	others := make([]relate.Entity, 0, len(rows))
+	for i, r := range rows {
+		if i == idx {
+			continue
+		}
+		others = append(others, epistemicEntity(r))
+	}
+	return m.emergentRelation(epistemicEntity(rows[idx]), others, nil)
 }
 
 // sessionsEmergentRelation anchors on the focused session; others = the rest of the fleet.
@@ -2439,6 +2491,47 @@ func (m Model) renderEpistemicsProjection(w int) string {
 	writeSectionHeader(&b, w, "POSTURE ROWS", rowControl, fmt.Sprintf("%d rows", len(rows)))
 	for i, row := range rows {
 		line := epistemicRowLine(row, i == idx, w)
+		if i == idx {
+			b.WriteString(focusBar(line, w) + "\n")
+		} else {
+			b.WriteString(fitWidth(line, w) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// epistemicListBody is the PRIMARY pane of the algebra-composed epistemics page (Inc 3 TRANSFORM): the
+// posture summary + the windowed posture rows. The focused row's full evidence path is the SECONDARY
+// pane (renderSelectedEpistemicPath), so this body omits the embedded pinned path. Self-anchored —
+// [j/k] moves the row (EpiFocus) natively now that the page is no longer session-frozen.
+func (m Model) epistemicListBody(w, h int) string {
+	rows := m.epistemicRows()
+	var b strings.Builder
+	writeSectionHeader(&b, w, "EPISTEMICS", "live contextualizer over claims, observations, validation, provenance, and authority ceilings", "metadata-only evidence")
+	// The privacy/legibility contract stays in the primary — it tells the operator WHAT this page is
+	// (derived projections, metadata-only) and what it never exposes (raw transcript/source/authority).
+	writeWrappedKV(&b, "contract", "source-backed when /read/epistemics is live; derived from existing read folds as fallback; no raw transcript, vault note body, source body, or dispatch authority", "yel", w)
+	if len(rows) == 0 {
+		writeWrappedKV(&b, "next evidence", "load dynamics/intake/domain/capability sources; Reins derives posture rows without a new endpoint", "yel", w)
+		return b.String()
+	}
+	idx := clamp(m.EpiFocus, 0, len(rows)-1)
+	b.WriteString(renderEpistemicsPostureSummary(rows, idx, w))
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(rule + "\n")
+	writeSectionHeader(&b, w, "POSTURE ROWS", "[j/k] moves the row; rows are derived projections, not source excerpts", fmt.Sprintf("%d rows", len(rows)))
+	// window the rows so the focused row stays visible within the pane height
+	used := strings.Count(b.String(), "\n")
+	visible := h - used - 1
+	if visible < 1 {
+		visible = 1
+	}
+	off := 0
+	if len(rows) > visible {
+		off = clamp(idx-visible/2, 0, len(rows)-visible)
+	}
+	for i := off; i < off+visible && i < len(rows); i++ {
+		line := epistemicRowLine(rows[i], i == idx, w)
 		if i == idx {
 			b.WriteString(focusBar(line, w) + "\n")
 		} else {

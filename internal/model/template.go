@@ -201,6 +201,56 @@ func (m Model) templateValue(key string) (string, bool) {
 		return "", false
 	}
 
+	if page == PageEpistemics {
+		// The posture row is ALREADY AIR-projected (epistemicRows applied m.AIR), so the field values are
+		// pre-redacted — returning them directly is AIR-safe (no extra Redact needed). Subject is the id.
+		row, has := m.FocusedEpistemicRow()
+		field := func(f string) (string, bool) {
+			if !has {
+				return "", false
+			}
+			if f == "id" {
+				f = "subject"
+			}
+			switch f {
+			case "subject":
+				return row.Subject, true
+			case "family":
+				return row.Family, true
+			case "status":
+				return row.Status, true
+			case "authority":
+				return row.Authority, true
+			case "evidence":
+				return row.Evidence, true
+			case "source":
+				return row.Source, true
+			case "freshness":
+				return row.Freshness, true
+			case "privacy":
+				return row.Privacy, true
+			case "detail":
+				return row.Detail, true
+			case "source_refs":
+				return row.SourceRefs, true
+			default:
+				return "", false
+			}
+		}
+		selectedField := m.selectedFieldForPage(page, "subject")
+		switch {
+		case key == "sel", key == "sel.value":
+			return field(selectedField)
+		case key == "sel.id", key == "focus":
+			return field("subject")
+		case key == "sel.field":
+			return selectedField, true
+		case strings.HasPrefix(key, "sel."):
+			return field(strings.TrimPrefix(key, "sel."))
+		}
+		return "", false
+	}
+
 	if page == PageDomains {
 		if row, has := m.FocusedDomainRow(); has {
 			field := func(f string) (string, bool) {
@@ -365,6 +415,32 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			return "", "", false
 		}
 		value = taskFieldValueForAir(t, field, m.AIR)
+	case PageEpistemics:
+		// The posture row is pre-AIR-projected, so the field is already redaction-safe.
+		row, has := m.FocusedEpistemicRow()
+		if !has {
+			return "", "", false
+		}
+		switch field {
+		case "subject":
+			value = row.Subject
+		case "family":
+			value = row.Family
+		case "status":
+			value = row.Status
+		case "authority":
+			value = row.Authority
+		case "evidence":
+			value = row.Evidence
+		case "freshness":
+			value = row.Freshness
+		case "privacy":
+			value = row.Privacy
+		case "detail":
+			value = row.Detail
+		default:
+			return "", "", false
+		}
 	default:
 		return "", "", false
 	}
