@@ -3086,11 +3086,15 @@ func sessionFieldValue(s grammar.Session, field string) string {
 }
 
 func (m Model) sessionResumeStatus(s grammar.Session) string {
+	// resolve the ref through the session's AIR map (the session NAME redacts on air unless
+	// allowlisted; fall back to the role, the lane identity) — then carry it as a pre-resolved Target.
 	ref := sessionFieldValueForAir(s, "session", m.AIR)
 	if strings.TrimSpace(ref) == "" || ref == "▒▒▒" {
 		ref = sessionFieldValueForAir(s, "role", m.AIR)
 	}
-	return "resume-intent: would emit session.resume(" + ref + ") via the governed COMMAND surface — NOT wired (no transcript/PTY/stdin bridge)"
+	env := m.governedVerbEnvelope("resume", ref)
+	env.TargetAirOK = true // pre-resolved above; the payload stays generic so the ref never rides it
+	return grammar.RenderCommandEnvelope(env, m.AIR)
 }
 
 // taskWindow: the visible row window (offset, count) — the SAME math taskBody renders with, so a
@@ -3276,9 +3280,42 @@ func (m Model) updateField(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// governedVerbSpecs is the SSOT for the door-dock mutation verbs' governed envelopes — the payload
+// each WOULD emit, the authority it requires, its preflight + receipt contract + UI delta. One table
+// so the preview is consistent everywhere and the never-mint shape is legible (vs scattered strings).
+var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receipt, uiDelta string }{
+	"arm":    {"sdlc.authorization_flip(release_authorized=true)", "operator + governed COMMAND route (release-arm)", "target + authority-packet + release gate", "armed receipt → spine", "task arms; gate re-evaluates"},
+	"rework": {"sdlc.stage_transition(→rework)", "governed COMMAND route", "target + stage-legality", "stage receipt → spine", "stage → rework"},
+	"refute": {"review.fail(target)", "governed COMMAND route", "target + open review thread", "review receipt → spine", "review recorded as fail"},
+	"close":  {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
+	"resume": {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
+}
+
+// governedVerbEnvelope builds the never-mint preview envelope for a door/dock verb against a target.
+func (m Model) governedVerbEnvelope(verb, target string) grammar.CommandEnvelope {
+	s := governedVerbSpecs[verb]
+	return grammar.CommandEnvelope{
+		Verb: verb, Target: target, Payload: s.payload, Authority: s.authority,
+		Preflight: s.preflight, Receipt: s.receipt, UIDelta: s.uiDelta, Wired: false,
+	}
+}
+
+// governedVerbPreview renders the verb's governed envelope against the focused task (AIR-aware: the
+// task id is resolved through the task's own AIR map before it enters the envelope).
+func (m Model) governedVerbPreview(verb string) string {
+	target := ""
+	if t, ok := m.FocusedTask(); ok {
+		target = grammar.Redact(t.AIR, "task_id", t.TaskID, m.AIR)
+	}
+	env := m.governedVerbEnvelope(verb, target)
+	env.TargetAirOK = true // pre-resolved above through the task AIR map
+	return grammar.RenderCommandEnvelope(env, m.AIR)
+}
+
 // updateDoor: keys while the /whois door is open. [Esc]/[Enter] close (clean return). The verb-dock
-// keys are GOVERNED STUBS — they report what they WOULD emit through the governed COMMAND surface but
-// never mutate the live system (the cockpit never mints authority; real routing is a follow-up).
+// keys are GOVERNED PREVIEWS — they render the full envelope (target · payload · authority · preflight
+// · receipt · Δ · NOT wired) through the governed COMMAND surface but never mutate the live system
+// (the cockpit never mints authority; real routing is a follow-up).
 func (m Model) updateDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.DoorOpen = false
 	switch keyName(v) {
@@ -3289,25 +3326,25 @@ func (m Model) updateDoor(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.DoorOpen, m.Status = true, "arm unavailable from this task state"
 			return m, nil
 		}
-		m.Status = "arm: would emit sdlc.authorization_flip(release_authorized=true) via the governed COMMAND surface — NOT wired (cockpit never mints authority)"
+		m.Status = m.governedVerbPreview("arm")
 	case "r":
 		if !m.doorVerbLegal("r") {
 			m.DoorOpen, m.Status = true, "rework unavailable from this task state"
 			return m, nil
 		}
-		m.Status = "rework: would emit sdlc.stage_transition(→rework) via the governed COMMAND surface — NOT wired"
+		m.Status = m.governedVerbPreview("rework")
 	case "f":
 		if !m.doorVerbLegal("f") {
 			m.DoorOpen, m.Status = true, "refute unavailable from this task state"
 			return m, nil
 		}
-		m.Status = "refute: would record review.fail via the governed COMMAND surface — NOT wired"
+		m.Status = m.governedVerbPreview("refute")
 	case "c":
 		if !m.doorVerbLegal("c") {
 			m.DoorOpen, m.Status = true, "close unavailable from this task state"
 			return m, nil
 		}
-		m.Status = "close: would emit task.closed via the governed COMMAND surface — NOT wired"
+		m.Status = m.governedVerbPreview("close")
 	default:
 		if nm, cmd, handled := m.updateGlobal(v); handled {
 			return nm, cmd // pass-through: window cycle/jump (switchPage closes the door)

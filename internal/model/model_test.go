@@ -1086,12 +1086,12 @@ func TestSessionsResumeIntentIsStubOnly(t *testing.T) {
 		t.Fatalf("session door should be AIR-safe and visible:\n%s", frame)
 	}
 	m = step(m, "r")
-	if !strings.Contains(m.Status, "resume-intent: would emit session.resume") || !strings.Contains(m.Status, "cx-p0") || strings.Contains(m.Status, "tmux-p0") {
-		t.Fatalf("sessions r should report an AIR-safe governed stub, got %q", m.Status)
+	if !strings.Contains(m.Status, "session.resume") || !strings.Contains(m.Status, "cx-p0") || strings.Contains(m.Status, "tmux-p0") || !strings.Contains(m.Status, "NOT wired") {
+		t.Fatalf("sessions r should report an AIR-safe governed never-mint envelope, got %q", m.Status)
 	}
 	m = step(m, "r")
-	if !strings.Contains(m.Status, "no transcript/PTY/stdin bridge") {
-		t.Fatalf("sessions r should be a non-dispatch resume-intent stub, got %q", m.Status)
+	if !strings.Contains(m.Status, "transcript/PTY/stdin bridge") {
+		t.Fatalf("sessions r should be a non-dispatch resume envelope citing the bridge preflight, got %q", m.Status)
 	}
 }
 
@@ -1110,8 +1110,8 @@ func TestWhoisDoorOpensAndCloses(t *testing.T) {
 	}
 	// a verb-dock key is a governed STUB — closes + reports, never mutates
 	m = step(m, "a")
-	if m.DoorOpen || !strings.Contains(m.Status, "governed COMMAND surface") {
-		t.Fatalf("arm must close + report the governed route: open=%v status=%q", m.DoorOpen, m.Status)
+	if m.DoorOpen || !strings.Contains(m.Status, "NOT wired") || !strings.Contains(m.Status, "sdlc.authorization_flip") {
+		t.Fatalf("arm must close + report the governed never-mint envelope: open=%v status=%q", m.DoorOpen, m.Status)
 	}
 	// reopen + Esc closes cleanly
 	m = step(step(m, "enter"), "esc")
