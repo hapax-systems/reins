@@ -250,10 +250,12 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 		return []yankFieldDef{
 			{"s", "subject"}, {"f", "family"}, {"t", "status"}, {"a", "authority"},
 			{"e", "evidence"}, {"r", "freshness"}, {"p", "privacy"}, {"d", "detail"},
+			{"o", "source"}, {"R", "source_refs"},
 		}
 	case PageTraces:
 		return []yankFieldDef{
 			{"i", "trace_id"}, {"m", "model"}, {"t", "ts"}, {"c", "cost"}, {"l", "latency_ms"},
+			{"k", "total_tok"},
 		}
 	case PageIntent:
 		return []yankFieldDef{{"t", "target"}, {"d", "detail"}}

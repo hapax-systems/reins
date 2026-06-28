@@ -595,6 +595,10 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			value = row.Privacy
 		case "detail":
 			value = row.Detail
+		case "source":
+			value = row.Source
+		case "source_refs":
+			value = row.SourceRefs
 		default:
 			return "", "", false
 		}
@@ -614,6 +618,8 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			value = grammar.Redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), m.AIR)
 		case "latency_ms":
 			value = grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR)
+		case "total_tok", "tokens":
+			value = grammar.Redact(tr.AIR, "total_tok", fmt.Sprintf("%d", tr.TotalTok), m.AIR)
 		default:
 			return "", "", false
 		}
