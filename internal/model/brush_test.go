@@ -74,6 +74,64 @@ func TestEventsBrushRelatedRows(t *testing.T) {
 	}
 }
 
+func TestTracesBrushRelatedRows(t *testing.T) {
+	traces := []grammar.Trace{
+		{TS: "t1", TraceID: "tr1", Model: "alpha", LatencyMs: 100},
+		{TS: "t2", TraceID: "tr2", Model: "alpha", LatencyMs: 200},
+		{TS: "t3", TraceID: "tr3", Model: "beta", LatencyMs: 300},
+		{TS: "t4", TraceID: "tr4", Model: "alpha", LatencyMs: 400},
+	}
+	m := New("REINS").FoldTraces(traces, false)
+	m.Page = PageTraces
+	m.TFocus = 0 // focus tr1 (model=alpha); the strongest shared facet is model=alpha → tr2,tr4
+
+	brushed := m.brushedTraces()
+	id := func(tr grammar.Trace) string { return traceEntity(tr, false).ID }
+	if !brushed[id(traces[1])] || !brushed[id(traces[3])] {
+		t.Fatalf("the model=alpha siblings must be brushed; got %v", brushed)
+	}
+	if brushed[id(traces[2])] || brushed[id(traces[0])] {
+		t.Fatalf("non-sharers and the focused trace must not be brushed; got %v", brushed)
+	}
+	out := ansi.Strip(m.tracesListBody(140, 30))
+	if strings.Count(out, "├") < 2 {
+		t.Fatalf("the traces list must draw a ├ gutter for each brushed row:\n%s", out)
+	}
+	if !strings.Contains(m.tracesEmergentRelation(), "├") {
+		t.Fatalf("the traces connector label must decode ├ in-band; got %q", m.tracesEmergentRelation())
+	}
+}
+
+func TestEpistemicsBrushRelatedRows(t *testing.T) {
+	// distinct families/statuses/privacy so authority=alpha is the UNIQUE strongest shared facet (no tie).
+	ep := grammar.EpistemicsSummary{Rows: []grammar.EpistemicReadRow{
+		{RowID: "e1", Family: "claim", Subject: "s1", Status: "asserted", Authority: "alpha", Privacy: "p1"},
+		{RowID: "e2", Family: "observation", Subject: "s2", Status: "observed", Authority: "alpha", Privacy: "p2"},
+		{RowID: "e3", Family: "validation", Subject: "s3", Status: "missing", Authority: "beta", Privacy: "p3"},
+		{RowID: "e4", Family: "source", Subject: "s4", Status: "fresh", Authority: "alpha", Privacy: "p4"},
+	}}
+	m := New("REINS").FoldEpistemics(ep, false)
+	m.Page = PageEpistemics
+	m.EpiFocus = 0 // focus e1 (authority=alpha); the strongest shared facet is authority=alpha → e2,e4
+	rows := m.epistemicRows()
+
+	brushed := m.brushedEpistemics()
+	id := func(row epistemicRow) string { return epistemicEntity(row).ID }
+	if !brushed[id(rows[1])] || !brushed[id(rows[3])] {
+		t.Fatalf("the authority=alpha siblings must be brushed; got %v", brushed)
+	}
+	if brushed[id(rows[2])] || brushed[id(rows[0])] {
+		t.Fatalf("non-sharers and the focused epistemic row must not be brushed; got %v", brushed)
+	}
+	out := ansi.Strip(m.epistemicListBody(140, 30))
+	if strings.Count(out, "├") < 2 {
+		t.Fatalf("the epistemics list must draw a ├ gutter for each brushed row:\n%s", out)
+	}
+	if !strings.Contains(m.epistemicsEmergentRelation(), "├") {
+		t.Fatalf("the epistemics connector label must decode ├ in-band; got %q", m.epistemicsEmergentRelation())
+	}
+}
+
 func TestCoordinatorBrushRedactedFacetDoesNotForm(t *testing.T) {
 	// when the shared facet's source field is DENIED on air, the relation must not form over it,
 	// so no rows are brushed on that facet (no derived-channel leak).

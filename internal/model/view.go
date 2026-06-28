@@ -1030,13 +1030,12 @@ func epistemicEntity(row epistemicRow) relate.Entity {
 	return relate.Entity{ID: row.RowID + "|" + row.Family + "|" + row.Subject, Facets: facets}
 }
 
-// epistemicsEmergentRelation anchors on the focused posture row; others = the rest of the rows. The
-// self-anchored connector is the honest "how this evidence row relates to its siblings" join — never an
-// authored sessions→evidence split-pair.
-func (m Model) epistemicsEmergentRelation() string {
+// epistemicsRelation anchors on the focused posture row vs the rest of the rows, deriving ONCE so the
+// connector label and the brush set agree. The rows are already AIR-projected by epistemicRows.
+func (m Model) epistemicsRelation() (relate.Relation, bool) {
 	rows := m.epistemicRows()
 	if len(rows) == 0 {
-		return ""
+		return relate.Relation{}, false
 	}
 	idx := clamp(m.EpiFocus, 0, len(rows)-1)
 	others := make([]relate.Entity, 0, len(rows))
@@ -1046,7 +1045,34 @@ func (m Model) epistemicsEmergentRelation() string {
 		}
 		others = append(others, epistemicEntity(r))
 	}
-	return m.emergentRelation(epistemicEntity(rows[idx]), others, nil)
+	return relate.Derive(epistemicEntity(rows[idx]), others, nil), true
+}
+
+// brushedEpistemics is the brush set: the composite ids of the posture rows participating in the
+// focused row's emergent relation (relate.Peers). AIR-safe — rows are projected before deriving.
+func (m Model) brushedEpistemics() map[string]bool {
+	rel, ok := m.epistemicsRelation()
+	if !ok || len(rel.Peers) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(rel.Peers))
+	for _, id := range rel.Peers {
+		set[id] = true
+	}
+	return set
+}
+
+// epistemicsEmergentRelation renders the connector label AIR-aware; decodes the ├ brush glyph in-band.
+func (m Model) epistemicsEmergentRelation() string {
+	rel, ok := m.epistemicsRelation()
+	if !ok {
+		return ""
+	}
+	label := m.airRelationLabel(rel)
+	if len(rel.Peers) > 0 {
+		label += " · ├ related"
+	}
+	return label
 }
 
 // traceEntity builds the relate facets for an LLM trace row. Cost/latency are continuous (not facets);
@@ -1060,13 +1086,12 @@ func traceEntity(tr grammar.Trace, airOn bool) relate.Entity {
 	return relate.Entity{ID: tr.TraceID + "|" + tr.TS, Facets: facets}
 }
 
-// tracesEmergentRelation anchors on the focused trace; others = the rest of the feed. The self-anchored
-// connector is the honest "how this call relates to its neighbors" join (shared model), never an
-// authored sessions→trace-feed split-pair.
-func (m Model) tracesEmergentRelation() string {
+// tracesRelation anchors on the focused trace vs the rest of the feed, deriving ONCE so the connector
+// label and the brush set agree. AIR-aware (facet VALUES/peers withheld on air).
+func (m Model) tracesRelation() (relate.Relation, bool) {
 	focused, ok := m.FocusedTrace()
 	if !ok {
-		return ""
+		return relate.Relation{}, false
 	}
 	others := make([]relate.Entity, 0, len(m.Traces))
 	for i, tr := range m.Traces {
@@ -1075,7 +1100,34 @@ func (m Model) tracesEmergentRelation() string {
 		}
 		others = append(others, traceEntity(tr, m.AIR))
 	}
-	return m.emergentRelation(traceEntity(focused, m.AIR), others, nil)
+	return relate.Derive(traceEntity(focused, m.AIR), others, nil), true
+}
+
+// brushedTraces is the brush set: the composite ids of the traces participating in the focused trace's
+// emergent relation (relate.Peers). AIR-safe — air-aware facets feed the derive; positional.
+func (m Model) brushedTraces() map[string]bool {
+	rel, ok := m.tracesRelation()
+	if !ok || len(rel.Peers) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(rel.Peers))
+	for _, id := range rel.Peers {
+		set[id] = true
+	}
+	return set
+}
+
+// tracesEmergentRelation renders the connector label AIR-aware; decodes the ├ brush glyph in-band.
+func (m Model) tracesEmergentRelation() string {
+	rel, ok := m.tracesRelation()
+	if !ok {
+		return ""
+	}
+	label := m.airRelationLabel(rel)
+	if len(rel.Peers) > 0 {
+		label += " · ├ related"
+	}
+	return label
 }
 
 // sessionsEmergentRelation anchors on the focused session; others = the rest of the fleet.
@@ -2773,11 +2825,18 @@ func (m Model) epistemicListBody(w, h int) string {
 	if len(rows) > visible {
 		off = clamp(idx-visible/2, 0, len(rows)-visible)
 	}
+	brushed := m.brushedEpistemics()
 	for i := off; i < off+visible && i < len(rows); i++ {
-		line := epistemicRowLine(rows[i], i == idx, w)
-		if i == idx {
+		switch {
+		case i == idx:
+			line := epistemicRowLine(rows[i], true, w)
 			b.WriteString(focusBar(line, w) + "\n")
-		} else {
+		case brushed[epistemicEntity(rows[i]).ID]:
+			// brushed: shares the focused posture row's strongest emergent facet (├ decoded by the connector)
+			line := epistemicRowLineWithMark(rows[i], "├", "2nd", w)
+			b.WriteString(fitWidth(line, w) + "\n")
+		default:
+			line := epistemicRowLine(rows[i], false, w)
 			b.WriteString(fitWidth(line, w) + "\n")
 		}
 	}
@@ -3937,7 +3996,11 @@ func epistemicRowLine(row epistemicRow, selected bool, w int) string {
 	if selected {
 		mark = "▶"
 	}
-	return grammar.C(row.Token, mark+" ") +
+	return epistemicRowLineWithMark(row, mark, row.Token, w)
+}
+
+func epistemicRowLineWithMark(row epistemicRow, mark, markToken string, w int) string {
+	return grammar.C(markToken, mark+" ") +
 		grammar.C("org", fmt.Sprintf("%-15s", clipRunes(row.Family, 15))) +
 		grammar.C(row.Token, fmt.Sprintf(" %-14s", clipRunes(row.Status, 14))) +
 		grammar.C("brt", fmt.Sprintf(" %-32s", clipRunes(row.Subject, 32))) +
@@ -10757,10 +10820,15 @@ func (m Model) tracesListBody(w, h int) string {
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString("  " + grammar.RenderTraceHeader() + "\n")
+	brushed := m.brushedTraces()
 	for i := start; i < start+visible && i < len(m.Traces); i++ {
-		if i == m.TFocus {
+		switch {
+		case i == m.TFocus:
 			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(grammar.RenderTraceRow(m.Traces[i], m.AIR), w-1) + "\n")
-		} else {
+		case brushed[traceEntity(m.Traces[i], m.AIR).ID]:
+			// brushed: shares the focused trace's strongest emergent facet (├ decoded by the connector)
+			b.WriteString(grammar.C("2nd", "├") + " " + grammar.RenderTraceRow(m.Traces[i], m.AIR) + "\n")
+		default:
 			b.WriteString("  " + grammar.RenderTraceRow(m.Traces[i], m.AIR) + "\n")
 		}
 	}
