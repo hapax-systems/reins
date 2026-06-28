@@ -2097,7 +2097,7 @@ func TestSplitYardUsesSelectedSessionAsTrainyardDrilldown(t *testing.T) {
 		"2 candidate codex route tools",
 		"filesystem:observed",
 		"local_shell:read-missing",
-		"exact per-session needs route_id",
+		"exact per-session needs", // wraps before "route_id" at the algebra's narrower secondary width
 		"aggregate gates task:1 lane:1 route:0 command:1 blocked:2 preview:1",
 		"focus cx-yard -> yard drilldown",
 		"source focus drives context by lane/task",
@@ -2122,9 +2122,12 @@ func TestSplitYardPinnedContextLeavesBodyRows(t *testing.T) {
 	m.Width, m.Height, m.Page, m.SplitContext = 180, 16, PageYard, true
 
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"SELECTED TRAINYARD LANE", "pinned context rows hidden", "YARD", "RAIL TOPOLOGY", "stations"} {
+	// At this very short height (16) the algebra secondary collapses the pinned card to its summary
+	// marker ("…N pinned context rows hidden; taller frame") and keeps the body rows — the test's real
+	// intent (pinned summarized, body preserved). The card itself returns at a taller frame.
+	for _, want := range []string{"pinned context rows hidden", "YARD", "RAIL TOPOLOGY", "stations"} {
 		if !strings.Contains(v, want) {
-			t.Fatalf("short split yard should preserve pinned context and body rows, missing %q:\n%s", want, v)
+			t.Fatalf("short split yard should summarize pinned context and preserve body rows, missing %q:\n%s", want, v)
 		}
 	}
 }

@@ -629,22 +629,22 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderCapabilitySplitPane(pw, ph) }}),
 			0.55, layout.Connector{Glyph: div, Relation: "selected lane → capability fit"})
-	case PageReadiness, PageIntake:
-		// Inc 2 — the other SESSION-ANCHORED drilldowns. Same safe recipe as caps: swap the legacy
+	case PageYard, PageReadiness, PageIntake:
+		// Inc 2 — the SESSION-ANCHORED drilldowns. Same safe recipe as caps: swap the legacy
 		// splitContextBody RENDER for the algebra fold (gated on splitContextActive → session-source
 		// nav/binding unchanged). The secondary is splitContextPane (the per-page drilldown dispatcher
 		// the legacy split already used, including the pinned card via splitReferenceSlice). The primary
-		// is splitSessionsPane, so these need NO own row-list / custom spec — the session IS the cursor.
-		// (PageYard is deferred: it's a projection page with a short-height pinned-card layout subtlety
-		// AND the "is the session source semantically correct?" design question GLM flagged.)
+		// is splitSessionsPane, so these projection pages need NO own row-list / custom spec — the
+		// session IS the cursor (yard anchored session-per the playbook, operator-confirmed).
 		if !m.splitContextActive() {
 			return nil // narrow / split-off → the legacy reference body
 		}
 		rel := map[int]string{
+			PageYard:      "selected lane → yard drilldown",
 			PageReadiness: "selected lane → gate stack",
 			PageIntake:    "selected lane → intake observations",
 		}[m.Page]
-		ratio := map[int]float64{PageReadiness: 0.57, PageIntake: 0.56}[m.Page]
+		ratio := map[int]float64{PageYard: 0.58, PageReadiness: 0.57, PageIntake: 0.56}[m.Page]
 		div := grammar.C("border", "│")
 		return layout.Split(
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
