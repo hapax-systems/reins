@@ -18,12 +18,16 @@ PANES=(
   ":relational; j|relational-pane"
 )
 
+command -v freeze >/dev/null 2>&1 || { echo "freeze not found (go install github.com/charmbracelet/freeze@latest)" >&2; exit 1; }
 pass=0; fail=0; head="$(git -C "$REPO" rev-parse --short HEAD)"
 printf 'reins AVSDLC suite @ %s%s\n' "$head" "${LIVE:+ (live)}"
+bin="$TMP/reins"
+go -C "$REPO" build -o "$bin" ./cmd/reins   # build ONCE — the renders reuse it (was: rebuild per pane)
 for entry in "${PANES[@]}"; do
   spec="${entry%%|*}"; intent="${entry##*|}"
   png="$TMP/${intent}.png"
-  bash "$REPO/scripts/reins-shot.sh" "$spec" "$png" size:160x44 $LIVE >/dev/null 2>&1
+  "$bin" --drive "$spec" size:160x44 $LIVE > "$TMP/frame.ansi" 2>/dev/null
+  freeze "$TMP/frame.ansi" --language ansi --output "$png" >/dev/null 2>&1
   if python3 "$REPO/scripts/reins-avsdlc-witness.py" --frame "$png" \
        --intent "$REPO/docs/avsdlc/intents/${intent}.json" --pov local-terminal \
        --source-head "$head" >/dev/null 2>&1; then
