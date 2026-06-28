@@ -48,7 +48,7 @@ func SeedModel(w, h int) model.Model {
 	m = m.FoldTasks(tasks, false)
 
 	m = m.FoldSessions([]grammar.Session{
-		{Role: "cc-alpha", Session: "tmux-alpha", Platform: "claude", State: "streaming", Readiness: "green", Alive: true, Attention: 0.88},
+		{Role: "cc-alpha", Session: "tmux-alpha", Platform: "claude", State: "streaming", Readiness: "green", Alive: true, Attention: 0.88, ClaimedTask: "reform-fix-eventlog-ssot-ledger"},
 		{Role: "cc-beta", Session: "tmux-beta", Platform: "codex", State: "idle", Readiness: "amber", Idle: true, Attention: 0.41},
 		{Role: "cc-gamma", Session: "tmux-gamma", Platform: "claude", State: "streaming", Readiness: "green", Alive: true, Attention: 0.67},
 		{Role: "cc-delta", Session: "tmux-delta", Platform: "glm", State: "awaiting", Readiness: "amber", Alive: true, Attention: 0.52},

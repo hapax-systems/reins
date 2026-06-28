@@ -11064,6 +11064,9 @@ func (m Model) turnListBody(w, h int) string {
 	}
 	var b strings.Builder
 	b.WriteString(m.turnLaneRail(w) + "\n")
+	if pos := m.turnSessionPosition(w); pos != "" {
+		b.WriteString(pos + "\n")
+	}
 	srcTok := "2nd"
 	if m.TurnsDark {
 		srcTok = "mut"
@@ -11084,6 +11087,51 @@ func (m Model) turnListBody(w, h int) string {
 		}
 	}
 	return b.String()
+}
+
+// turnSessionPosition renders the C4 LIVE SESSION POSITION for the focused lane (m.TurnRole): WHERE it
+// is in the n-DLC — its claimed task and that task's SDLC stage. This is the per-session variable part
+// of the 06-28 coordination canon (C4 = active task · current stage), folded from the present read
+// model. AIR-safe: role + claimed_task + stage redact per their own AIR maps; a denied field becomes
+// ▒▒▒ in place. ("What's authorized" — the legal next transitions — awaits the FSM read endpoint.)
+func (m Model) turnSessionPosition(w int) string {
+	var s grammar.Session
+	found := false
+	for _, x := range m.Sessions {
+		if x.Role == m.TurnRole {
+			s, found = x, true
+			break
+		}
+	}
+	if !found {
+		return ""
+	}
+	role := grammar.Redact(s.AIR, "role", s.Role, m.AIR)
+	parts := []string{grammar.C("brt", "POSITION") + grammar.C("mut", "  lane ") + role}
+	if strings.TrimSpace(s.ClaimedTask) == "" {
+		parts = append(parts, grammar.C("mut", "no claimed task"))
+		return fitWidth(" "+strings.Join(parts, grammar.C("mut", " · ")), w)
+	}
+	parts = append(parts, grammar.C("mut", "task ")+grammar.Redact(s.AIR, "claimed_task", s.ClaimedTask, m.AIR))
+	stage, predicted := "", ""
+	for _, t := range m.Tasks {
+		if t.TaskID == s.ClaimedTask {
+			stage = grammar.Redact(t.AIR, "stage", t.Stage, m.AIR)
+			predicted = grammar.Redact(t.AIR, "predicted_stage", t.PredictedStage, m.AIR)
+			break
+		}
+	}
+	switch {
+	case stage != "":
+		seg := grammar.C("mut", "stage ") + stage
+		if predicted != "" && predicted != stage {
+			seg += grammar.C("mut", " → ") + predicted
+		}
+		parts = append(parts, seg)
+	default:
+		parts = append(parts, grammar.C("mut", "stage not in view"))
+	}
+	return fitWidth(" "+strings.Join(parts, grammar.C("mut", " · ")), w)
 }
 
 // turnLaneRail is the FLEET lane-rail above the turn split (E4.5 — the one-coordinating-session model):

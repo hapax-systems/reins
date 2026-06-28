@@ -55,3 +55,30 @@ func TestTurnLaneRailIsFleetRankedFocusMarkedAndAirSafe(t *testing.T) {
 		t.Fatalf("on air with readiness/blocker/stalled denied, the rail must not label a lane blocked:\n%s", railAir)
 	}
 }
+
+// The C4 session-position readout (06-28 canon) shows the focused lane's n-DLC position — its claimed
+// task + that task's SDLC stage — folded from the present read model. AIR-safe: the claimed_task id
+// DENIES on air (not allowlisted = identity-ish), the stage AIRS (allowlisted structural).
+func TestTurnSessionPositionShowsClaimedTaskAndStageAirSafe(t *testing.T) {
+	m := New("REINS").
+		FoldTasks([]grammar.Task{{TaskID: "task-x", Stage: "S7_RELEASE", PredictedStage: "hold",
+			AIR: map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok"}}}, false).
+		FoldSessions([]grammar.Session{{Role: "cx-lead", State: "streaming", ClaimedTask: "task-x",
+			AIR: map[string]string{"role": "ok", "state": "ok"}}}, false)
+	m.TurnRole = "cx-lead"
+
+	off := ansi.Strip(m.turnSessionPosition(200))
+	for _, want := range []string{"cx-lead", "task-x", "S7_RELEASE"} {
+		if !strings.Contains(off, want) {
+			t.Fatalf("off-air C4 position must show %q:\n%s", want, off)
+		}
+	}
+	m.AIR = true
+	on := ansi.Strip(m.turnSessionPosition(200))
+	if strings.Contains(on, "task-x") {
+		t.Fatalf("on air the claimed_task id must deny (not allowlisted):\n%s", on)
+	}
+	if !strings.Contains(on, "S7_RELEASE") {
+		t.Fatalf("on air the allowlisted stage must still air:\n%s", on)
+	}
+}
