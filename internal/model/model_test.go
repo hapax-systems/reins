@@ -807,6 +807,28 @@ func TestObjectVerbMenuPreviewsLegalVerb(t *testing.T) {
 	}
 }
 
+// The [v] verb-menu pre-seeds the executable buffer with the REAL task id, but on air NEITHER the
+// status preview NOR the command-input DISPLAY may leak that id (a denied task's id is PII). The
+// buffer stays intact so the command still runs against the real target.
+func TestObjectVerbMenuDoesNotLeakDeniedTaskIdOnAir(t *testing.T) {
+	m := New("REINS").FoldTasks([]grammar.Task{
+		{TaskID: "secret-rel-task", Stage: "S7", PredictedStage: "hold", AIR: map[string]string{"stage": "ok", "predicted_stage": "ok"}}, // task_id NOT ok → denied
+	}, false)
+	m.Width, m.Height, m.Page, m.AIR = 200, 30, PageTasks, true
+	send := func(m Model, v tea.KeyMsg) Model { nm, _ := m.Update(v); return nm.(Model) }
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.Input != "arm secret-rel-task" {
+		t.Fatalf("the buffer must keep the real id for execution, got %q", m.Input)
+	}
+	if strings.Contains(ansi.Strip(m.Status), "secret-rel-task") {
+		t.Fatalf("on-air verb-menu status must redact the denied task id, got %q", m.Status)
+	}
+	if disp := ansi.Strip(m.commandInputDisplay()); strings.Contains(disp, "secret-rel-task") || !strings.Contains(disp, "▒▒▒") {
+		t.Fatalf("on-air command-input display must redact the denied task id, got %q", disp)
+	}
+}
+
 func TestRegisteredSplitPairsRenderCoherentTwoPaneFrames(t *testing.T) {
 	base := New("REINS").
 		Fold([]grammar.Event{{

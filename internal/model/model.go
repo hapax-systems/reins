@@ -3196,8 +3196,11 @@ func (m Model) updateVerbMenu(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.Status = vb.Name + ": not legal for this task's stage"
 					return m, nil
 				}
+				// pre-seed the command buffer with the REAL id (the command must run against it);
+				// the status preview + the on-air input DISPLAY redact the id (governedVerbPreview /
+				// commandInputDisplay) so the raw id never airs — the buffer is never shown verbatim.
 				m.Mode, m.Input, m.CompIdx = ModeCommand, vb.Name+" "+t.TaskID, 0
-				m.Status = "preview " + vb.Name + " " + t.TaskID + " — routes through governed COMMAND; mints nothing"
+				m.Status = m.governedVerbPreview(vb.Name)
 				return m, nil
 			}
 		}

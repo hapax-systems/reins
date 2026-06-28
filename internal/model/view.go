@@ -12649,8 +12649,16 @@ func (m Model) commandInputDisplay() string {
 		return m.Input
 	}
 	fields := strings.Fields(m.Input)
-	if len(fields) > 0 && (fields[0] == "note" || fields[0] == "n") && len(m.Input) > len(fields[0]) {
-		return fields[0] + " ▒▒▒"
+	if len(fields) == 0 {
+		return m.Input
+	}
+	verb := fields[0]
+	// note = free text; a governed object-verb (arm/rework/refute/close/resume) carries a sensitive
+	// TARGET id as its argument. Redact the argument on air, keep the verb (structural). m.Input (the
+	// executable buffer) is unchanged — only its on-air RENDERING is redacted.
+	_, governed := governedVerbSpecs[verb]
+	if (verb == "note" || verb == "n" || governed) && len(m.Input) > len(verb) {
+		return verb + " ▒▒▒"
 	}
 	return m.Input
 }
