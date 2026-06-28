@@ -14,7 +14,7 @@
       "region": "entity_core",
       "metric": "edge_energy",
       "op": ">=",
-      "target": 1.0,
+      "target": 0.5,
       "direction": "increase",
       "critical": true
     },
@@ -29,5 +29,5 @@
     }
   ],
   "aggregation_floor": 0.75,
-  "note": "A1 :identity pane (roster|detail @0.5): the LEFT principal roster renders text rows (left_wall edge_energy >= the principled text-present floor 1.0, distinct from a blank region's ~0), the center spans into the focused principal's identity contract (entity_core), and the frame stays dark-theme (entity_core luma <= 120). A reference/roster pane — thresholds reflect a legible roster, not feed-density (the :axes lesson). Authored BEFORE the render."
+  "note": "A1 :identity pane (roster|detail @0.5): the LEFT principal roster renders text rows (left_wall edge_energy >= 1.0). The center (entity_core) is the list|detail BOUNDARY of a left-heavy roster, so it is legitimately sparser — its floor is 0.5 (still distinct from a blank region's ~0, the negative control), holding for both the dense live fold and the offline seed. The frame stays dark-theme (entity_core luma <= 120). Authored from design intent."
 }

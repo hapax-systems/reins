@@ -7,7 +7,7 @@ PY ?= python3   # python for the READ API; needs fastapi+uvicorn + the substrate
 # Port + paths come from the instance config (config.toml api_url) — ONE source of truth. Both halves
 # self-resolve it; the Makefile does not inject a port (which would fight the config).
 
-.PHONY: up run api build install test smoke drive fmt tidy help
+.PHONY: up run api build install test smoke drive avsdlc fmt tidy help
 
 PREFIX ?= $(HOME)/.local
 
@@ -45,6 +45,9 @@ smoke: ## headless NAV smoke — visits every page, no panic, on-air redaction
 
 drive: ## drive a nav sequence headless + print the frame (SPEC=":coordinator; j; v"  [SIZE=170x46] [FLAGS=--air])
 	go run ./cmd/reins --drive "$(SPEC)" size:$(or $(SIZE),170x46) $(FLAGS)
+
+avsdlc: ## render + AVSDLC-confirm every pane with an intent (visual regression; --live optional via FLAGS=--live)
+	bash scripts/reins-avsdlc-suite.sh $(FLAGS)
 
 fmt: ## gofmt
 	go fmt ./...
