@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/hapax-systems/reins/internal/doi"
 	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/graph"
@@ -10908,7 +10910,9 @@ func (m Model) contextLine() string {
 		if len(m.Events) == 0 {
 			return grammar.C("2nd", " live coord events · no events · focus: —")
 		}
-		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d shown · [j/k] select · [y]ank · focus: %s", len(m.Events), f))
+		// "%d live" not "shown": under the DOI fold not every live event occupies a cell — the body's
+		// "+N folded" marker is the honest count of what receded. Claiming "N shown" would contradict it.
+		return grammar.C("2nd", fmt.Sprintf(" live coord events · newest at bottom · %d live · [j/k] select · [y]ank · focus: %s", len(m.Events), f))
 	case PageTraces:
 		f := "—"
 		if tr, ok := m.FocusedTrace(); ok {
@@ -11310,27 +11314,82 @@ func (m Model) eventsWideBody(w, h int) string {
 	return strings.Join(out, "\n")
 }
 
+// eventDeniedImportance is the importance assigned to an on-air event whose Score is DENIED: a uniform
+// constant carrying NO signal, so the visible set's membership/order can never disclose the redacted
+// score (the derived-channel discipline). 0 ranks denied events on proximity-to-focus alone.
+const eventDeniedImportance = 0.0
+
+// eventDoiSelection runs the framework's ONE scaling mechanism — the Degree-of-Interest fold — over the
+// events to choose WHICH rows occupy the finite cell `budget`: importance (the served Score) minus
+// normalized distance-from-focus (Furnas). The focused row is PINNED visible. It returns the
+// chronological indices to render (selection decides membership; the reading order stays chronological)
+// plus the count folded into the "+N" tail. AIR-safe: a denied score contributes no importance signal,
+// so ordering cannot leak it.
+func (m Model) eventDoiSelection(budget int) (order []int, folded int) {
+	n := len(m.Events)
+	if n == 0 {
+		return nil, 0
+	}
+	if n <= budget {
+		order = make([]int, n)
+		for i := range order {
+			order[i] = i
+		}
+		return order, 0
+	}
+	span := float64(n - 1)
+	if span < 1 {
+		span = 1
+	}
+	scored := make([]doi.Scored, n)
+	for i, ev := range m.Events {
+		var d float64
+		if i == m.EFocus {
+			d = math.Inf(1) // the focal row is always retained, whatever its interest
+		} else {
+			imp := ev.Score
+			if m.AIR && ev.AIR["score"] != "ok" {
+				imp = eventDeniedImportance
+			}
+			dist := math.Abs(float64(i-m.EFocus)) / span // normalize so importance genuinely competes
+			d = doi.DOI(imp, dist)
+		}
+		scored[i] = doi.Scored{ID: strconv.Itoa(i), DOI: d}
+	}
+	placements, aggregated := doi.Fold(scored, budget, 0)
+	keep := make(map[int]bool, len(placements))
+	for _, p := range placements {
+		if idx, err := strconv.Atoi(p.ID); err == nil {
+			keep[idx] = true
+		}
+	}
+	for i := 0; i < n; i++ {
+		if keep[i] {
+			order = append(order, i)
+		}
+	}
+	return order, aggregated
+}
+
 func (m Model) eventsListBody(w, h int) string {
 	visible := h - 2 // context + header
 	if visible < 1 {
 		visible = 1
 	}
-	start := 0
+	budget := visible
 	if len(m.Events) > visible {
-		start = len(m.Events) - visible // tail = newest by default
-		// keep the focused row in view if it scrolled out of the tail window
-		if m.EFocus < start {
-			start = m.EFocus
-		}
-		if m.EFocus >= start+visible {
-			start = m.EFocus - visible + 1
+		budget = visible - 1 // reserve a cell for the "+N folded" honesty marker so it can't be clipped
+		if budget < 1 {
+			budget = 1
 		}
 	}
+	order, folded := m.eventDoiSelection(budget)
+
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
 	b.WriteString("  " + grammar.RenderEventHeader() + "\n") // 2-col gutter aligns under the cursor
 	brushed := m.brushedEvents()
-	for i := start; i < start+visible && i < len(m.Events); i++ {
+	for _, i := range order {
 		switch {
 		case i == m.EFocus && m.Mode == ModeYank:
 			b.WriteString(fitWidth(eventPickRow(m.Events[i], m.AIR, m.Sel.Field), w) + "\n")
@@ -11342,6 +11401,10 @@ func (m Model) eventsListBody(w, h int) string {
 		default:
 			b.WriteString("  " + grammar.RenderEventRow(m.Events[i], m.AIR) + "\n")
 		}
+	}
+	if folded > 0 {
+		// the dropped tail, named honestly — the cure for today's silent older-event drop
+		b.WriteString(grammar.C("mut", fmt.Sprintf("  +%d folded (lower interest) · [j/k] to summon", folded)) + "\n")
 	}
 	return b.String()
 }
