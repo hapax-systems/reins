@@ -95,9 +95,11 @@ func RenderList(entries []Entry, cwd string, cursor int, airOn bool, width int) 
 }
 
 // RenderListMarked is RenderList plus a basket-stage gutter: marked[i]==true draws ▣ before the row
-// (the file is staged in the injection basket). The stage mark is the operator's own STRUCTURAL
-// action, not file content, so it survives on air — the names/paths it points at still redact. A
-// nil/short marked slice draws no stage glyphs (back-compat). Never panics on out-of-range cursor.
+// (the file is staged in the injection basket). On air the STRUCTURAL glyphs survive (stage ▣ /
+// cursor ▶ / dir ▸ vs file ·) but every filename AND the size/ext metadata DENY — a filename is PII
+// (the same rule basketManifest + coordChatFileChip enforce) and a private directory's composition
+// (the sizes/types it holds) is sensitive too. A nil/short marked slice draws no stage glyphs
+// (back-compat). Never panics on out-of-range cursor.
 func RenderListMarked(entries []Entry, cwd string, cursor int, marked []bool, airOn bool, width int) string {
 	if width <= 0 {
 		width = 60
@@ -132,6 +134,12 @@ func RenderListMarked(entries []Entry, cwd string, cursor int, marked []bool, ai
 			if e.Ext != "" {
 				meta += "  " + grammar.C("2nd", e.Ext)
 			}
+		}
+		if airOn {
+			// filename = PII, dir composition (sizes/types) = sensitive → deny both; only the
+			// structural glyphs survive (the dir ▸ vs file · glyph already carries the kind).
+			name = grammar.Redact(nil, "file_name", name, true)
+			meta = ""
 		}
 		b.WriteString(stage + " " + mark + glyph + name + meta)
 		if i < len(entries)-1 {

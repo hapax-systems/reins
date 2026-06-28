@@ -77,6 +77,31 @@ func TestRenderListRedactsCwdOnAir(t *testing.T) {
 	}
 }
 
+func TestRenderListRedactsFilenamesAndMetaOnAir(t *testing.T) {
+	es := []Entry{
+		{Name: "medical-results.png", Size: 4096, Ext: "png"},
+		{Name: "private-dir", IsDir: true},
+	}
+	out := RenderListMarked(es, "/home/x/Pictures", 0, []bool{true, false}, true, 80)
+	// a filename is PII (and the dir-composition size/ext too) — none may survive on air
+	for _, leak := range []string{"medical-results", "private-dir", "png", "4.0K", "4096"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("on-air listing leaked %q (filename/meta is sensitive):\n%s", leak, out)
+		}
+	}
+	// structural glyphs MUST survive (stage ▣, cursor ▶, dir ▸ / file ·) + the redaction token
+	for _, keep := range []string{"▒▒▒", "▣", "▶", "▸"} {
+		if !strings.Contains(out, keep) {
+			t.Fatalf("on-air listing must keep the structural glyph %q:\n%s", keep, out)
+		}
+	}
+	// off air the names DO render (browsing in the present-at-hand frame)
+	off := RenderListMarked(es, "/home/x/Pictures", 0, []bool{true, false}, false, 80)
+	if !strings.Contains(off, "medical-results.png") {
+		t.Fatalf("off-air listing must show the real filename:\n%s", off)
+	}
+}
+
 func TestDotfileHasNoExtension(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), []byte("x"), 0o644); err != nil {

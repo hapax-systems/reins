@@ -10760,17 +10760,21 @@ func (m Model) renderSelectedTrace(w int) string {
 	return b.String()
 }
 
-// turnSourceLabel honestly names the chat-pane feed: live (streaming a lane's turns) vs the demo
-// fixture (the live feed is dark) — so canned data is never read as live. The lane role redacts on air.
+// turnSourceLabel honestly names the chat-pane feed: live (freshly streaming a lane's turns), STALE
+// (kept-but-old live rows after the feed went dark), or the demo FIXTURE (no live data) — so canned
+// data is never read as live AND stale-live is never read as the fixture. The lane role redacts on air.
 func (m Model) turnSourceLabel() string {
-	role := strings.TrimSpace(m.TurnRole)
-	if m.TurnsDark {
-		if role == "" {
+	role := grammar.Redact(nil, "label", strings.TrimSpace(m.TurnRole), m.AIR)
+	if !m.TurnsDark {
+		return "· live — streaming " + role + " session turns"
+	}
+	if m.TurnsFixture {
+		if strings.TrimSpace(m.TurnRole) == "" {
 			return "· demo fixture — no lane targeted (live session feed dark)"
 		}
-		return "· demo fixture — live turn feed for " + grammar.Redact(nil, "label", role, m.AIR) + " is dark"
+		return "· demo fixture — live turn feed for " + role + " is dark"
 	}
-	return "· live — streaming " + grammar.Redact(nil, "label", role, m.AIR) + " session turns"
+	return "· stale — " + role + " live feed dark (showing the last live page)"
 }
 
 func (m Model) turnListBody(w, h int) string {

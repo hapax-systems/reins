@@ -417,7 +417,8 @@ type Model struct {
 	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (live FetchTurns; fixture fallback when the feed is dark)
 	TurnBlocks          map[string][]grammar.TurnBlock
 	TurnRole            string // the session role whose turns the chat-pane streams (set on entry from the focused lane)
-	TurnsDark           bool   // the live turn feed is dark → the ladder shown is the demo fixture (labeled honestly, never silently)
+	TurnsDark           bool   // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
+	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -2131,6 +2132,7 @@ func (m Model) loadTurns() Model {
 	if m.TurnBlocks == nil {
 		m.TurnBlocks = map[string][]grammar.TurnBlock{}
 	}
+	m.TurnsFixture = true // the ladder now holds the demo fixture (not live rows)
 	m.TurnFocus = clamp(m.TurnFocus, 0, maxVisible(0, len(m.TurnLadder)-1))
 	m.DetailScroll = 0
 	return m
@@ -2152,6 +2154,7 @@ func (m Model) FoldTurns(turns []grammar.Turn, dark bool) Model {
 	m.TurnLadder = turns
 	m.TurnBlocks = map[string][]grammar.TurnBlock{}
 	m.TurnsDark = false
+	m.TurnsFixture = false // these are live rows, not the fixture
 	m.TurnFocus = clamp(m.TurnFocus, 0, maxVisible(0, len(m.TurnLadder)-1))
 	return m
 }

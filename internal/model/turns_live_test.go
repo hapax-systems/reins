@@ -51,6 +51,32 @@ func TestSwitchToTurnsSetsRoleFromFocusedSession(t *testing.T) {
 	}
 }
 
+func TestStaleLiveTurnsNotMislabeledAsFixture(t *testing.T) {
+	// live fold, then a transient dark blip: the prior LIVE rows are kept but must be labeled STALE,
+	// not "demo fixture" (the honesty mechanism must not misattribute real data to the fixture).
+	m := New("REINS").loadTurns()
+	m.TurnRole = "cc-x"
+	m = m.FoldTurns([]grammar.Turn{{Role: "cc-x", Kind: "user", Summary: "real live row"}}, false)
+	if m.TurnsFixture || m.TurnsDark {
+		t.Fatal("after a live fold the ladder is live, not fixture/dark")
+	}
+	m = m.FoldTurns(nil, true) // the feed blips dark; live rows are kept
+	if m.TurnLadder[0].Summary != "real live row" {
+		t.Fatal("a dark blip must keep the prior live rows")
+	}
+	if m.TurnsFixture {
+		t.Fatal("kept-stale LIVE rows must NOT be flagged as the fixture")
+	}
+	m.Page = PageSessionTurns
+	label := m.turnSourceLabel()
+	if strings.Contains(label, "demo fixture") {
+		t.Fatalf("stale live data must not be labeled the demo fixture: %q", label)
+	}
+	if !strings.Contains(label, "stale") {
+		t.Fatalf("kept-stale live data must be labeled stale: %q", label)
+	}
+}
+
 func TestTurnListBodyLabelsSourceHonestly(t *testing.T) {
 	m := New("REINS").loadTurns()
 	m.Page = PageSessionTurns
