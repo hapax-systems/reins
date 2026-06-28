@@ -244,6 +244,26 @@ func TestLegendCoversAllGlyphMaps(t *testing.T) {
 	}
 }
 
+func TestLegendCoversCockpitMarkers(t *testing.T) {
+	leg := ansi.Strip(RenderLegend())
+	for _, tc := range []struct {
+		mark  string
+		gloss string
+	}{
+		{"▣", "file staged in the injection basket"},
+		{"├", "brushed row: related to the focused row"},
+		{"live", "chat pane names its feed source honestly"},
+		{"stale", "last-live page"},
+		{"demo fixture", "no live data"},
+		{"▤", "attachment"},
+		{"«»", "path breadcrumb"},
+	} {
+		if !strings.Contains(leg, tc.mark) || !strings.Contains(leg, tc.gloss) {
+			t.Fatalf("legend missing cockpit marker %q with gloss %q:\n%s", tc.mark, tc.gloss, leg)
+		}
+	}
+}
+
 func TestGlyphIsStableAndMonochromeSafe(t *testing.T) {
 	if Glyph("pr.merged") == Glyph("review.fail") {
 		t.Fatal("distinct kinds must have distinct glyphs (the glyph carries the kind)")

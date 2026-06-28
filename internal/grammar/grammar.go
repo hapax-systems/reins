@@ -1505,6 +1505,7 @@ func RenderLegend() string {
 			b.WriteString("   " + C("mut", ln) + "\n")
 		}
 	}
+	row(C("grn", "live")+C("mut", " / ")+C("yel", "stale")+C("mut", " / demo fixture"), "chat pane names its feed source honestly (streaming lane / last-live page / no live data)")
 	hd("CRITICALITY BAR  (more fill = worse)")
 	for _, k := range critOrder {
 		row(C(SeverityToken(k), critBar(k)), k)
@@ -1519,11 +1520,15 @@ func RenderLegend() string {
 	row(C("grn", "·ship"), "terminal / arrived (no pending move)")
 	hd("RELATIONS")
 	row(C("blu", "●N"), "N live ties (deps / governance / tied)")
+	row(C("2nd", "├"), "brushed row: related to the focused row's emergent relation")
 	hd("LAYOUT  (pane relationship and scroll grammar)")
 	row(C("yel", "split:ctx"), "split is active; left source and right context are paired")
 	row(C("mut", "split:wide"), "wide contextual rail is active without split source")
 	row(C("yel", "▶"), "active source row; navigation rebinds the context")
 	row(C("pri", "◆"), "independent source row; right context does not rebind")
+	row(C("brt", "▣"), "file staged in the injection basket (files-zone gutter; distinct from ✓ ok)")
+	row(C("2nd", "▤"), "attachment chip / attached turn payload")
+	row(C("2nd", "» / «»"), "path breadcrumb marker (path text may redact on air)")
 	row(C("border", "│"), "pane divider; panes should explain each other")
 	row(C("mut", "… N more"), "overflow rows exist below the current viewport")
 	hd("PROVENANCE  (:dynamics nodes — a confidence ladder)")
