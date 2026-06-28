@@ -1234,8 +1234,13 @@ func (m Model) coordinatorLensPane(w, h int) string {
 		if end > len(m.FilesEntries) {
 			end = len(m.FilesEntries)
 		}
-		b.WriteString(files.RenderList(m.FilesEntries[start:end], m.FilesCwd, m.FilesCursor-start, m.AIR, w-1) + "\n")
-		b.WriteString(" " + grammar.C("mut", clipRunes("[j/k] move · [l/⏎] dir · [h] up · [z] tasks", maxVisible(8, w-1))))
+		marks := m.basketMarks(m.FilesEntries)
+		b.WriteString(files.RenderListMarked(m.FilesEntries[start:end], m.FilesCwd, m.FilesCursor-start, marks[start:end], m.AIR, w-1) + "\n")
+		hint := "[j/k] move · [l/⏎] dir · [h] up · [space] stage · [z] tasks"
+		if n := len(m.Basket); n > 0 {
+			hint = fmt.Sprintf("▣ %d staged → {{basket}} · ", n) + hint
+		}
+		b.WriteString(" " + grammar.C("mut", clipRunes(hint, maxVisible(8, w-1))))
 		return strings.TrimRight(b.String(), "\n")
 	}
 	zone := " " + grammar.C("mut", "zone  ") + grammar.C("pri", "▸tasks") + grammar.C("mut", "   sessions   events   gates")

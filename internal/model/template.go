@@ -39,6 +39,11 @@ func (m Model) templateValue(key string) (string, bool) {
 		}
 	}
 
+	// {{basket}} is a GLOBAL token (page-independent): the injection basket staged in the files zone.
+	if key == "basket" {
+		return m.basketManifest(), true
+	}
+
 	page := m.commandSelectionPage()
 
 	if page == PageEvents {
@@ -667,7 +672,7 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 }
 
 // templateKeys: the offerable references (kept small + ordered for the fish menu).
-var templateKeys = []string{"sel", "sel.id", "sel.field", "sel.value", "sel.summary", "sel.status", "sel.meaning", "sel.authority", "sel.family", "sel.receipt", "sel.source_refs", "sel.missing", "sel.kind", "sel.contract", "sel.crit", "focus", "ring.0"}
+var templateKeys = []string{"sel", "sel.id", "sel.field", "sel.value", "sel.summary", "sel.status", "sel.meaning", "sel.authority", "sel.family", "sel.receipt", "sel.source_refs", "sel.missing", "sel.kind", "sel.contract", "sel.crit", "focus", "ring.0", "basket"}
 
 // templateCandidates: when the input has an OPEN `{{…` fragment, offer the references as fish
 // candidates, each with an AIR-safe LIVE PREVIEW of what it resolves to (discoverability + dynamic

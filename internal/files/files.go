@@ -1,6 +1,7 @@
 // Package files is the Reins filebrowser's data + render layer (filebrowser research brief
 // Increment 1 foundation). It lists a directory and renders it as a Miller-column listing whose
-// state is carried by glyph (dir ▸ / file ·) so it reads in grayscale. The cwd PATH is sensitive
+// state is carried by glyph (dir ▸ / file · / cursor ▶ / staged-in-basket ▣) so it reads in
+// grayscale; the ▣ stage gutter is decoded in-band by the zone footer. The cwd PATH is sensitive
 // and redacts on air through grammar.Redact — the SAME interlock the task rows and the injection
 // composer use, never a parallel raw-value path (the leak class GLM-via-CC caught in the composer).
 //
@@ -90,20 +91,32 @@ func clipName(s string, n int) string {
 // The cwd is SENSITIVE — it redacts on air (default-deny). Out-of-range cursor and empty listings
 // render honestly and never panic.
 func RenderList(entries []Entry, cwd string, cursor int, airOn bool, width int) string {
+	return RenderListMarked(entries, cwd, cursor, nil, airOn, width)
+}
+
+// RenderListMarked is RenderList plus a basket-stage gutter: marked[i]==true draws ▣ before the row
+// (the file is staged in the injection basket). The stage mark is the operator's own STRUCTURAL
+// action, not file content, so it survives on air — the names/paths it points at still redact. A
+// nil/short marked slice draws no stage glyphs (back-compat). Never panics on out-of-range cursor.
+func RenderListMarked(entries []Entry, cwd string, cursor int, marked []bool, airOn bool, width int) string {
 	if width <= 0 {
 		width = 60
 	}
 	var b strings.Builder
 	crumb := grammar.Redact(nil, "path", cwd, airOn) // filesystem path is sensitive on air
-	// Breadcrumb uses a path glyph «»» distinct from the three state glyphs (dir ▸ / file · /
-	// cursor ▶) so the listing reads in grayscale — the breadcrumb is never mistaken for the cursor.
+	// Breadcrumb uses a path glyph «»» distinct from the four state glyphs (dir ▸ / file · /
+	// cursor ▶ / staged ▣) so the listing reads in grayscale — the breadcrumb is never the cursor.
 	b.WriteString(grammar.C("2nd", "» ") + grammar.C("mut", crumb) + "\n")
 	if len(entries) == 0 {
 		b.WriteString(grammar.C("mut", "  (empty directory)"))
 		return b.String()
 	}
-	nameBudget := width - 20
+	nameBudget := width - 22
 	for i, e := range entries {
+		stage := " "
+		if i < len(marked) && marked[i] {
+			stage = grammar.C("brt", "▣")
+		}
 		mark := "  "
 		if i == cursor {
 			mark = grammar.C("yel", "▶ ")
@@ -120,7 +133,7 @@ func RenderList(entries []Entry, cwd string, cursor int, airOn bool, width int) 
 				meta += "  " + grammar.C("2nd", e.Ext)
 			}
 		}
-		b.WriteString(mark + glyph + name + meta)
+		b.WriteString(stage + " " + mark + glyph + name + meta)
 		if i < len(entries)-1 {
 			b.WriteByte('\n')
 		}

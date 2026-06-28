@@ -501,6 +501,7 @@ type Model struct {
 	FilesCursor         int                // filebrowser row cursor into FilesEntries
 	FilesEntries        []files.Entry      // the current directory listing (loaded on zone entry / cwd change)
 	FilesErr            string             // last filebrowser load error (honest, shown in the pane)
+	Basket              []string           // injection basket: absolute paths staged from the files zone ([space]); feeds {{basket}}
 	Filter              string             // active :tasks filter (id substring); narrows the selectable set
 	CritFilter          string             // active criticality-class filter (ok|warn|major|crit) — a selected count
 	IntakeSourceFilter  string             // active :intake source filter; empty means all sources
@@ -1528,6 +1529,12 @@ func (m Model) updateFilesZone(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.FilesCwd = parent
 			m.FilesCursor = 0
 			m = m.loadFiles()
+		}
+		return m, nil, true
+	case " ", "space":
+		// [space] stages the focused FILE into the injection basket (directories are not stageable).
+		if e, ok := m.focusedFile(); ok && !e.IsDir {
+			m = m.toggleBasket(filepath.Join(m.FilesCwd, e.Name))
 		}
 		return m, nil, true
 	}
