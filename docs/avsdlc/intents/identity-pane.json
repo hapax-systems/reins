@@ -1,0 +1,33 @@
+{
+  "predicates": [
+    {
+      "pov_label": "local-terminal",
+      "region": "left_wall",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 120.0,
+      "direction": "decrease",
+      "critical": true
+    }
+  ],
+  "aggregation_floor": 0.75,
+  "note": "A1 :identity pane (roster|detail @0.5): the LEFT principal roster renders text rows (left_wall edge_energy >= the principled text-present floor 1.0, distinct from a blank region's ~0), the center spans into the focused principal's identity contract (entity_core), and the frame stays dark-theme (entity_core luma <= 120). A reference/roster pane — thresholds reflect a legible roster, not feed-density (the :axes lesson). Authored BEFORE the render."
+}

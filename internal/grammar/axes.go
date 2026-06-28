@@ -27,7 +27,7 @@ type Axis struct {
 func Axes() []Axis {
 	return []Axis{
 		{
-			ID: "A1", Name: "Identity", Status: "pending", Maps: ":sessions",
+			ID: "A1", Name: "Identity", Status: "pending", Maps: ":identity",
 			Question:   "who is acting — what is this entity's role?",
 			State:      "named role string; ∅ = unidentified / ambient (anonymous or system events)",
 			Controls:   "role-visibility AIR policy + identity-verification scope",

@@ -38,6 +38,7 @@ const (
 	PageSessionTurns = 20 // SESSION TURN-LADDER: chat-pane flagship, fixture-fed ahead of CapabilityIO
 	PageLoops        = 21 // A5 Tier-1 causal-loop analysis over the live dynamics graph (computed, no simulation)
 	PageAxes         = 22 // the six case-role axes — representational framework + five-tuple contracts
+	PageIdentity     = 23 // A1 Identity — the principal roster (who is acting) derived from role/actor/owner
 )
 
 const (
@@ -470,6 +471,7 @@ type Model struct {
 	DynFocus            int  // selected dynamics element (node/edge/source) for epistemic inspection
 	LoopFocus           int  // selected A5 causal loop in :loops
 	AxisFocus           int  // selected case-role axis in :axes
+	IdentityFocus       int  // selected principal in :identity
 	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height              int
 	Beat                int                // low-rate liveness frame; visual only, never authority/readiness
@@ -799,6 +801,10 @@ func (m Model) composesViaAlgebra() bool {
 		// E7.2 — self-anchored case-role framework. The primary is the axis list and the secondary is the
 		// focused five-tuple contract; [j/k] moves AxisFocus and never reverts to the session-frozen split.
 		return true
+	case PageIdentity:
+		// E7.3 — self-anchored A1 identity roster. The primary is the principal list and the secondary is
+		// the focused principal detail; [j/k] moves IdentityFocus and never reverts to the session-frozen split.
+		return true
 	}
 	return false
 }
@@ -841,6 +847,8 @@ func (m Model) pageRows() int {
 		return len(m.loopRows())
 	case PageAxes:
 		return len(grammar.Axes())
+	case PageIdentity:
+		return len(m.identityRoster())
 	case PageCommands:
 		return len(verbs)
 	case PageWindows:
@@ -861,7 +869,7 @@ func (m Model) pageRows() int {
 
 // isReferencePage reports pages with no row cursor but scrollable full-width explanatory content.
 func (m Model) isReferencePage() bool {
-	return m.Page == PageDynamics || m.Page == PageLoops || m.Page == PageAxes || m.Page == PageHelp || m.Page == PageLegend ||
+	return m.Page == PageDynamics || m.Page == PageLoops || m.Page == PageAxes || m.Page == PageIdentity || m.Page == PageHelp || m.Page == PageLegend ||
 		m.Page == PageCommands || m.Page == PageWindows || m.Page == PageIntent ||
 		m.Page == PageSurfaces || m.Page == PageDomains || m.Page == PageLifecycles || m.Page == PageYard ||
 		m.Page == PageReadiness || m.Page == PageCaps || m.Page == PageIntake ||
@@ -900,6 +908,9 @@ func (m Model) curFocus() int {
 	if m.Page == PageAxes {
 		return m.AxisFocus
 	}
+	if m.Page == PageIdentity {
+		return m.IdentityFocus
+	}
 	if m.Page == PageCommands {
 		return m.CommandFocus
 	}
@@ -927,7 +938,7 @@ func (m Model) curFocus() int {
 // focusTo: set the current page's cursor to i (clamped to its row count). One mover for both pages,
 // so j/k/g/G stay page-agnostic and can never drive a focus the page doesn't render.
 func (m Model) focusTo(i int) Model {
-	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageLoops && m.Page != PageAxes && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageSessionTurns && m.Page != PageCoordinator {
+	if m.Page != PageEvents && m.Page != PageTasks && m.Page != PageSessions && m.Page != PageIntake && m.Page != PageCaps && m.Page != PageDynamics && m.Page != PageLoops && m.Page != PageAxes && m.Page != PageIdentity && m.Page != PageCommands && m.Page != PageWindows && m.Page != PageSurfaces && m.Page != PageDomains && m.Page != PageLifecycles && m.Page != PageEpistemics && m.Page != PageIntent && m.Page != PageTraces && m.Page != PageSessionTurns && m.Page != PageCoordinator {
 		return m
 	}
 	max := m.pageRows() - 1
@@ -953,6 +964,8 @@ func (m Model) focusTo(i int) Model {
 		m.LoopFocus = i
 	} else if m.Page == PageAxes {
 		m.AxisFocus = i
+	} else if m.Page == PageIdentity {
+		m.IdentityFocus = i
 	} else if m.Page == PageCommands {
 		m.CommandFocus = i
 	} else if m.Page == PageWindows {
@@ -1044,6 +1057,18 @@ func (m Model) axisFocusTo(i int) Model {
 	m.AxisFocus = clamp(i, 0, max)
 	ax := rows[m.AxisFocus]
 	m.Status = fmt.Sprintf("axis %s · %s", ax.ID, ax.Name)
+	return m
+}
+
+func (m Model) identityFocusTo(i int) Model {
+	roster := m.identityRoster()
+	max := len(roster) - 1
+	if max < 0 {
+		m.IdentityFocus = 0
+		return m
+	}
+	m.IdentityFocus = clamp(i, 0, max)
+	m.Status = fmt.Sprintf("identity %d/%d", m.IdentityFocus+1, max+1)
 	return m
 }
 
@@ -1812,6 +1837,7 @@ var verbs = []verbDef{
 	}},
 	{name: "loops", aliases: []string{"causal"}, kind: commandRead, group: "window", gloss: "A5 causal-loop analysis over :dynamics (computed, no simulation)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "axes", aliases: []string{"framework"}, kind: commandRead, group: "window", gloss: "the six case-role axes — the representational framework + five-tuple contracts", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "identity", aliases: []string{"who", "a1"}, kind: commandRead, group: "window", gloss: "A1 Identity — the principal roster (who is acting) derived from role/actor/owner", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "turns", aliases: []string{"session-turns", "session"}, kind: commandRead, group: "window", gloss: "SESSION TURN-LADDER fixture (chat-pane flagship ahead of CapabilityIO)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "epistemics", aliases: []string{"epi", "epistemic"}, kind: commandRead, group: "window", gloss: "evidence/provenance posture over dynamics, observations, domains, capabilities, and sessions", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -1939,6 +1965,9 @@ func (m Model) Exec(line string) Model {
 	case "axes":
 		m = m.switchPage(PageAxes)
 		m.Status = ":axes"
+	case "identity":
+		m = m.switchPage(PageIdentity)
+		m.Status = ":identity"
 	case "epistemics":
 		m = m.switchPage(PageEpistemics)
 		m.Status = ":epistemics"
@@ -2669,6 +2698,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageAxes {
 				return m.axisFocusTo(m.AxisFocus + 1), nil
 			}
+			if m.Page == PageIdentity {
+				return m.identityFocusTo(m.IdentityFocus + 1), nil
+			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(m.CommandFocus + 1), nil
 			}
@@ -2715,6 +2747,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.Page == PageAxes {
 				return m.axisFocusTo(m.AxisFocus - 1), nil
+			}
+			if m.Page == PageIdentity {
+				return m.identityFocusTo(m.IdentityFocus - 1), nil
 			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(m.CommandFocus - 1), nil
@@ -2763,6 +2798,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Page == PageAxes {
 				return m.axisFocusTo(0), nil
 			}
+			if m.Page == PageIdentity {
+				return m.identityFocusTo(0), nil
+			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(0), nil
 			}
@@ -2808,6 +2846,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.Page == PageAxes {
 				return m.axisFocusTo(len(grammar.Axes()) - 1), nil
+			}
+			if m.Page == PageIdentity {
+				return m.identityFocusTo(len(m.identityRoster()) - 1), nil
 			}
 			if m.Page == PageCommands {
 				return m.commandFocusTo(len(verbs) - 1), nil

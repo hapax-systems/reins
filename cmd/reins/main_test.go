@@ -72,6 +72,9 @@ func TestProbePageTokenCoversRegisteredPagesAndAliases(t *testing.T) {
 		{"trace", model.PageTraces},
 		{"axes", model.PageAxes},
 		{"framework", model.PageAxes},
+		{"identity", model.PageIdentity},
+		{"who", model.PageIdentity},
+		{"a1", model.PageIdentity},
 	} {
 		t.Run(tt.arg, func(t *testing.T) {
 			page, ok := probePageToken(tt.arg)

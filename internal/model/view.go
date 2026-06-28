@@ -178,6 +178,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "loops", len(m.loopRows()), m.DynamicsDark
 	case PageAxes:
 		return "axes", len(grammar.Axes()), false
+	case PageIdentity:
+		return "identity", len(m.identityRoster()), false
 	case PageEpistemics:
 		return "epistemics", len(m.epistemicRows()), m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark
 	case PageHelp:
@@ -415,6 +417,8 @@ func (m Model) windowSignal(page int) (string, string) {
 		return "0L", "mut"
 	case PageAxes:
 		return fmt.Sprintf("%dA", len(grammar.Axes())), "mut"
+	case PageIdentity:
+		return fmt.Sprintf("%dI", len(m.identityRoster())), "mut"
 	case PageEpistemics:
 		if m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark {
 			return "DARK", "red"
@@ -712,6 +716,11 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.axisListBody(pw, ph) }},
 			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.axisDetailBody(pw) }},
 			0.50, "axis -> five-tuple contract")
+	case PageIdentity:
+		return m.specListContext(
+			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.identityListBody(pw, ph) }},
+			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.identityDetailBody(pw) }},
+			0.5, "principal -> identity contract")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -1596,7 +1605,7 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.tracesBody(w, h)
 	case PageSessionTurns:
 		return m.turnListBody(w, h)
-	case PageDynamics, PageLoops, PageAxes, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
+	case PageDynamics, PageLoops, PageAxes, PageIdentity, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
 		return m.eventsBody(w, h)
@@ -1992,6 +2001,8 @@ func (m Model) splitSessionContext(s grammar.Session) string {
 		return m.sourceOnlySessionContext(s, "feedback structure")
 	case PageAxes:
 		return m.sourceOnlySessionContext(s, "case-role framework")
+	case PageIdentity:
+		return m.sourceOnlySessionContext(s, "identity roster")
 	case PageEpistemics:
 		return m.sourceOnlySessionContext(s, "evidence/provenance")
 	case PageHelp:
@@ -2114,7 +2125,7 @@ func (m Model) splitContextPane(w, h int) string {
 		body = m.sessionConstraintPane(w)
 	case PageCaps:
 		body = m.renderCapabilitySplitPane(w, bodyH)
-	case PageTraces, PageDynamics, PageLoops, PageAxes, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
+	case PageTraces, PageDynamics, PageLoops, PageAxes, PageIdentity, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
 		body = m.splitReferenceSlice(w, bodyH)
 	default:
 		body = m.eventContextPane(w)
@@ -3641,6 +3652,54 @@ func (m Model) axisDetailBody(w int) string {
 	}
 	idx := clamp(m.AxisFocus, 0, len(rows)-1)
 	return grammar.RenderAxisDetail(rows[idx], w) + "\n\n" + grammar.RenderAxisFramework(w)
+}
+
+func (m Model) identityListBody(w, h int) string {
+	roster := m.identityRoster()
+	header := []string{
+		" " + grammar.C("brt", "IDENTITY ROSTER") + grammar.C("mut", " — A1: who is acting (derived; projection-pending)"),
+		" " + grammar.C("mut", "Each row is a principal; the name DENIES on air — class + counts are the skeleton."),
+		" " + grammar.RenderIdentityHeader(),
+		" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))),
+	}
+	visible := h - len(header)
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(roster) > visible {
+		if m.IdentityFocus >= visible {
+			start = m.IdentityFocus - visible + 1
+		}
+		if mx := len(roster) - visible; start > mx {
+			start = mx
+		}
+	}
+	var b strings.Builder
+	for _, line := range header {
+		b.WriteString(fitWidth(line, w) + "\n")
+	}
+	if len(roster) == 0 {
+		b.WriteString(" " + grammar.C("mut", "no principals in the current role/actor/owner fold") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for i := start; i < start+visible && i < len(roster); i++ {
+		line := grammar.RenderIdentityRow(roster[i], m.AIR, w-1)
+		if i == m.IdentityFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(line, w-1) + "\n")
+		} else {
+			b.WriteString(" " + line + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) identityDetailBody(w int) string {
+	roster := m.identityRoster()
+	if len(roster) == 0 {
+		return " " + grammar.C("brt", "IDENTITY CONTRACT") + "\n\n " + grammar.C("mut", "no principals in the current role/actor/owner fold")
+	}
+	return grammar.RenderIdentityDetail(roster[clamp(m.IdentityFocus, 0, len(roster)-1)], m.AIR, w)
 }
 
 func (m Model) focusedLoopRow() (loopRow, bool) {
@@ -9839,6 +9898,8 @@ func pageLabel(page int) string {
 		return "PageLoops"
 	case PageAxes:
 		return "PageAxes"
+	case PageIdentity:
+		return "PageIdentity"
 	case PageEpistemics:
 		return "PageEpistemics"
 	case PageHelp:
@@ -10165,6 +10226,8 @@ func (m Model) referenceContextHeading() string {
 		return "feedback loops"
 	case PageAxes:
 		return "case-role axes"
+	case PageIdentity:
+		return "identity roster"
 	case PageEpistemics:
 		return "epistemic context"
 	case PageHelp:
@@ -12878,6 +12941,16 @@ func (m Model) floorActions(w int) string {
 		} else {
 			parts = append(parts, grammar.C("mut", "no case-role axes"))
 		}
+	case PageIdentity:
+		if n := len(m.identityRoster()); n > 0 {
+			parts = append(parts,
+				grammar.C("yel", "[j/k]")+fmt.Sprintf("identity %d/%d", m.IdentityFocus+1, n),
+				grammar.C("yel", "[g/G]")+"first/last",
+				grammar.C("mut", "derived roster"),
+			)
+		} else {
+			parts = append(parts, grammar.C("mut", "no principals"))
+		}
 	default:
 		if m.Page == PageDynamics {
 			if m.pageRows() > 0 {
@@ -13201,6 +13274,8 @@ func (m Model) trustSignalForPage(page int) trustSignal {
 		out = trustSignal{Authority: firstNonEmpty(m.Dynamics.Package.Authority, "map-package"), Freshness: fresh, Support: "computed-structure", Recency: fresh}
 	case PageAxes:
 		out = trustSignal{Authority: "framework", Freshness: "static", Support: "five-tuple-contract", Recency: "static"}
+	case PageIdentity:
+		out = trustSignal{Authority: "projection", Freshness: "folded", Support: "role/actor/owner", Recency: "current-fold"}
 	case PageDomains:
 		fresh := domainSourceAge(m.Domains.LifecycleSources, m.Domains.Sources)
 		auth := "domain-pack"
