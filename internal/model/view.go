@@ -473,9 +473,12 @@ func (m Model) windowSignal(page int) (string, string) {
 // EXCEPTION-ONLY Act strip (structured-silence when calm; a red hotlist of blocked items when not).
 func (m Model) viewVital(w int) string {
 	_, _, dark := m.pageMeta()
-	mode := grammar.C("grn", "LOCAL")
+	// AIR state is PER-INSTANCE (m.AIR, in memory): >1 Reins may run at once, some ON-AIR and some
+	// LOCAL. The badge is the unmistakable one-glance anchor so the operator never captures the wrong
+	// terminal for the broadcast — "▮ ON-AIR" (broadcast convention) vs "● LOCAL" (private/cleartext).
+	mode := grammar.C("grn", "● LOCAL")
 	if m.AIR {
-		mode = grammar.C("fch", "AIR ▮")
+		mode = grammar.C("fch", "▮ ON-AIR")
 	}
 	spine := m.viewSpine(dark)
 	ok, warn, maj, crit, hiddenCrit := 0, 0, 0, 0, 0
@@ -12906,9 +12909,9 @@ func (m Model) viewFloor(w int) string {
 	if m.Mode == ModeVerbMenu { // the object-verb menu — state-legal governed verbs on the focused task
 		return m.verbMenuFloor(w)
 	}
-	lens := grammar.C("pri", "LOCAL")
+	lens := grammar.C("pri", "● LOCAL")
 	if m.AIR {
-		lens = grammar.C("fch", "AIR ▮allowlist")
+		lens = grammar.C("fch", "▮ ON-AIR · allowlist")
 	}
 	focus := grammar.C("mut", "—")
 	if m.sessionSplit() {
