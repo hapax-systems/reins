@@ -379,6 +379,39 @@ func (m Model) cycleWindow(delta int) Model {
 	return m
 }
 
+// cycleLane moves the focused lane (TurnRole) to the prev/next session in the fleet — the lane-rail's
+// [←/→] navigation on the session-turns page (E4.5 one-coordinating-session). The turn split below
+// re-streams the new lane; the ▌ focus mark + the C4 position move with it. TurnsDark marks the feed so
+// the surface labels it HONESTLY until the periodic turnsTick re-arms for the new TurnRole and its live
+// receipts land (~5s); offline the demo fixture stays (honestly dark-labeled). AIR-safe status.
+func (m Model) cycleLane(delta int) Model {
+	if len(m.Sessions) == 0 {
+		return m
+	}
+	idx := -1
+	for i, s := range m.Sessions {
+		if s.Role == m.TurnRole {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	} else {
+		idx = ((idx+delta)%len(m.Sessions) + len(m.Sessions)) % len(m.Sessions)
+	}
+	next := m.Sessions[idx].Role
+	if next == m.TurnRole {
+		return m
+	}
+	m.TurnRole = next
+	m.TurnsDark = true
+	m.TurnFocus, m.DetailScroll = 0, 0
+	// the rail ▌ + the C4 POSITION line already show WHICH lane — keep the status role-free (no leak).
+	m.Status = "lane focus moved — feed refetching"
+	return m
+}
+
 func windowsSummary() string {
 	scopes := map[string]int{}
 	lifecycles := map[string]bool{}

@@ -109,3 +109,29 @@ func TestTurnBreakdownInboxAutoSurfacesAndRecedes(t *testing.T) {
 		t.Fatalf("a healthy lane must not appear in the breakdown-inbox:\n%s", box)
 	}
 }
+
+// cycleLane ([←/→] on :turns) moves the focused lane (TurnRole) through the fleet — the lane-rail
+// navigation (E4.5). It wraps, and marks TurnsDark so the periodic tick refetches the new lane.
+func TestCycleLaneMovesFocusedLaneThroughFleet(t *testing.T) {
+	m := New("REINS").FoldSessions([]grammar.Session{
+		{Role: "cx-a", AIR: map[string]string{"role": "ok"}},
+		{Role: "cx-b", AIR: map[string]string{"role": "ok"}},
+		{Role: "cx-c", AIR: map[string]string{"role": "ok"}},
+	}, false)
+	m.TurnRole = "cx-a"
+	if m = m.cycleLane(1); m.TurnRole != "cx-b" {
+		t.Fatalf("right should advance to cx-b, got %q", m.TurnRole)
+	}
+	if !m.TurnsDark {
+		t.Fatalf("cycling a lane must mark the feed dark for refetch")
+	}
+	if m = m.cycleLane(1); m.TurnRole != "cx-c" {
+		t.Fatalf("right should advance to cx-c, got %q", m.TurnRole)
+	}
+	if m = m.cycleLane(1); m.TurnRole != "cx-a" {
+		t.Fatalf("right should wrap to cx-a, got %q", m.TurnRole)
+	}
+	if m = m.cycleLane(-1); m.TurnRole != "cx-c" {
+		t.Fatalf("left should wrap back to cx-c, got %q", m.TurnRole)
+	}
+}

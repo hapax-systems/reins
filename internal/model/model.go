@@ -3122,10 +3122,16 @@ func (m Model) updateGlobal(v tea.KeyMsg) (Model, tea.Cmd, bool) {
 		if m.Sel.Rank == RankField {
 			return m, nil, false
 		}
+		if m.Page == PageSessionTurns {
+			return m.cycleLane(-1), nil, true // the lane-rail [←/→] cycle (E4.5), not window-cycle here
+		}
 		return m.cycleWindow(-1), nil, true
 	case "right":
 		if m.Sel.Rank == RankField {
 			return m, nil, false
+		}
+		if m.Page == PageSessionTurns {
+			return m.cycleLane(1), nil, true
 		}
 		return m.cycleWindow(1), nil, true
 	default:
