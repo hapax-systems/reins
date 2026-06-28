@@ -135,3 +135,27 @@ func TestCycleLaneMovesFocusedLaneThroughFleet(t *testing.T) {
 		t.Fatalf("left should wrap back to cx-c, got %q", m.TurnRole)
 	}
 }
+
+// turnImpingeAffordances (E4.4 preview) shows the governed act-on-this-turn decisions, contextualized
+// by the turn KIND, always governed + NOT WIRED (never-mint; egress gated). AIR-safe: structural verbs,
+// no turn body.
+func TestTurnImpingeAffordancesAreContextualAndGovernedNotWired(t *testing.T) {
+	m := New("REINS")
+	cases := map[string][]string{
+		"approval":  {"accept", "deny", "edit"},
+		"tool_call": {"approve", "edit", "deny"},
+		"assistant": {"respond", "ignore"},
+		"user":      {"respond", "ignore"},
+	}
+	for kind, want := range cases {
+		out := ansi.Strip(m.turnImpingeAffordances(grammar.Turn{Kind: kind}))
+		if !strings.Contains(out, "IMPINGE") || !strings.Contains(out, "NOT wired") {
+			t.Fatalf("kind %q must show the governed NOT-wired impinge preview:\n%s", kind, out)
+		}
+		for _, v := range want {
+			if !strings.Contains(out, "["+v+"]") {
+				t.Fatalf("kind %q must offer [%s]:\n%s", kind, v, out)
+			}
+		}
+	}
+}

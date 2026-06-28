@@ -11247,6 +11247,7 @@ func (m Model) turnDetailBody(w int) string {
 	if !ok {
 		return grammar.C("mut", " turn detail\n\n no selected turn\n")
 	}
+	var detail string
 	blocks := m.TurnBlocks[TurnID(t)]
 	if len(blocks) == 0 {
 		// honest: a LIVE turn with no blocks is detail-fetch-pending, NOT a fixture (never-false-green).
@@ -11254,9 +11255,35 @@ func (m Model) turnDetailBody(w int) string {
 		if m.TurnsFixture {
 			note = "(no expanded blocks for this fixture turn)"
 		}
-		return grammar.RenderTurnDetail(t, nil, m.AIR) + "   " + grammar.C("mut", note) + "\n"
+		detail = grammar.RenderTurnDetail(t, nil, m.AIR) + "   " + grammar.C("mut", note) + "\n"
+	} else {
+		detail = grammar.RenderTurnDetail(t, blocks, m.AIR)
 	}
-	return grammar.RenderTurnDetail(t, blocks, m.AIR)
+	return detail + m.turnImpingeAffordances(t)
+}
+
+// turnImpingeAffordances previews the governed ACT-ON-THIS-TURN decisions for the focused turn (E4.4
+// impinge, PREVIEW-ONLY): the HITL decision set contextualized by the turn KIND, routed through the
+// governed COMMAND surface — NOT WIRED (never-mint; the egress stays gated). It turns the read-only
+// turn into a LEGIBLE control surface (the operator's "tells-me-little / lets-me-do-nothing" veto fix)
+// without yet wiring the AIR-critical send. AIR-safe: the verbs are structural, no turn body.
+func (m Model) turnImpingeAffordances(t grammar.Turn) string {
+	var decisions []string
+	switch t.Kind {
+	case "approval":
+		decisions = []string{"accept", "deny", "edit"}
+	case "tool_call":
+		decisions = []string{"approve", "edit", "deny"}
+	default: // assistant/reasoning/refusal/user/result/etc. — answer or dismiss
+		decisions = []string{"respond", "ignore"}
+	}
+	verbs := make([]string, len(decisions))
+	for i, d := range decisions {
+		verbs[i] = grammar.C("brt", "["+d+"]")
+	}
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, 42)))
+	return "\n " + rule + "\n " + grammar.C("brt", "IMPINGE") + grammar.C("mut", " — act on this turn: ") +
+		strings.Join(verbs, " ") + grammar.C("mut", "  · governed COMMAND route · NOT wired (egress gated)") + "\n"
 }
 
 func (m Model) eventsWideBody(w, h int) string {
