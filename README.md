@@ -166,6 +166,25 @@ go test ./...                      # Go: config, grammar, model, cmd
 ( cd api && python -m pytest -q )  # Python: the READ service
 ```
 
+## Self-verification (headless — no terminal, no human)
+
+The cockpit can be navigated, looked at, and AVSDLC-confirmed by an agent — so a visual change
+verifies itself. Three layers (full guide in `docs/avsdlc/README.md`):
+
+```sh
+make smoke                         # navigation smoke: visits every page, no panic, on-air redaction
+reins --drive ":axes; j; enter"    # drive a key sequence headless, print the end frame
+scripts/reins-shot.sh ":identity" /tmp/f.png size:170x46 --live   # render that frame -> PNG to open + inspect
+python3 scripts/reins-avsdlc-witness.py --frame /tmp/f.png \
+  --intent docs/avsdlc/intents/identity-pane.json --pov local-terminal   # predict-then-confirm (exit 0=pass)
+```
+
+`internal/smoke` drives key sequences through the live `Model.Update` loop and captures the frame
+per step (panics recovered — a crash is the finding); `freeze --language ansi` renders the ANSI to
+a PNG; the AVSDLC witness runs the canonical council eval (per-region luma / edge_energy) against a
+pre-authored `VisualIntentRecord` and emits a signed-shape receipt — it discriminates (a real frame
+passes, a blank frame fails).
+
 ## Layout
 
 ```
@@ -174,15 +193,23 @@ internal/config/    instance config loader (engine/instance separation)
 internal/grammar/   the cell-grammar — glyph alphabet, score-bar, AIR redaction, row renderers
 internal/model/     the Bubble Tea model — pure fold, page-switch, command-as-effect (Exec)
 internal/api/       the READ client (Go side of the boundary)
+internal/smoke/     headless navigation driver (key-sequence -> frame capture) for self-verification
 api/reins_read.py   the thin READ service (Python side — folds the live spine)
+scripts/            reins-shot.sh (frame -> PNG) · reins-avsdlc-witness.py (AVSDLC predict-then-confirm)
+docs/avsdlc/        the visual-intent records + the self-verification capability guide
 ```
 
 ## Status
 
 Early, but live end-to-end against a real substrate. Working today: the vital frame and
-window hotlist, `:events`, `:tasks`, `:sessions`, `:yard`, `:readiness`, `:intake`, `:capabilities`, `:dynamics`, `:epistemics`, `:help`, `:commands`,
-`:windows`, `:intent`, `:surfaces`, `:domains`, `:lifecycles`, and `:legend`,
+window hotlist, `:events`, `:tasks`, `:sessions`, `:yard`, `:readiness`, `:intake`, `:capabilities`, `:dynamics`, `:loops`, `:epistemics`, `:traces`, `:help`, `:commands`,
+`:windows`, `:intent`, `:surfaces`, `:domains`, `:lifecycles`, `:dispatch`, and `:legend`,
 the cell-grammar, page-aware selection/yank, roster-only session detail cards, the AIR
 lens, hot-reload, and the command line with completion/templates plus a command catalog.
-Next: richer command intent doors, deeper split-screen/session composition, transcript/compose
-for the session pane, and the governed write side of the command surface.
+Plus the **representational-framework axis panes** — `:axes` (the six case-role axes + their
+five-tuple contracts, a launcher to each pane), `:identity` (A1 — the live principal roster),
+`:relational` (A6 — the consent/access-control posture) — the `:session` chat-pane turn-ladder
+(live turns, honest fixture fallback), emergent-relation **brushing** (the `├` related-row gutter),
+the filebrowser injection basket, and the governed COMMAND **preview** envelope (mints nothing).
+Next: the governed write side of the command surface, retiring the legacy split-pair machinery
+(only-split is the default), and the DOI / relation-derivation producers.

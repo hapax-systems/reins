@@ -7,7 +7,9 @@ PY ?= python3   # python for the READ API; needs fastapi+uvicorn + the substrate
 # Port + paths come from the instance config (config.toml api_url) — ONE source of truth. Both halves
 # self-resolve it; the Makefile does not inject a port (which would fight the config).
 
-.PHONY: up run api build test fmt tidy help
+.PHONY: up run api build install test smoke drive fmt tidy help
+
+PREFIX ?= $(HOME)/.local
 
 help: ## list targets
 	@grep -E '^[a-z]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | sort
@@ -29,9 +31,20 @@ api: ## the READ API only (foreground; port from config.toml)
 build: ## build the cockpit binary -> bin/reins
 	go build -o bin/reins ./cmd/reins
 
+install: build ## install the cockpit -> $(PREFIX)/bin/reins (on PATH)
+	@mkdir -p $(PREFIX)/bin
+	@cp bin/reins $(PREFIX)/bin/reins
+	@printf 'reins: installed -> %s/bin/reins\n' "$(PREFIX)"
+
 test: ## go + python test suites
 	go test ./...
 	cd api && $(PY) -m pytest -q
+
+smoke: ## headless NAV smoke — visits every page, no panic, on-air redaction
+	go test ./internal/smoke/ -v
+
+drive: ## drive a nav sequence headless + print the frame (SPEC=":coordinator; j; v"  [SIZE=170x46] [FLAGS=--air])
+	go run ./cmd/reins --drive "$(SPEC)" size:$(or $(SIZE),170x46) $(FLAGS)
 
 fmt: ## gofmt
 	go fmt ./...
