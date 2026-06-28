@@ -99,6 +99,33 @@ func TestEpistemicsViewIsAlgebraSplitNotSessionFrozen(t *testing.T) {
 	}
 }
 
+// ROOT FIX (fugu Inc 3 review #2/#3/#4): epistemicReadRowFamily derived the view-row Family from raw
+// SubjectKind/MapKind/Family WITHOUT AIR, so a DENIED family leaked its VALUE through the posture-summary
+// tally and the template/paste resolvers (the connector withheld the value but the others did not). On
+// air a denied family must be redacted at projection, so no derived channel can surface its value.
+func TestEpistemicsDeniedFamilyDoesNotLeakViaDerivedChannels(t *testing.T) {
+	ep := grammar.EpistemicsSummary{Rows: []grammar.EpistemicReadRow{
+		{RowID: "r1", Family: "SECRET-FAMILY", Subject: "s1", Status: "asserted", Authority: "platform",
+			AIR: map[string]string{"row_id": "ok", "family": "deny", "subject": "ok", "status": "ok", "authority": "ok"}},
+	}}
+	m := New("REINS").FoldEpistemics(ep, false)
+	m.Width, m.Height, m.Page, m.AIR = 180, 44, PageEpistemics, true
+
+	rows := m.epistemicRows()
+	if len(rows) == 0 || strings.Contains(rows[0].Family, "SECRET-FAMILY") {
+		t.Fatalf("on air a denied family must be redacted in the view row: %+v", rows)
+	}
+	if sum := ansi.Strip(renderEpistemicsPostureSummary(rows, 0, 120)); strings.Contains(sum, "SECRET-FAMILY") {
+		t.Fatalf("the posture-summary tally must not bucket a denied family value:\n%s", sum)
+	}
+	if got := m.resolveTemplate("{{sel.family}}"); strings.Contains(got, "SECRET-FAMILY") {
+		t.Fatalf("template {{sel.family}} must not leak a denied family: %q", got)
+	}
+	if body := ansi.Strip(m.epistemicListBody(120, 30)); strings.Contains(body, "SECRET-FAMILY") {
+		t.Fatalf("the list body must not render a denied family value:\n%s", body)
+	}
+}
+
 // The emergent connector must NOT derive over a denied facet. Two rows whose ONLY shared facet is a
 // DENIED status: off air the connector derives "shares status"; on air the status projects to the
 // redaction token, so epistemicEntity omits it and the connector can never name the denied dimension

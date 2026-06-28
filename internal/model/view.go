@@ -2334,7 +2334,7 @@ func epistemicSourceToRow(src grammar.EpistemicSource, air bool) epistemicRow {
 }
 
 func epistemicReadRowToViewRow(row grammar.EpistemicReadRow, air bool) epistemicRow {
-	family := firstNonEmpty(epistemicReadRowFamily(row), epistemicReadRowFieldForAir(row, "family", air), "evidence")
+	family := firstNonEmpty(epistemicReadRowFamily(row, air), "evidence")
 	sourceRefs := epistemicReadRowFieldForAir(row, "source_refs", air)
 	source := firstNonEmpty(sourceRefs, epistemicReadRowFieldForAir(row, "source", air))
 	detail := strings.Join(nonEmptyParts([]string{
@@ -2367,15 +2367,22 @@ func epistemicReadRowToViewRow(row grammar.EpistemicReadRow, air bool) epistemic
 	}
 }
 
-func epistemicReadRowFamily(row grammar.EpistemicReadRow) string {
-	switch strings.ToLower(strings.TrimSpace(firstNonEmpty(row.SubjectKind, row.MapKind))) {
-	case "map-node", "node":
-		return "map-node"
-	case "map-edge", "edge":
-		return "map-edge"
-	default:
-		return strings.TrimSpace(row.Family)
+// epistemicReadRowFamily is the AIR-aware family CATEGORY. The structural map-node/map-edge category is
+// only revealed when its source kind field (subject_kind/map_kind) is AIR-ok; otherwise — and for every
+// non-map row — the family is the AIR-GATED family field, never the raw value. (Root fix for the fugu
+// Inc 3 review: the raw default leaked a denied family value through the posture-summary tally, the
+// template/paste resolvers, and the emergent connector.)
+func epistemicReadRowFamily(row grammar.EpistemicReadRow, air bool) string {
+	kindOK := !air || row.AIR["subject_kind"] == "ok" || row.AIR["map_kind"] == "ok"
+	if kindOK {
+		switch strings.ToLower(strings.TrimSpace(firstNonEmpty(row.SubjectKind, row.MapKind))) {
+		case "map-node", "node":
+			return "map-node"
+		case "map-edge", "edge":
+			return "map-edge"
+		}
 	}
+	return strings.TrimSpace(epistemicReadRowFieldForAir(row, "family", air))
 }
 
 func isPackageEpistemicRow(row grammar.EpistemicReadRow, er epistemicRow) bool {
@@ -2594,9 +2601,18 @@ func summarizeEpistemicRows(rows []epistemicRow) epistemicPostureSummary {
 		Privacy:     map[string]int{},
 	}
 	for _, row := range rows {
-		s.Families[firstNonEmpty(row.Family, "unknown")]++
-		s.Authorities[firstNonEmpty(row.Authority, "support")]++
-		s.Privacy[epistemicPrivacyClass(row.Privacy)]++
+		// Skip AIR-redacted dimensions: a denied family/authority/privacy must not become a "▒▒▒:N"
+		// cardinality bucket (nor — for the now-AIR-projected family — its raw value). The hue tally
+		// (below) is derived from the redaction-defaulted token, so it discloses no value.
+		if fam := firstNonEmpty(row.Family, "unknown"); !strings.Contains(fam, "▒") {
+			s.Families[fam]++
+		}
+		if auth := firstNonEmpty(row.Authority, "support"); !strings.Contains(auth, "▒") {
+			s.Authorities[auth]++
+		}
+		if !strings.Contains(row.Privacy, "▒") {
+			s.Privacy[epistemicPrivacyClass(row.Privacy)]++
+		}
 		switch row.Token {
 		case "grn":
 			s.Observed++
