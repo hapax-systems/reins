@@ -652,6 +652,19 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.intentTargetsBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedIntentReview(pw) }},
 			0.50, "selected target → governed route review")
+	case PageDynamics:
+		// Inc 3 TRANSFORM — SELF-ANCHORED (own DynFocus; the explicit dynamicsFocusTo j handler beats the
+		// isReferencePage scroll fallback). The legacy session-frozen reference split (sessions │ dynamics
+		// map) is ABOLISHED: the primary IS the navigable map document, [j/k] moves the element, and the
+		// secondary is the focused element's full detail (the full inline element is omitted from the map).
+		// The secondary is genuinely the cursor's element, so the connector is an honest elucidation.
+		if m.DynamicsDark || len(m.dynamicsFocusRows()) == 0 {
+			return nil // dark/empty → bodyForPage (the legacy reference document / dark hint)
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.dynamicsMapBody(pw, ph) }},
+			&layout.Pane{MinW: 48, Render: func(pw, ph int) string { return m.renderDynamicsSelectedElement(pw) }},
+			0.62, "selected map element ← navigate the map")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -2922,6 +2935,54 @@ func (m Model) renderDynamicsSelectedElementCompact(w int) string {
 	return b.String()
 }
 
+// dynamicsMapBody is the PRIMARY pane of the algebra-composed dynamics page (Inc 3 TRANSFORM): the
+// navigable map document — header + scale + (compact-preview) + graph rail + workbench/summary/guide/
+// package orientation. The FULL focused-element detail is the SECONDARY (renderDynamicsSelectedElement),
+// so the full inline element is omitted here (the compactFirst path keeps only the compact preview, for
+// map context). Height-parameterized (the pane height drives the primer gate), unlike the m.Height-
+// coupled referenceContent it was extracted from.
+func (m Model) dynamicsMapBody(w, h int) string {
+	if m.DynamicsDark {
+		return m.contextLine() + "\n" + darkHint(m.DynamicsError, m.AIR)
+	}
+	scale, scaleLabel := m.dynamicsRenderScale(w)
+	var b strings.Builder
+	b.WriteString(grammar.DynamicsHeader(m.Dynamics, w))
+	b.WriteString(" " + grammar.C("mut", "scale ") + grammar.C("yel", scaleLabel) +
+		grammar.C("mut", " · [,/.] cycle overview/domain/artifact/runtime/evidence/all") + "\n")
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(rule + "\n")
+	if m.dynamicsCompactFirstViewport() {
+		if h >= 45 {
+			b.WriteString(m.renderDynamicsPrimer(w))
+			b.WriteString(rule + "\n")
+		}
+		b.WriteString(m.renderDynamicsSelectedElementCompact(w)) // compact preview stays in the map for context
+		b.WriteString(rule + "\n")
+		b.WriteString(m.renderDynamicsGraphRail(w, scale))
+		b.WriteString(rule + "\n")
+	} else {
+		if h >= 45 {
+			b.WriteString(m.renderDynamicsPrimer(w))
+			b.WriteString(rule + "\n")
+		}
+		b.WriteString(m.renderDynamicsGraphRail(w, scale)) // full inline element omitted — it is the secondary
+		b.WriteString(rule + "\n")
+	}
+	if workbench := m.renderDynamicsWorkbench(w); strings.TrimSpace(workbench) != "" {
+		b.WriteString(workbench)
+		b.WriteString(rule + "\n")
+	}
+	if summary := m.renderDynamicsGraphSummary(w, m.dynamicsRenderScaleValue(w)); strings.TrimSpace(summary) != "" {
+		b.WriteString(summary)
+		b.WriteString(rule + "\n")
+	}
+	b.WriteString(m.renderDynamicsGuide(w))
+	b.WriteString(m.renderDynamicsPackage(w))
+	b.WriteString(m.renderDynamicsPackageDetails(w))
+	return b.String()
+}
+
 func (m Model) renderDynamicsSelectedElement(w int) string {
 	rows := m.dynamicsFocusRows()
 	if len(rows) == 0 {
@@ -3863,7 +3924,10 @@ func dynamicsEdgeSourceRefLabelsForAir(e grammar.Edge, air bool) []string {
 }
 
 func (m Model) dynamicsRenderScale(w int) (int, string) {
-	if m.splitContextActive() && m.DynScale == 0 && w < 130 {
+	// Fit the map to a NARROW render width regardless of the (abolished, for dynamics) session-frozen
+	// split: the migrated dynamics primary is itself a sub-full-width pane, so the fit must key off the
+	// actual render width, not splitContextActive().
+	if m.DynScale == 0 && w < 130 {
 		return 2, "all→domain fit"
 	}
 	return m.DynScale, dynScaleName(m.DynScale)

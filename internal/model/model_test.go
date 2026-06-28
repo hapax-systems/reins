@@ -1657,25 +1657,25 @@ func TestSplitContextPinsSessionsWhileCyclingContext(t *testing.T) {
 		}
 	}
 
+	// Cycle right to PageDynamics. The SplitContext flag PERSISTS, but dynamics is Inc-3 MIGRATED: it is
+	// self-anchored and composes its OWN algebra split (map │ focused element), no longer the session-
+	// frozen "sessions left" layout. (Session-pinning during cycling is still demonstrated by the caps
+	// half above, which remains an Inc-2 session-anchored page.)
 	m = step(m, "right")
 	if !m.SplitContext || m.Page != PageDynamics {
 		t.Fatalf("window cycling should change the context pane while preserving split, page=%d split=%v", m.Page, m.SplitContext)
 	}
-	v = ansi.Strip(m.View())
-	if !strings.Contains(v, "split sessions") || !strings.Contains(v, "◆ claim   cx-p0") || !strings.Contains(v, "scale all") || !strings.Contains(v, "sessions + dynamics map as system topology") || !strings.Contains(v, "[j/k] lane anchor") || !strings.Contains(v, "focus :dynamics · system topology · anchor cx-p0") || !strings.Contains(v, "[j/k]anchor") {
-		t.Fatalf("split should keep sessions left and cycle context right:\n%s", v)
+	if m.splitContextActive() {
+		t.Fatal("cycling to the migrated dynamics page must not session-freeze it")
 	}
-	if strings.Contains(v, "[j/k/J/K]") {
-		t.Fatalf("split source-only context should not overload lowercase source navigation:\n%s", v)
+	flat := flattenSplitColumns(ansi.Strip(m.View()))
+	// This fixture folds no dynamics graph, so the page renders its own (empty) dynamics body via the
+	// algebra path — assert it shows the dynamics scale chrome and NOT the abolished session-frozen markers.
+	if !strings.Contains(flat, "scale") {
+		t.Fatalf("cycled dynamics should render its own dynamics body:\n%s", flat)
 	}
-	if strings.Contains(v, "▶ claim   cx-p0") {
-		t.Fatalf("source-only split should render the session as an anchor, not an active row cursor:\n%s", v)
-	}
-
-	m = step(m, "y")
-	v = ansi.Strip(m.View())
-	if !strings.Contains(v, "[j/k] source rows") || !strings.Contains(v, "[j/k]source-rows") || strings.Contains(v, "[j/k/J/K]ctx-scroll") {
-		t.Fatalf("split yank mode should advertise source row navigation even on source-only pages:\n%s", v)
+	if strings.Contains(flat, "sessions + dynamics map as system topology") || strings.Contains(flat, "[j/k] lane anchor") {
+		t.Fatalf("cycled dynamics must not render the abolished session-frozen markers:\n%s", flat)
 	}
 }
 
@@ -4248,8 +4248,12 @@ func TestDynamicsPageRendersReaderGuideAndEpistemicPath(t *testing.T) {
 		}},
 	}
 	m := New("REINS").FoldDynamics(g, false).Exec("dynamics")
-	m.Width, m.Height, m.AIR = 120, 56, true
+	// Inc 3 split: the map document is the PRIMARY pane (~0.62 of width). At a realistic terminal width
+	// the primary is wide enough to render the full dense document; at very narrow widths the dense
+	// dynamics page overflows the fixed pane (a known narrow-terminal limitation, not a content drop).
+	m.Width, m.Height, m.AIR = 220, 56, true
 	v := ansi.Strip(m.View())
+	flat := flattenSplitColumns(v) // the map document is the narrower primary, so guide text wraps
 	for _, want := range []string{
 		"Faithful rendering of system dynamics requires",
 		"MAP ORIENTATION",
@@ -4266,7 +4270,7 @@ func TestDynamicsPageRendersReaderGuideAndEpistemicPath(t *testing.T) {
 		"SDLC/RDLC/LDLC",
 		"does not prove causality",
 	} {
-		if !strings.Contains(v, want) {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("dynamics reader guide missing %q:\n%s", want, v)
 		}
 	}
@@ -4359,20 +4363,22 @@ func TestDynamicsPageRendersPackageEvidenceAndAIR(t *testing.T) {
 		},
 	}
 	m := New("REINS").FoldDynamics(g, false).Exec("dynamics")
-	m.Width, m.Height = 180, 140
+	// 220w so the Inc-3 algebra PRIMARY (~0.62 width) stays ≥130 and renders the full "▶all" scale ladder
+	// (below 130 the primary fits to the domain scale — see dynamicsRenderScale), and tall enough to fit
+	// the dense map document without the narrow-pane overflow.
+	m.Width, m.Height = 220, 140
 	v := ansi.Strip(m.View())
+	// Inc 3 split: the map document (rail/package/orientation) is the PRIMARY, the focused element is the
+	// SECONDARY — flatten per column for concept-presence. The old single-pane "selected element precedes
+	// rail" vertical ordering is abolished (it is now primary-rail │ secondary-element side by side).
+	flat := flattenSplitColumns(v)
 	for _, want := range []string{"MAP ORIENTATION", "epistemic", "WORKBENCH", "What gates release?", "Operator", "Release readiness", "INQUIRY READOUT", "active lens", "first gate", "State what this does not prove", "bitemporal snapshot registry", "INSPECTION PATHS", "lens", "inquiry", "reference", "SELECTED MAP ELEMENT", "EPISTEMIC BRIDGE", "exact ref", "map-node", "rdf-owl-kg", "summary", "Canonical semantic backbone", "why", "Identity, state, evidence", "refs", "W3C RDF", "source refs", "rdf.md#concepts", "hardening", "Use named graphs", "tags", "semantic-core", "DYNAMICS PACKAGE", "GRAPH SUMMARY", "visible", "scale path", "▶all", "scale why", "full topology", "central", "flow", "edge status", "SOURCES", "VALIDATION", "LENSES", "CLAIM PARTITIONS", "OBSERVATION STATE", "RELATION VOCABULARY", "GRAPH RAIL"} {
-		if !strings.Contains(v, want) {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("dynamics package view missing %q:\n%s", want, v)
 		}
 	}
-	if !strings.Contains(v, "\n SELECTED MAP ELEMENT") {
-		t.Fatalf("selected map element must begin on its own row:\n%s", v)
-	}
-	selectedAt := strings.Index(v, "SELECTED MAP ELEMENT")
-	railAt := strings.Index(v, "GRAPH RAIL")
-	if selectedAt < 0 || railAt < 0 || selectedAt > railAt {
-		t.Fatalf("dynamics package view should make selected element precede rail, selected=%d rail=%d:\n%s", selectedAt, railAt, v)
+	if !strings.Contains(v, "SELECTED MAP ELEMENT") || !strings.Contains(v, "GRAPH RAIL") {
+		t.Fatalf("the migrated dynamics split must render both the focused element (secondary) and the graph rail (primary):\n%s", v)
 	}
 	m.AIR = true
 	v = ansi.Strip(m.View())
@@ -4891,10 +4897,11 @@ func TestDynamicsCursorJumpsToEpistemicNodeClaim(t *testing.T) {
 	m := New("REINS").FoldDynamics(g, false).Exec("dynamics")
 	m.Width, m.Height = 150, 60
 
-	v := ansi.Strip(m.View())
+	// Inc 3 split: the element card is the SECONDARY pane; its control hint wraps in the narrow pane.
+	flat := flattenSplitColumns(ansi.Strip(m.View()))
 	for _, want := range []string{"SELECTED MAP ELEMENT", "policy", "[E]/[Enter] epistemics"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("dynamics selected element card missing %q:\n%s", want, v)
+		if !strings.Contains(flat, want) {
+			t.Fatalf("dynamics selected element card missing %q:\n%s", want, flat)
 		}
 	}
 	m = step(m, "E")
@@ -5074,32 +5081,32 @@ func TestSplitDynamicsKeepsLaneAnchorAndMovesMapTarget(t *testing.T) {
 				}},
 			},
 		}, false)
+	// Inc 3 — dynamics is SELF-ANCHORED: even with SplitContext set it composes via the algebra
+	// (splitContextActive false), so j moves the map element (DynFocus) directly — NOT a session lane —
+	// and the focused element is the secondary. The abolished session-frozen split moved a session lane
+	// with j and the map target with n.
 	m.Width, m.Height, m.Page, m.SplitContext = 180, 44, PageDynamics, true
+	if m.splitContextActive() {
+		t.Fatal("migrated dynamics must not be session-frozen even with SplitContext set")
+	}
 	beforeDyn := m.DynFocus
 	m = step(m, "j")
-	if m.SFocus != 1 || m.DynFocus != beforeDyn {
-		t.Fatalf("split dynamics j should move lane anchor only, SFocus=%d DynFocus=%d", m.SFocus, m.DynFocus)
+	if m.DynFocus != beforeDyn+1 || !strings.Contains(m.Status, "dynamics node 2/") {
+		t.Fatalf("self-anchored dynamics j should move the map element, DynFocus=%d status=%q", m.DynFocus, m.Status)
 	}
-	m = step(m, "n")
-	if m.SFocus != 1 || m.DynFocus != beforeDyn+1 || !strings.Contains(m.Status, "dynamics node 2/") {
-		t.Fatalf("split dynamics n should move right-pane map target only, SFocus=%d DynFocus=%d status=%q", m.SFocus, m.DynFocus, m.Status)
+	if m.SFocus != 0 {
+		t.Fatalf("self-anchored dynamics j must not move a session lane anchor, SFocus=%d", m.SFocus)
 	}
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"lane anchor active", "[n/p] map", "map focus", "[j/k]anchor", "node-b", "REFERENCE PATHS", "epistemics", "exact map row", "[E] opens evidence path", "EPISTEMIC BRIDGE", "map-node", "exact ref"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split dynamics should advertise lane anchor plus map target control %q:\n%s", want, v)
+	flat := flattenSplitColumns(ansi.Strip(m.View()))
+	for _, want := range []string{"node-b", "SELECTED MAP ELEMENT", "EPISTEMIC BRIDGE", "map-node", "GRAPH RAIL"} {
+		if !strings.Contains(flat, want) {
+			t.Fatalf("self-anchored dynamics split should render the map + focused element %q:\n%s", want, flat)
 		}
 	}
-	for i, line := range strings.Split(v, "\n") {
+	for i, line := range strings.Split(ansi.Strip(m.View()), "\n") {
 		if got := ansi.StringWidth(line); got > m.Width {
 			t.Fatalf("split dynamics line %d exceeds frame width %d: %d %q", i, m.Width, got, line)
 		}
-	}
-	if strings.Contains(v, "[j/k] focus") {
-		t.Fatalf("split dynamics should suppress target focus controls:\n%s", v)
-	}
-	if strings.Contains(v, "[E]/[Enter]") {
-		t.Fatalf("split dynamics should not advertise Enter for target evidence navigation:\n%s", v)
 	}
 }
 

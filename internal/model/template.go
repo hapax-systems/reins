@@ -324,6 +324,49 @@ func (m Model) templateValue(key string) (string, bool) {
 		return "", false
 	}
 
+	if page == PageDynamics {
+		// The focus row is ALREADY AIR-projected (dynamicsFocusRows applied m.AIR via dynamics*FieldForAir),
+		// so the field values are pre-redacted — returning them directly is AIR-safe.
+		row, has := m.FocusedDynamicsElement()
+		field := func(f string) (string, bool) {
+			if !has {
+				return "", false
+			}
+			switch f {
+			case "id":
+				return row.ID, true
+			case "label":
+				return row.Label, true
+			case "kind":
+				return row.Kind, true
+			case "status":
+				return row.Status, true
+			case "source":
+				return row.Source, true
+			case "relation":
+				return row.Relation, true
+			case "detail":
+				return row.Detail, true
+			case "summary":
+				return row.Summary, true
+			default:
+				return "", false
+			}
+		}
+		selectedField := m.selectedFieldForPage(page, "id")
+		switch {
+		case key == "sel", key == "sel.value":
+			return field(selectedField)
+		case key == "sel.id", key == "focus":
+			return field("id")
+		case key == "sel.field":
+			return selectedField, true
+		case strings.HasPrefix(key, "sel."):
+			return field(strings.TrimPrefix(key, "sel."))
+		}
+		return "", false
+	}
+
 	if page == PageDomains {
 		if row, has := m.FocusedDomainRow(); has {
 			field := func(f string) (string, bool) {
@@ -545,6 +588,28 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			value = a.Label
 		case "detail":
 			value = a.Detail
+		default:
+			return "", "", false
+		}
+	case PageDynamics:
+		// the focus row is pre-AIR-projected, so the field is already redaction-safe.
+		row, has := m.FocusedDynamicsElement()
+		if !has {
+			return "", "", false
+		}
+		switch field {
+		case "id":
+			value = row.ID
+		case "label":
+			value = row.Label
+		case "kind":
+			value = row.Kind
+		case "status":
+			value = row.Status
+		case "source":
+			value = row.Source
+		case "relation":
+			value = row.Relation
 		default:
 			return "", "", false
 		}

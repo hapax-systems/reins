@@ -197,6 +197,10 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 		}
 	case PageIntent:
 		return []yankFieldDef{{"t", "target"}, {"d", "detail"}}
+	case PageDynamics:
+		return []yankFieldDef{
+			{"i", "id"}, {"l", "label"}, {"k", "kind"}, {"s", "status"}, {"o", "source"}, {"r", "relation"},
+		}
 	}
 	return nil
 }
@@ -678,6 +682,12 @@ func (m Model) composesViaAlgebra() bool {
 		// isReferencePage scroll fallback). The flip self-anchors [j/k] and binds {{focus}}/yank to the
 		// focused governed-route target. The targets catalog is always non-empty, so composePage never
 		// returns nil for this page.
+		return true
+	case PageDynamics:
+		// Inc 3 TRANSFORM — self-anchored (own DynFocus; the explicit dynamicsFocusTo j handler runs
+		// before the isReferencePage scroll fallback). The flip self-anchors [j/k] and binds {{focus}}/
+		// yank to the focused map element. composePage() returns nil when dark/empty, where bodyForPage
+		// renders the legacy dynamics reference document.
 		return true
 	}
 	return false
