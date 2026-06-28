@@ -82,7 +82,13 @@ func SeedModel(w, h int) model.Model {
 	// everything else default-denies) so the OFFLINE on-air render is representative of live, not a
 	// blanket ▒▒▒. The turn SKELETON airs (role/kind/model/gate/ts); the body never gets "summary":ok.
 	taskAIR := map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok", "prior_stage": "ok", "no_go": "ok", "criticality": "ok", "owner": "ok"}
-	eventAIR := map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "score": "ok"}
+	// Faithful to the live config.AIRAllowlist: the event SUBJECT (free-text title) and ACTOR (identity
+	// of who acted) are NOT allowlisted → they DENY on air. The seed previously hand-set them "ok",
+	// making the offline --air render optimistic (it aired denied free-text the live API would redact —
+	// confirmed by the adversarial AIR sweep). Only the structural skeleton airs. (The broader fidelity
+	// of trace/turn/predicted_stage/criticality is config-gap-vs-intentional — operator-bound; see the
+	// reins-seed-air-fidelity-gap note.)
+	eventAIR := map[string]string{"ts": "ok", "kind": "ok", "score": "ok"}
 	sessionAIR := map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"}
 	traceAIR := map[string]string{"ts": "ok", "trace_id": "ok", "model": "ok", "latency_ms": "ok", "total_tok": "ok", "cost": "ok"}
 	epiAIR := map[string]string{"row_id": "ok", "family": "ok", "subject": "ok", "status": "ok", "authority": "ok"}
