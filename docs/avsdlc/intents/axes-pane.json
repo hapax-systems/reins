@@ -1,0 +1,33 @@
+{
+  "predicates": [
+    {
+      "pov_label": "local-terminal",
+      "region": "left_wall",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 120.0,
+      "direction": "decrease",
+      "critical": true
+    }
+  ],
+  "aggregation_floor": 0.75,
+  "note": "Axes pane (list|detail @0.5) — a REFERENCE surface (like :legend / :help), not a data feed: it situates the framework's six rows + the focused axis's five-tuple, so it is legitimately sparser than the :coordinator. The thresholds are the PRINCIPLED text-present floor (edge_energy >= 1.0 distinguishes rendered glyph/border structure from a blank region, which measures ~0 — confirmed by the blank-frame negative control) plus the dark-theme invariant (entity_core luma <= 120). Recalibrated from the initial feed-density prediction (>=2.0) after the AVSDLC confirm revealed the reference-pane density class — refining the model with understanding, not fitting to the value. Densifying the detail (a framework-relations footer in the lower space) is a noted E7.2 follow-up."
+}

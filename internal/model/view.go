@@ -176,6 +176,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark
 	case PageLoops:
 		return "loops", len(m.loopRows()), m.DynamicsDark
+	case PageAxes:
+		return "axes", len(grammar.Axes()), false
 	case PageEpistemics:
 		return "epistemics", len(m.epistemicRows()), m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark
 	case PageHelp:
@@ -411,6 +413,8 @@ func (m Model) windowSignal(page int) (string, string) {
 			return fmt.Sprintf("%dL", n), "mut"
 		}
 		return "0L", "mut"
+	case PageAxes:
+		return fmt.Sprintf("%dA", len(grammar.Axes())), "mut"
 	case PageEpistemics:
 		if m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark {
 			return "DARK", "red"
@@ -703,6 +707,11 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 70, Render: func(pw, ph int) string { return m.loopListBody(pw, ph) }},
 			&layout.Pane{MinW: 50, Render: func(pw, ph int) string { return m.loopDetailBody(pw) }},
 			0.50, "loop -> structure")
+	case PageAxes:
+		return m.specListContext(
+			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.axisListBody(pw, ph) }},
+			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.axisDetailBody(pw) }},
+			0.50, "axis -> five-tuple contract")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -1587,7 +1596,7 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.tracesBody(w, h)
 	case PageSessionTurns:
 		return m.turnListBody(w, h)
-	case PageDynamics, PageLoops, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
+	case PageDynamics, PageLoops, PageAxes, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
 		return m.eventsBody(w, h)
@@ -1981,6 +1990,8 @@ func (m Model) splitSessionContext(s grammar.Session) string {
 		return m.sourceOnlySessionContext(s, "system topology")
 	case PageLoops:
 		return m.sourceOnlySessionContext(s, "feedback structure")
+	case PageAxes:
+		return m.sourceOnlySessionContext(s, "case-role framework")
 	case PageEpistemics:
 		return m.sourceOnlySessionContext(s, "evidence/provenance")
 	case PageHelp:
@@ -2103,7 +2114,7 @@ func (m Model) splitContextPane(w, h int) string {
 		body = m.sessionConstraintPane(w)
 	case PageCaps:
 		body = m.renderCapabilitySplitPane(w, bodyH)
-	case PageTraces, PageDynamics, PageLoops, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
+	case PageTraces, PageDynamics, PageLoops, PageAxes, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
 		body = m.splitReferenceSlice(w, bodyH)
 	default:
 		body = m.eventContextPane(w)
@@ -3581,6 +3592,55 @@ func (m Model) loopListBody(w, h int) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) axisListBody(w, h int) string {
+	rows := grammar.Axes()
+	header := []string{
+		" " + grammar.C("brt", "CASE-ROLE AXES") + grammar.C("mut", " — the representational framework"),
+		" " + grammar.C("mut", "Each row is a case-role pane; the detail is the five-tuple contract that makes it legible."),
+		" " + grammar.RenderAxisHeader(),
+		" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))),
+	}
+	visible := h - len(header)
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(rows) > visible {
+		if m.AxisFocus >= visible {
+			start = m.AxisFocus - visible + 1
+		}
+		if mx := len(rows) - visible; start > mx {
+			start = mx
+		}
+	}
+	var b strings.Builder
+	for _, line := range header {
+		b.WriteString(fitWidth(line, w) + "\n")
+	}
+	if len(rows) == 0 {
+		b.WriteString(" " + grammar.C("mut", "no case-role axes") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for i := start; i < start+visible && i < len(rows); i++ {
+		line := grammar.RenderAxisRow(rows[i], maxVisible(24, w-1))
+		if i == m.AxisFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(line, w-1) + "\n")
+		} else {
+			b.WriteString(" " + line + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) axisDetailBody(w int) string {
+	rows := grammar.Axes()
+	if len(rows) == 0 {
+		return " " + grammar.C("brt", "AXIS CONTRACT") + "\n\n " + grammar.C("mut", "no case-role axes")
+	}
+	idx := clamp(m.AxisFocus, 0, len(rows)-1)
+	return grammar.RenderAxisDetail(rows[idx], w) + "\n\n" + grammar.RenderAxisFramework(w)
 }
 
 func (m Model) focusedLoopRow() (loopRow, bool) {
@@ -9777,6 +9837,8 @@ func pageLabel(page int) string {
 		return "PageDynamics"
 	case PageLoops:
 		return "PageLoops"
+	case PageAxes:
+		return "PageAxes"
 	case PageEpistemics:
 		return "PageEpistemics"
 	case PageHelp:
@@ -10101,6 +10163,8 @@ func (m Model) referenceContextHeading() string {
 		return "map context"
 	case PageLoops:
 		return "feedback loops"
+	case PageAxes:
+		return "case-role axes"
 	case PageEpistemics:
 		return "epistemic context"
 	case PageHelp:
@@ -12804,6 +12868,16 @@ func (m Model) floorActions(w int) string {
 		} else {
 			parts = append(parts, grammar.C("mut", "no causal loops"))
 		}
+	case PageAxes:
+		if n := len(grammar.Axes()); n > 0 {
+			parts = append(parts,
+				grammar.C("yel", "[j/k]")+fmt.Sprintf("axis %d/%d", m.AxisFocus+1, n),
+				grammar.C("yel", "[g/G]")+"first/last",
+				grammar.C("mut", "five-tuple contracts"),
+			)
+		} else {
+			parts = append(parts, grammar.C("mut", "no case-role axes"))
+		}
 	default:
 		if m.Page == PageDynamics {
 			if m.pageRows() > 0 {
@@ -13125,6 +13199,8 @@ func (m Model) trustSignalForPage(page int) trustSignal {
 	case PageLoops:
 		fresh := dynamicsSourceAge(m.Dynamics.Package.Sources)
 		out = trustSignal{Authority: firstNonEmpty(m.Dynamics.Package.Authority, "map-package"), Freshness: fresh, Support: "computed-structure", Recency: fresh}
+	case PageAxes:
+		out = trustSignal{Authority: "framework", Freshness: "static", Support: "five-tuple-contract", Recency: "static"}
 	case PageDomains:
 		fresh := domainSourceAge(m.Domains.LifecycleSources, m.Domains.Sources)
 		auth := "domain-pack"

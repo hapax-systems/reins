@@ -101,21 +101,35 @@ func axisStatusWord(status string) string {
 	}
 }
 
-// RenderAxisHeader situates the axis list (the case-role lattice).
-func RenderAxisHeader() string {
-	return C("mut", fmt.Sprintf(" %-3s %-1s %-20s %s", "AX", "·", "CASE-ROLE", "QUESTION"))
+// axisStatusTag is the compact 4-char status word for the list row — DUAL-CODES the glyph (the
+// hollow/half/solid circles are ambiguous at terminal resolution; the word disambiguates them and is
+// grayscale-legible on its own). live = folds live · part = partial · proj = projection-pending.
+func axisStatusTag(status string) string {
+	switch status {
+	case "built":
+		return C("grn", "live")
+	case "partial":
+		return C("yel", "part")
+	default:
+		return C("mut", "proj")
+	}
 }
 
-// RenderAxisRow is one axis row: id · status-glyph · name · question (clipped). Axis content is design
-// metadata (non-sensitive) — it is the same on or off air.
+// RenderAxisHeader situates the axis list (the case-role lattice).
+func RenderAxisHeader() string {
+	return C("mut", fmt.Sprintf(" %-3s %-1s %-4s %-20s %s", "AX", "·", "STAT", "CASE-ROLE", "QUESTION"))
+}
+
+// RenderAxisRow is one axis row: id · status-glyph · status-word · name · question (clipped). The
+// glyph + word dual-code the build status (unambiguous at a glance). Axis content is design metadata
+// (non-sensitive) — the same on or off air.
 func RenderAxisRow(a Axis, w int) string {
 	if w < 24 {
 		w = 24
 	}
-	head := fmt.Sprintf(" %-3s %s %-20s ", C("brt", a.ID), axisStatusGlyph(a.Status), C("pri", a.Name))
+	head := fmt.Sprintf(" %-3s %s %s %-20s ", C("brt", a.ID), axisStatusGlyph(a.Status), axisStatusTag(a.Status), C("pri", a.Name))
 	q := C("2nd", a.Question)
-	row := head + q
-	return clipRunes(row, w)
+	return clipRunes(head+q, w)
 }
 
 // RenderAxisDetail renders the focused axis's FULL five-tuple contract — the acceptance gate made
@@ -145,6 +159,26 @@ func RenderAxisDetail(a Axis, w int) string {
 	field("controls", a.Controls)
 	field("provenance", a.Provenance)
 	field("blind-spot", a.BlindSpot)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// RenderAxisFramework is the footer that SITUATES the six axes as one system (the legibility axiom —
+// make the novel framework understandable, never just a list): how they split, chain, and rank.
+func RenderAxisFramework(w int) string {
+	bw := w - 2
+	if bw < 10 {
+		bw = 10
+	}
+	var b strings.Builder
+	b.WriteString(" " + C("border", strings.Repeat("─", bw)) + "\n")
+	b.WriteString(" " + C("2nd", "FRAMEWORK") + C("mut", " — the six as one system") + "\n")
+	line := func(k, v string) {
+		b.WriteString(" " + C("pri", fmt.Sprintf("%-12s", k)) + wrapInto(v, w-14, 14) + "\n")
+	}
+	line("A1 + A3", "SPLIT — identity ≠ purview (who-acts ≠ what-scope)")
+	line("A2·A4·A6", "the ACTION-READINESS chain — stage · authority · consent (can we move? who authorizes? who must consent?)")
+	line("A5", "the OBSERVATION layer — the whole-system state that constrains the chain (read-only)")
+	line("ranking", "the A3 bridge = the DOI fold — salience (what the engines say matters) drives what each pane surfaces")
 	return strings.TrimRight(b.String(), "\n")
 }
 

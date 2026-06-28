@@ -41,5 +41,5 @@ func SeedModel(w, h int) model.Model {
 var PageCommands = []string{
 	"coordinator", "events", "tasks", "sessions", "dynamics", "loops", "readiness",
 	"capabilities", "intake", "epistemics", "traces", "intent", "dispatch", "turns",
-	"help", "legend", "commands", "windows", "surfaces", "domains", "lifecycles", "yard",
+	"help", "legend", "commands", "windows", "surfaces", "domains", "lifecycles", "yard", "axes",
 }

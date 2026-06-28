@@ -1,0 +1,78 @@
+{
+  "receipt": {
+    "kind": "av_witness",
+    "witness_mode": "reins-local-terminal-self-witness",
+    "receipt_id": "67f5716d922aaf377ef97748",
+    "content_hash": "7081e39ad12bb20dbfde8f37d130c6156b3d8b544fda8eff0d29750fc9c4a8e4",
+    "active_source_head": "a52e960",
+    "status": "pass",
+    "obs_moving": true,
+    "collected_at": 1782634148.3752341,
+    "expires_at": 1782635948.3752341,
+    "via": "reins-shot",
+    "perceptual_digest": "6969c51a70ece7dec047c846e2159b3c0b91952aa138c1197a8d2fa4e4045be3",
+    "intent_hash": "1a52cf7781cf6c9c07fd35b14fa58e046fd6f2bb7e18cf5f90d85d81ce28e4da",
+    "intent_pass": true,
+    "signature": ""
+  },
+  "predicates": [
+    {
+      "pov": "local-terminal",
+      "region": "left_wall",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "critical": true,
+      "realized": 2.17,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "critical": true,
+      "realized": 3.035,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 120.0,
+      "critical": true,
+      "realized": 34.68,
+      "holds": true
+    }
+  ],
+  "realized_vector": {
+    "local-terminal": {
+      "ceiling": {
+        "luma": 36.96386847134633,
+        "edge_energy": 3.5467477658580813
+      },
+      "left_wall": {
+        "luma": 31.558917677010726,
+        "edge_energy": 2.1703728252906873
+      },
+      "right_wall": {
+        "luma": 23.929898939720882,
+        "edge_energy": 0.2362657750432804
+      },
+      "floor": {
+        "luma": 25.34374219497812,
+        "edge_energy": 0.565012765836324
+      },
+      "entity_core": {
+        "luma": 34.68037400118985,
+        "edge_energy": 3.035251421751383
+      },
+      "negative_space": {
+        "luma": 44.06681382912573,
+        "edge_energy": 5.315247667228654
+      }
+    }
+  }
+}
