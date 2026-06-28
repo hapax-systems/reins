@@ -160,7 +160,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		if len(m.Gates.Rows) > 0 || len(m.Gates.Sources) > 0 {
 			return "readiness", len(m.Gates.Rows), m.GatesDark
 		}
-		return "readiness", len(m.blockedIndices()), m.TasksDark && m.SessionsDark
+		visibleBlocked, _ := m.yardBlockedIndices() // AIR: don't leak the count of tasks whose denied criticality/predicted_stage made them "blocked"
+		return "readiness", len(visibleBlocked), m.TasksDark && m.SessionsDark
 	case PageIntake:
 		return "intake", len(m.Intake.Rows), m.IntakeDark
 	case PageCaps:
@@ -1193,6 +1194,17 @@ func airSeverityToken(crit string, airMap map[string]string, air bool) string {
 		return "mut"
 	}
 	return grammar.SeverityToken(crit)
+}
+
+// airHue demotes a DERIVED hue to "mut" when its field is denied on air. The hue (a meaning-channel
+// color) is itself a derived channel that discloses the redacted value — a lane/state/readiness/blocker
+// /attention/owner/predicted/freshness token computed from a raw field still leaks the field on air even
+// when the VALUE is redacted to ▒▒▒. This generalizes airSeverityToken to the whole hue-leak class.
+func airHue(tok string, airMap map[string]string, field string, air bool) string {
+	if air && airMap[field] != "ok" {
+		return "mut"
+	}
+	return tok
 }
 
 // dashOr returns "—" for an empty value (compact structured silence in one-line summaries).
