@@ -639,6 +639,19 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.tracesListBody(pw, ph) }},
 			&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.renderSelectedTrace(pw) }},
 			0.62, m.tracesEmergentRelation())
+	case PageIntent:
+		// Inc 3 TRANSFORM — SELF-ANCHORED (own IntentFocus; the explicit j handler beats isReferencePage).
+		// The legacy session-frozen reference split (sessions │ intent review) is ABOLISHED: the primary
+		// IS the governed-route targets list, [j/k] moves the target, and the secondary is the selected
+		// target's review ladder. The targets are a static catalog, so the connector is the honest
+		// "selected target → governed route review" elucidation (like :dispatch), not relate.Derive.
+		if len(lookupIntentArgs()) == 0 {
+			return nil
+		}
+		return m.specListContext(
+			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.intentTargetsBody(pw, ph) }},
+			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedIntentReview(pw) }},
+			0.50, "selected target → governed route review")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -8661,6 +8674,91 @@ func (m Model) renderLifecycleCatalog(w int) string {
 
 func intentTargetFactPrefix(mark, label, tok string) string {
 	return " " + grammar.C(tok, mark+" ") + grammar.C(tok, fmt.Sprintf("%-12s", clipRunes(label, 12)))
+}
+
+// intentTargetsBody is the PRIMARY pane of the algebra-composed intent page (Inc 3 TRANSFORM): the
+// review banner + the governed-route TARGETS list with the IntentFocus cursor. The selected target's
+// full route review is the SECONDARY (renderSelectedIntentReview). Self-anchored — [j/k] moves the
+// target natively (the page is no longer session-frozen).
+func (m Model) intentTargetsBody(w, h int) string {
+	target := strings.TrimSpace(m.IntentTarget)
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "INTENT REVIEW") + grammar.C("mut", "  review-before-run, no effect emitted") + "\n")
+	b.WriteString(" " + grammar.C("yel", "governed COMMAND route required") + grammar.C("mut", " · no dispatch · no claim · no close from this pane") + "\n")
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(rule + "\n")
+	if selected, ok := m.selectedIntentArg(); ok {
+		writeWrappedKV(&b, "cursor", fmt.Sprintf("%d/%d · %s · [j/k] target · [Enter] preview selected target", m.IntentFocus+1, len(lookupIntentArgs()), selected.Label), "yel", w)
+	}
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("2nd", "targets") + "\n")
+	for i, a := range lookupIntentArgs() {
+		mark, tok := " ", "mut"
+		if i == m.IntentFocus {
+			mark, tok = "▶", "yel"
+		} else if a.Label == target {
+			mark, tok = "◆", "yel"
+		}
+		writeSegmentedFactRow(&b, intentTargetFactPrefix(mark, a.Label, tok), []string{
+			"target=" + a.Label,
+			"detail=" + a.Detail,
+		}, w, i == m.IntentFocus)
+	}
+	return b.String()
+}
+
+// renderSelectedIntentReview is the algebra SECONDARY for the intent page: the selected target's route
+// review ladder + subject binding + contract. The subject is the AIR-safe subject captured before the
+// page switch (m.intentReviewSubject()); no live session anchor — the page is self-anchored.
+func (m Model) renderSelectedIntentReview(w int) string {
+	target := strings.TrimSpace(m.IntentTarget)
+	subject := m.intentReviewSubject()
+	v, _ := lookupVerb("intent")
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	line := func(label, value, tok string) { writeWrappedKV(&b, label, value, tok, w) }
+	writeSectionHeader(&b, w, "ROUTE REVIEW", "review-before-run; no effect emitted from this pane", firstNonEmpty(target, "choose a target"))
+	if target == "" {
+		line("target", "choose one in the list", "yel")
+	} else if intentArg(target) == nil {
+		line("target", "unknown: "+target, "red")
+	} else {
+		line("target", target, "yel")
+	}
+	line("subject", subject, "pri")
+	line("authority", v.authority, "org")
+	line("preflight", v.preflight, "2nd")
+	line("receipt", v.receipt, "2nd")
+	line("effect", "none emitted", "grn")
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "ROUTE PREVIEW LADDER") + grammar.C("mut", " — subject binding before governed effect") + "\n")
+	for _, row := range []contextRow{
+		{"source", subject, "pri"},
+		{"target", firstNonEmpty(target, "choose one in the list"), "yel"},
+		{"authority", v.authority, "org"},
+		{"preflight", v.preflight, "2nd"},
+		{"receipt", v.receipt, "2nd"},
+		{"effect", "none emitted from Reins until route receipt exists", "grn"},
+	} {
+		b.WriteString(" " + grammar.C("2nd", fmt.Sprintf("%-10s ", row.label)) +
+			grammar.C(row.token, clipRunes(row.value, maxVisible(12, w-14))) + "\n")
+	}
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "SUBJECT BINDING") + grammar.C("mut", " — templates make selection reusable without copy-paste") + "\n")
+	for _, row := range []contextRow{
+		{"{{focus}}", "current focused row identity", "yel"},
+		{"{{sel.*}}", "selected/status/missing field through AIR", "yel"},
+		{"{{ring.0}}", "last yanked AIR-safe value", "yel"},
+		{"handoff", "future COMMAND route must attach evidence refs", "org"},
+	} {
+		b.WriteString(" " + grammar.C("2nd", fmt.Sprintf("%-12s ", row.label)) +
+			grammar.C(row.token, clipRunes(row.value, maxVisible(12, w-16))) + "\n")
+	}
+	b.WriteString(rule + "\n")
+	b.WriteString(" " + grammar.C("2nd", "contract") + "\n")
+	b.WriteString(" " + grammar.C("mut", "This screen reviews target, subject, authority, preflight, and receipt only.") + "\n")
+	b.WriteString(" " + grammar.C("mut", "A future COMMAND route must supply mutation surface, route evidence, and receipt refs.") + "\n")
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) renderIntentReview(w int) string {

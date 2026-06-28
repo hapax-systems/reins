@@ -294,6 +294,36 @@ func (m Model) templateValue(key string) (string, bool) {
 		return "", false
 	}
 
+	if page == PageIntent {
+		// The targets are a static governed-route catalog of PUBLIC route names — no AIR redaction. The
+		// focused target is the cursor; {{focus}} resolves to it (the subject carried from the source page
+		// is shown in the review pane, not offered as a fresh template value).
+		args := lookupIntentArgs()
+		field := func(f string) (string, bool) {
+			if m.IntentFocus < 0 || m.IntentFocus >= len(args) {
+				return "", false
+			}
+			a := args[m.IntentFocus]
+			switch f {
+			case "id", "target", "label":
+				return a.Label, true
+			case "detail":
+				return a.Detail, true
+			default:
+				return "", false
+			}
+		}
+		switch {
+		case key == "sel", key == "sel.value", key == "sel.id", key == "focus":
+			return field("target")
+		case key == "sel.field":
+			return "target", true
+		case strings.HasPrefix(key, "sel."):
+			return field(strings.TrimPrefix(key, "sel."))
+		}
+		return "", false
+	}
+
 	if page == PageDomains {
 		if row, has := m.FocusedDomainRow(); has {
 			field := func(f string) (string, bool) {
@@ -500,6 +530,21 @@ func (m Model) selectedPasteValue() (field, value string, ok bool) {
 			value = grammar.Redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), m.AIR)
 		case "latency_ms":
 			value = grammar.Redact(tr.AIR, "latency_ms", fmt.Sprintf("%dms", tr.LatencyMs), m.AIR)
+		default:
+			return "", "", false
+		}
+	case PageIntent:
+		// public governed-route catalog labels — no AIR redaction.
+		args := lookupIntentArgs()
+		if m.IntentFocus < 0 || m.IntentFocus >= len(args) {
+			return "", "", false
+		}
+		a := args[m.IntentFocus]
+		switch field {
+		case "target", "label":
+			value = a.Label
+		case "detail":
+			value = a.Detail
 		default:
 			return "", "", false
 		}

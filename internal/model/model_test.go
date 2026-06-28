@@ -2121,10 +2121,10 @@ func TestSplitReferenceCatalogsDoNotExposeInactiveTargetFocus(t *testing.T) {
 		{"windows", PageWindows, func(m Model) int { return m.WindowFocus }, "[j/k]window", "▶ 2 tasks", []string{"selected window"}},
 		{"surfaces", PageSurfaces, func(m Model) int { return m.SurfaceFocus }, "[j/k]surface", "▶ split-context", []string{"selected surface"}},
 		{"domains", PageDomains, func(m Model) int { return m.DomainFocus }, "[j/k]domain", "▶ capability-routing", []string{"selected capability-routing"}},
-		{"intent", PageIntent, func(m Model) int { return m.IntentFocus }, "[j/k]intent", "▶ dispatch", []string{"intent target dispatch"}},
-		// (epistemics removed — Inc 3 migrated it to a SELF-ANCHORED algebra page: j moves the epistemic
-		// row, not the session source. Self-anchored nav is pinned by TestEpistemicsJMovesEvidenceRow-
-		// Natively and TestEpistemicsPageRendersDerivedEvidenceAndAIR.)
+		// (epistemics + intent removed — Inc 3 migrated them to SELF-ANCHORED algebra pages: j moves the
+		// page's own row/target, not the session source. Their self-anchored nav is pinned by the
+		// dedicated *_algebra_test.go suites — TestEpistemicsJMovesEvidenceRowNatively /
+		// TestIntentJMovesTargetNatively.)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base
@@ -4110,8 +4110,12 @@ func TestIntentReviewPageRendersTargetSubjectAndContract(t *testing.T) {
 		t.Fatalf(":intent show-route must open the intent review page, got page=%d target=%q", out.Page, out.IntentTarget)
 	}
 	v := ansi.Strip(out.View())
+	// Inc 3 migrated intent to the algebra split (targets list │ route review); the narrow panes wrap, so
+	// flatten per column. The targets list now carries the [Enter] affordance + cursor; the secondary the
+	// route ladder + subject binding; "selection task target-task" is in the status line.
+	flat := flattenSplitColumns(v)
 	for _, want := range []string{"INTENT REVIEW", "show-route", "selection task target-task", "governed COMMAND route required", "no effect emitted", "preflight", "receipt", "cursor", "[Enter] preview selected target", "ROUTE PREVIEW LADDER", "SUBJECT BINDING", "{{focus}}"} {
-		if !strings.Contains(v, want) {
+		if !strings.Contains(flat, want) {
 			t.Fatalf("intent review page missing %q:\n%s", want, v)
 		}
 	}
@@ -4135,9 +4139,12 @@ func TestWideIntentContextRailAndFooterAdvertiseTargetCursor(t *testing.T) {
 	m.Width, m.Height, m.Page = 220, 52, PageTasks
 	m = m.Exec("intent dispatch")
 
-	v := ansi.Strip(m.View())
+	v := flattenSplitColumns(ansi.Strip(m.View()))
 	floor := ansi.Strip(m.viewFloor(m.Width))
-	for _, want := range []string{"legal next", "[j/k]", "intent target 2/9", "[Enter]", "preview selected target"} {
+	// Inc 3: the explicit targets LIST supersedes the old "legal next" rail (every legal target is now
+	// shown + cursored), so the migrated page advertises the target cursor + Enter-preview in the body +
+	// floor rather than a generic reference scroll.
+	for _, want := range []string{"[j/k]", "intent target 2/9", "[Enter]", "preview selected target", "targets"} {
 		if !strings.Contains(v, want) && !strings.Contains(floor, want) {
 			t.Fatalf("wide intent rail/footer missing %q:\nview:\n%s\nfloor:\n%s", want, v, floor)
 		}
@@ -4147,25 +4154,32 @@ func TestWideIntentContextRailAndFooterAdvertiseTargetCursor(t *testing.T) {
 	}
 }
 
-func TestSplitIntentReviewDoesNotAdvertiseRightPaneEnter(t *testing.T) {
+// Inc 3 — intent is SELF-ANCHORED. Even with SplitContext set, the page is no longer session-frozen:
+// it composes via the algebra (splitContextActive false) and ADVERTISES the target Enter-preview (the
+// abolished session-frozen split suppressed it because the session source owned [Enter]).
+func TestIntentSelfAnchoredAdvertisesTargetEnter(t *testing.T) {
 	m := New("REINS").FoldSessions([]grammar.Session{{
 		Role: "cx-source", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 	}}, false)
 	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageIntent, true
-
-	v := ansi.Strip(m.View())
-	for _, want := range []string{"sessions + intent review as explicit target", "split: source owns [j/k]/[Enter]", "use :intent <target> or [|] unsplit", "[↵]src-detail"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("split intent review missing %q:\n%s", want, v)
-		}
+	if m.splitContextActive() {
+		t.Fatal("migrated intent must not be session-frozen even with SplitContext set")
 	}
-	if strings.Contains(v, "[Enter] preview selected target") {
-		t.Fatalf("split intent should not advertise right-pane Enter target preview:\n%s", v)
+	flat := flattenSplitColumns(ansi.Strip(m.View()))
+	if !strings.Contains(flat, "[Enter] preview selected target") {
+		t.Fatalf("self-anchored intent must advertise the target Enter-preview:\n%s", flat)
+	}
+	for _, gone := range []string{"sessions + intent review as explicit target", "split: source owns [j/k]/[Enter]"} {
+		if strings.Contains(flat, gone) {
+			t.Fatalf("self-anchored intent must not render the abolished session-frozen marker %q:\n%s", gone, flat)
+		}
 	}
 }
 
-func TestSplitIntentSubjectTracksSourceLane(t *testing.T) {
+// Inc 3 — the intent subject is the AIR-safe subject CAPTURED before the page switch, not a live session
+// lane (that session-frozen coupling is abolished). j moves the TARGET (IntentFocus), never a session.
+func TestIntentSubjectIsCapturedNotSessionTracked(t *testing.T) {
 	m := New("REINS").FoldSessions([]grammar.Session{
 		{Role: "cx-one", Platform: "codex", State: "active", Readiness: "claim", Blocker: "none", Attention: 0.88,
 			AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"}},
@@ -4175,17 +4189,20 @@ func TestSplitIntentSubjectTracksSourceLane(t *testing.T) {
 	m.Width, m.Height, m.Page, m.SplitContext = 220, 44, PageIntent, true
 	m.IntentTarget, m.IntentSubject = "dispatch", "task stale-task"
 
-	v := ansi.Strip(m.View())
-	if !strings.Contains(v, "subject     session cx-one") {
-		t.Fatalf("split intent should bind to visible source lane, not stale captured subject:\n%s", v)
+	flat := flattenSplitColumns(ansi.Strip(m.View()))
+	if !strings.Contains(flat, "task stale-task") {
+		t.Fatalf("migrated intent must show the captured subject, not a session lane:\n%s", flat)
 	}
+	if strings.Contains(flat, "subject session cx-one") {
+		t.Fatalf("migrated intent must not bind the subject to a session lane:\n%s", flat)
+	}
+	before := m.IntentFocus
 	m = step(m, "j")
-	v = ansi.Strip(m.View())
-	if !strings.Contains(v, "subject     session cx-two") {
-		t.Fatalf("split intent subject should track source lane movement:\n%s", v)
+	if m.IntentFocus != before+1 {
+		t.Fatalf("j must move the intent target (IntentFocus %d→%d), not a session lane", before, m.IntentFocus)
 	}
-	if strings.Contains(v, "task stale-task") {
-		t.Fatalf("split intent should not keep stale non-source subject:\n%s", v)
+	if m.SFocus != 0 {
+		t.Fatalf("j on self-anchored intent must not move a session lane anchor, SFocus=%d", m.SFocus)
 	}
 }
 

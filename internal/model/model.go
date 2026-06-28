@@ -195,6 +195,8 @@ func yankFieldsForSelectionPage(page int) []yankFieldDef {
 		return []yankFieldDef{
 			{"i", "trace_id"}, {"m", "model"}, {"t", "ts"}, {"c", "cost"}, {"l", "latency_ms"},
 		}
+	case PageIntent:
+		return []yankFieldDef{{"t", "target"}, {"d", "detail"}}
 	}
 	return nil
 }
@@ -670,6 +672,12 @@ func (m Model) composesViaAlgebra() bool {
 		// Inc 3 TRANSFORM — self-anchored (own TFocus). Same lever: the flip self-anchors [j/k] (traces is
 		// not an isReferencePage, so j → focusTo → TFocus) and binds {{focus}}/yank to the focused trace.
 		// composePage() returns nil when dark/empty, where bodyForPage renders tracesBody (dark hint).
+		return true
+	case PageIntent:
+		// Inc 3 TRANSFORM — self-anchored (own IntentFocus; the explicit j handler runs before the
+		// isReferencePage scroll fallback). The flip self-anchors [j/k] and binds {{focus}}/yank to the
+		// focused governed-route target. The targets catalog is always non-empty, so composePage never
+		// returns nil for this page.
 		return true
 	}
 	return false
