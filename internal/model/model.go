@@ -2698,6 +2698,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if m.Page == PageDynamics {
 				m = m.openEpistemicsForDynamicsFocus()
+			} else if m.Page == PageAxes {
+				// the :axes overview is a LAUNCHER — [enter] jumps to the focused axis's pane.
+				axes := grammar.Axes()
+				a := axes[clamp(m.AxisFocus, 0, len(axes)-1)]
+				if a.Maps != "" {
+					m = m.Exec(strings.TrimPrefix(a.Maps, ":"))
+				} else {
+					m.Status = a.ID + " " + a.Name + ": no dedicated pane yet (projection-pending)"
+				}
 			} else {
 				m.Status = "inspect: :tasks only"
 			}

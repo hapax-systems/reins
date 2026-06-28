@@ -67,7 +67,7 @@ func Axes() []Axis {
 			BlindSpot:  "Tier-2 LIVE DOMINANCE blocked pending the rate-substrate decision; whether a causal direction is DESIRABLE is A6",
 		},
 		{
-			ID: "A6", Name: "Relational", Status: "pending", Maps: "",
+			ID: "A6", Name: "Relational", Status: "pending", Maps: ":relational",
 			Question:   "who is affected — what consent / accountability lines exist; who can contest it?",
 			State:      "stakeholder roster + consent status {consented | withheld | no-input | deferred}; ∅ = no stakeholders / UNILATERAL authority (dangerous flag)",
 			Controls:   "CONSENT — who authorized this frame's visibility; bimodal AIR (present-at-hand ⟵ operator only · air ⟵ default-deny, N-sec hold, dump/kill)",
