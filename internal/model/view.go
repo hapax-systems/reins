@@ -12129,7 +12129,9 @@ func (m Model) taskWorkDomainPane(w int) string {
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "relationships") + "\n")
 	line("task edges", grammar.Redact(t.AIR, "rel_count", fmt.Sprintf("●%d", t.RelCount), m.AIR), relToken(t.RelCount))
-	if t.RelCount == 0 {
+	if t.RelCount == 0 && !(m.AIR && t.AIR["rel_count"] != "ok") {
+		// derived-channel (class-c): on air, a denied rel_count must not disclose rel_count==0 through
+		// the mere PRESENCE of this source-absent advisory — gate it on the field's AIR.
 		b.WriteString(" " + grammar.C("mut", "task-edge source absent; do not infer graph neighborhood") + "\n")
 	}
 	b.WriteString(rule + "\n")
