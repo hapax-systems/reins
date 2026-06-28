@@ -818,13 +818,13 @@ func (m Model) specCoordinator() *layout.Spec {
 	return layout.Split(layout.Leaf(lens), inner, 0.4, layout.Connector{Glyph: div, Relation: m.coordinatorEmergentRelation()})
 }
 
-// coordinatorEmergentRelation derives the connector's relationship from the lens selection to the
-// rest of the visible lattice, AIR-aware. v1 consumes facet-overlap (the relation-derivation
-// PRODUCER that would supply richer edges is cross-repo, not yet built).
-func (m Model) coordinatorEmergentRelation() string {
+// coordinatorRelation derives the lens selection's emergent relationship to the rest of the visible
+// lattice ONCE (AIR-aware), so the connector label and the brush set agree. v1 consumes facet-overlap
+// (the richer-edge relation-derivation PRODUCER is cross-repo, not yet built).
+func (m Model) coordinatorRelation() (relate.Relation, bool) {
 	focused, ok := m.FocusedTask()
 	if !ok {
-		return ""
+		return relate.Relation{}, false
 	}
 	others := make([]relate.Entity, 0, len(m.visibleTasks()))
 	for _, t := range m.visibleTasks() {
@@ -833,7 +833,36 @@ func (m Model) coordinatorEmergentRelation() string {
 		}
 		others = append(others, taskEntity(t, m.AIR))
 	}
-	return m.emergentRelation(taskEntity(focused, m.AIR), others, nil)
+	return relate.Derive(taskEntity(focused, m.AIR), others, nil), true
+}
+
+// coordinatorEmergentRelation renders the connector label AIR-aware; when the relation has
+// participants it decodes the ├ brush glyph in-band ("· ├ related") so the highlighted rows read.
+func (m Model) coordinatorEmergentRelation() string {
+	rel, ok := m.coordinatorRelation()
+	if !ok {
+		return ""
+	}
+	label := m.airRelationLabel(rel)
+	if len(rel.Peers) > 0 {
+		label += " · ├ related"
+	}
+	return label
+}
+
+// coordinatorBrushedTasks is the brush set: the task ids participating in the focused task's emergent
+// relation (relate.Derive Peers). AIR-safe — the same air-aware facets feed the derive (a relation
+// over a redacted facet never forms) and the brush is positional (highlights rows, never prints ids).
+func (m Model) coordinatorBrushedTasks() map[string]bool {
+	rel, ok := m.coordinatorRelation()
+	if !ok || len(rel.Peers) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(rel.Peers))
+	for _, id := range rel.Peers {
+		set[id] = true
+	}
+	return set
 }
 
 // emergentRelation derives a pane-to-pane connector relation (relate.Derive) and renders it
@@ -1265,11 +1294,17 @@ func (m Model) coordinatorLensPane(w, h int) string {
 			start = mx
 		}
 	}
+	brushed := m.coordinatorBrushedTasks()
 	for i := start; i < start+visible && i < len(tasks); i++ {
 		row := grammar.RenderTaskRow(tasks[i], m.AIR)
-		if i == m.Focus {
+		switch {
+		case i == m.Focus:
 			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(row, w-1) + "\n")
-		} else {
+		case brushed[tasks[i].TaskID]:
+			// brushed: this row shares the focused task's strongest emergent facet (├ decoded by the
+			// connector label "shares … · ├ related"). 1-wide gutter — alignment with the plain rows.
+			b.WriteString(grammar.C("2nd", "├") + row + "\n")
+		default:
 			b.WriteString(" " + row + "\n")
 		}
 	}

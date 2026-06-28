@@ -34,12 +34,13 @@ type Edge struct {
 // fields let a caller render it AIR-aware (withhold a sensitive facet Value or edge Peer on air
 // while keeping the structural shape).
 type Relation struct {
-	Kind     string // "edge" | "facet" | "none"
-	Type     string // edge type (Kind=="edge"): blocks/causes/feeds/...
-	Peer     string // peer entity id (Kind=="edge")
-	Facet    string // shared facet name (Kind=="facet")
-	Value    string // shared facet value (Kind=="facet")
-	Count    int    // how many others share it (Kind=="facet")
+	Kind     string   // "edge" | "facet" | "none"
+	Type     string   // edge type (Kind=="edge"): blocks/causes/feeds/...
+	Peer     string   // strongest peer entity id (Kind=="edge")
+	Peers    []string // ALL pane-B ids participating in this relation — the brush set (edge-typed or facet-sharing)
+	Facet    string   // shared facet name (Kind=="facet")
+	Value    string   // shared facet value (Kind=="facet")
+	Count    int      // how many others share it (Kind=="facet")
 	Strength float64
 	Label    string
 }
@@ -82,8 +83,22 @@ func strongestEdge(anchor Entity, others []Entity, edges []Edge) (Relation, bool
 	if !found {
 		return Relation{}, false
 	}
+	// the brush set: every pane-B id joined to the anchor by the winning edge type (not just the
+	// strongest). Positional-only — callers highlight matching rows, never print these ids.
+	peers := make([]string, 0)
+	for _, e := range edges {
+		if e.Type != best.Type {
+			continue
+		}
+		switch {
+		case e.Src == anchor.ID && otherIDs[e.Dst]:
+			peers = append(peers, e.Dst)
+		case e.Dst == anchor.ID && otherIDs[e.Src]:
+			peers = append(peers, e.Src)
+		}
+	}
 	return Relation{
-		Kind: "edge", Type: best.Type, Peer: best.Dst,
+		Kind: "edge", Type: best.Type, Peer: best.Dst, Peers: peers,
 		Label: best.Type + " " + best.Dst, Strength: best.Weight,
 	}, true
 }
@@ -123,8 +138,15 @@ func strongestSharedFacet(anchor Entity, others []Entity) (Relation, bool) {
 	if n == 0 {
 		return Relation{}, false
 	}
+	// the brush set: every pane-B id sharing the winning facet=value. Positional-only.
+	peers := make([]string, 0, n)
+	for _, o := range others {
+		if o.Facets[best.facet] == best.value {
+			peers = append(peers, o.ID)
+		}
+	}
 	return Relation{
-		Kind: "facet", Facet: best.facet, Value: best.value, Count: n,
+		Kind: "facet", Facet: best.facet, Value: best.value, Count: n, Peers: peers,
 		Label:    fmt.Sprintf("shares %s=%s (%d)", best.facet, best.value, n),
 		Strength: float64(n) / float64(len(others)),
 	}, true
