@@ -411,6 +411,26 @@ func TestRenderTurnRowOperatorFreeTextNeverAirs(t *testing.T) {
 	}
 }
 
+// The provenance channel is the BEFORE-airing gate: the per-field AIR allowlist cannot be trusted for a
+// free-text or untrusted-external body, so operator/untrusted provenance forces shape-only on air EVEN
+// WHEN AIR[summary]=="ok". Structured/model provenance still airs per the allowlist (the override is
+// provenance-scoped, not a blanket deny).
+func TestRenderTurnRowProvenanceOverridesAirAllowlist(t *testing.T) {
+	for _, prov := range []string{"operator", "untrusted"} {
+		tk := sampleTurn()
+		tk.Prov, tk.Summary = prov, "LEAKY FREE TEXT"
+		tk.AIR["summary"] = "ok" // the allowlist (wrongly) permits it
+		if got := ansi.Strip(RenderTurnRow(tk, true)); strings.Contains(got, "LEAKY FREE TEXT") {
+			t.Fatalf("prov=%s body must not air despite AIR[summary]=ok:\n%q", prov, got)
+		}
+	}
+	tk := sampleTurn()
+	tk.Prov, tk.Summary, tk.AIR["summary"] = "structured", "route_envelope=glm-via-cc", "ok"
+	if got := ansi.Strip(RenderTurnRow(tk, true)); !strings.Contains(got, "route_envelope") {
+		t.Fatalf("structured body with AIR[summary]=ok should air:\n%q", got)
+	}
+}
+
 func TestLegendCoversTurnGlyphs(t *testing.T) {
 	leg := RenderLegend()
 	for kind, g := range turnGlyph {

@@ -273,6 +273,7 @@ type Turn struct {
 	TS        string            `json:"ts"`
 	Role      string            `json:"role"`      // lane/actor — LaneToken identity (skeleton)
 	Kind      string            `json:"kind"`      // turn-kind key into turnGlyph (skeleton)
+	Prov      string            `json:"prov"`      // provenance: operator|model|structured|untrusted (glyph channel)
 	Summary   string            `json:"summary"`   // the BODY — default-deny on air
 	Magnitude float64           `json:"magnitude"` // normalized 0..1 size (tokens/lines) -> ScoreBar
 	Model     string            `json:"model"`     // served model ("x via y") (skeleton)
@@ -280,6 +281,48 @@ type Turn struct {
 	Gate      string            `json:"gate"`      // pass|deny|pending|"" — gate_output result (skeleton)
 	AIR       map[string]string `json:"air"`
 }
+
+// provGlyph: the PROVENANCE channel — a first-class width-1 mark distinguishing WHO authored a turn's
+// body, so the on-air policy applies BEFORE airing (the "distinguish free-text from structured" rule).
+// operator-free-text ● (can contain anything); model ◐; structured/registry ◌; untrusted-external
+// (MCP/web) ○. SHAPE, not hue.
+func provGlyph(prov string) string {
+	switch prov {
+	case "operator":
+		return "●"
+	case "untrusted":
+		return "○"
+	case "structured":
+		return "◌"
+	default:
+		return "◐" // model (default)
+	}
+}
+
+// turnProvGloss decodes the turn AUTHORSHIP-provenance channel (distinct from the confidence-ladder
+// provGloss). The glyphs intentionally echo the confidence ladder (no new vocabulary); the legend
+// situates both readings.
+var turnProvGloss = map[string]string{
+	"operator":   "operator free-text — ALWAYS denied on air (can contain anything)",
+	"model":      "model-authored text",
+	"structured": "structured / registry value (may air per field)",
+	"untrusted":  "untrusted external (MCP/web) — shape-only on air regardless",
+}
+
+// provDeniesOnAir: operator-free-text and untrusted-external bodies NEVER air, the per-field AIR map
+// notwithstanding — the AIR allowlist cannot be trusted for a free-text or external-origin body.
+func provDeniesOnAir(prov string) bool { return prov == "operator" || prov == "untrusted" }
+
+// turnBodyForAir gates a turn/block BODY by BOTH the per-field AIR map AND the provenance override
+// (operator/untrusted always redact on air); the redaction token stays structurally intact.
+func turnBodyForAir(airMap map[string]string, prov, body string, airOn bool) string {
+	if airOn && provDeniesOnAir(prov) {
+		return redactToken
+	}
+	return redact(airMap, "summary", body, airOn)
+}
+
+var _ = turnProvGloss // legended via RenderLegend follow-up; referenced to keep the gloss authored
 
 // turnGlyph: the closed turn-kind alphabet (one width-1 mark per turn-primitive, normalized across
 // the three harnesses). PROVISIONAL marks — the operator vets the aesthetic on stream; the legend
@@ -330,7 +373,7 @@ func gateSeverity(gate string) string {
 
 // RenderTurnHeader: the column header that SITUATES the turn-ladder (k = magnitude-bar + kind glyph).
 func RenderTurnHeader() string {
-	return C("mut", fmt.Sprintf(" %-8s %-2s %-10s %-14s %-9s %s", "TIME", "k", "WHO", "MODEL", "GATE", "WHAT"))
+	return C("mut", fmt.Sprintf(" %-8s %-2s %-10s %-14s %-9s %-1s %s", "TIME", "k", "WHO", "MODEL", "GATE", "p", "WHAT"))
 }
 
 // RenderTurnRow: one self-explaining session-turn row — TIME · magnitude-bar · kind-glyph · WHO(lane)
@@ -363,8 +406,9 @@ func RenderTurnRow(t Turn, airOn bool) string {
 			gate = C("mut", pad("["+g+"]", 9))
 		}
 	}
-	what := C("mut", redact(t.AIR, "summary", t.Summary, airOn))
-	return fmt.Sprintf("%s %s%s %s %s %s %s", ts, bar, glyph, who, model, gate, what)
+	prov := C("mut", provGlyph(t.Prov)) // provenance is SHAPE, decoded by the legend
+	what := C("mut", turnBodyForAir(t.AIR, t.Prov, t.Summary, airOn))
+	return fmt.Sprintf("%s %s%s %s %s %s %s %s", ts, bar, glyph, who, model, gate, prov, what)
 }
 
 // TurnBlock is one sub-unit inside a turn (reasoning / tool_call / tool_result / diff / …) — the
@@ -372,6 +416,7 @@ func RenderTurnRow(t Turn, airOn bool) string {
 // (exit code · line count · tool name · model — operational skeleton) airs; the BODY default-denies.
 type TurnBlock struct {
 	Kind      string            `json:"kind"`      // sub-unit turn-kind (key into turnGlyph)
+	Prov      string            `json:"prov"`      // provenance (operator|model|structured|untrusted)
 	Summary   string            `json:"summary"`   // the BODY — default-deny on air
 	Magnitude float64           `json:"magnitude"` // normalized 0..1 size -> ScoreBar
 	Meta      string            `json:"meta"`      // air-safe skeleton (exit/lines/tool/model)
@@ -400,7 +445,9 @@ func RenderTurnDetail(t Turn, blocks []TurnBlock, airOn bool) string {
 		if blk.Meta != "" {
 			meta = C("mut", redact(blk.AIR, "meta", blk.Meta, airOn)) + "  "
 		}
-		body := C("mut", redact(blk.AIR, "summary", blk.Summary, airOn))
+		// tool_result stdout + MCP/web bodies are the highest-blast-radius blocks → provenance-gate them
+		// like the top-level body (untrusted/operator never air, AIR map notwithstanding).
+		body := C("mut", turnBodyForAir(blk.AIR, blk.Prov, blk.Summary, airOn))
 		b.WriteString("   " + C("border", conn) + " " + bar + C("mut", glyph) + " " + meta + body + "\n")
 	}
 	return b.String()
