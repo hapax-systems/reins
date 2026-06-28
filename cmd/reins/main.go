@@ -16,6 +16,7 @@ import (
 	"github.com/hapax-systems/reins/internal/graph"
 	"github.com/hapax-systems/reins/internal/imgpreview"
 	"github.com/hapax-systems/reins/internal/model"
+	"github.com/hapax-systems/reins/internal/smoke"
 )
 
 // fetchOnce: one events fetch -> an EventsMsg. Unreachable/dark folds honestly, never panics.
@@ -239,6 +240,33 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (r root) View() string { return r.m.View() }
+
+// driveLiveModel folds the real read surfaces into a model (the same fetch set as --probe) so the
+// navigation driver can be exercised against live data. Dark/unreachable surfaces just render dark.
+func driveLiveModel(url string) model.Model {
+	evs, ed, _ := api.FetchEvents(url)
+	ts, td, _ := api.FetchTasks(url)
+	dg, dd, _ := api.FetchDynamics(url)
+	ep, epd, _ := api.FetchEpistemics(url)
+	ss, sd, _ := api.FetchSessions(url)
+	in, id, _ := api.FetchIntake(url)
+	caps, cd, _ := api.FetchCapabilities(url)
+	gates, gd, _ := api.FetchGates(url)
+	doms, domd, _ := api.FetchDomains(url)
+	tr, trd, _ := api.FetchTraces(url)
+	m := model.New("REINS")
+	m = m.Fold(evs, ed)
+	m = m.FoldTasks(ts, td)
+	m = m.FoldDynamics(dg, dd)
+	m = m.FoldEpistemics(ep, epd)
+	m = m.FoldSessions(ss, sd)
+	m = m.FoldIntake(in, id)
+	m = m.FoldCapabilities(caps, cd)
+	m = m.FoldGates(gates, gd)
+	m = m.FoldDomains(doms, domd)
+	m = m.FoldTraces(tr, trd)
+	return m
+}
 
 func configPath() string {
 	if p := os.Getenv("REINS_CONFIG"); p != "" {
@@ -669,6 +697,62 @@ func main() {
 			}
 		}
 		fmt.Println(m.View())
+		return
+	}
+	// --drive "<step1>;<step2>;…": the headless NAVIGATION driver. Feeds each ';'-separated step (a
+	// space-separated key list; ":word" types a command) through Update and prints the end-state
+	// frame (or every frame with --all). Render to PNG for visual inspection / AVSDLC capture with:
+	//   reins --drive ":coordinator; j; v; a; esc" size:160x46 | freeze --language ansi -o frame.png
+	// Default is the deterministic offline seed; --live folds the real read surfaces instead.
+	if len(os.Args) > 1 && os.Args[1] == "--drive" {
+		w, h := 160, 44
+		air, live, allFrames := false, false, false
+		driveSpec := ""
+		for _, a := range os.Args[2:] {
+			switch {
+			case a == "--air":
+				air = true
+			case a == "--live":
+				live = true
+			case a == "--all":
+				allFrames = true
+			case strings.HasPrefix(a, "size:"):
+				if pw, ph, ok := parseProbeSize(a); ok {
+					w, h = pw, ph
+				}
+			case !strings.HasPrefix(a, "--") && driveSpec == "":
+				driveSpec = a
+			}
+		}
+		var steps []string
+		for _, s := range strings.Split(driveSpec, ";") {
+			if strings.TrimSpace(s) != "" {
+				steps = append(steps, strings.TrimSpace(s))
+			}
+		}
+		var m model.Model
+		if live {
+			m = driveLiveModel(cfg.APIURL)
+		} else {
+			m = smoke.SeedModel(w, h)
+		}
+		m.Width, m.Height, m.AIR = w, h, air
+		frames := smoke.Drive(m, steps)
+		if allFrames {
+			for i, f := range frames {
+				tag := ""
+				if f.Panic != "" {
+					tag = " [PANIC: " + f.Panic + "]"
+				}
+				fmt.Printf("=== step %d: %s%s ===\n%s\n", i, f.Step, tag, f.View)
+			}
+		} else if len(frames) > 0 {
+			last := frames[len(frames)-1]
+			if last.Panic != "" {
+				fmt.Fprintln(os.Stderr, "PANIC on final step: "+last.Panic)
+			}
+			fmt.Println(last.View)
+		}
 		return
 	}
 	launch := model.New("REINS")

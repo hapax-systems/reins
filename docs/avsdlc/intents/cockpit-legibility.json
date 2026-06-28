@@ -1,0 +1,42 @@
+{
+  "predicates": [
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 2.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "floor",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "direction": "increase",
+      "critical": true
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 150.0,
+      "direction": "decrease",
+      "critical": false
+    },
+    {
+      "pov_label": "local-terminal",
+      "region": "negative_space",
+      "metric": "luma",
+      "op": "<=",
+      "target": 150.0,
+      "direction": "decrease",
+      "critical": false
+    }
+  ],
+  "aggregation_floor": 0.75,
+  "note": "Reins cockpit legibility: the center pane (entity_core) and the legend bar (floor) render text STRUCTURE (edge_energy from glyphs/borders); the frame is a DARK-theme surface (luma stays low — light text on dark, never an inverted white block). Design-intent prediction, confirmed against the realized frame."
+}
