@@ -11322,23 +11322,37 @@ func (m Model) turnDetailBody(w int) string {
 // governed COMMAND surface — NOT WIRED (never-mint; the egress stays gated). It turns the read-only
 // turn into a LEGIBLE control surface (the operator's "tells-me-little / lets-me-do-nothing" veto fix)
 // without yet wiring the AIR-critical send. AIR-safe: the verbs are structural, no turn body.
-func (m Model) turnImpingeAffordances(t grammar.Turn) string {
-	var decisions []string
-	switch t.Kind {
+// impingeDecisionsFor is the HITL decision set offered for a turn KIND (LangChain impinge enum, §4):
+// an approval gate offers accept/deny/edit, a tool_call approve/edit/deny, everything else respond/ignore.
+func impingeDecisionsFor(kind string) []string {
+	switch kind {
 	case "approval":
-		decisions = []string{"accept", "deny", "edit"}
+		return []string{"accept", "deny", "edit"}
 	case "tool_call":
-		decisions = []string{"approve", "edit", "deny"}
+		return []string{"approve", "edit", "deny"}
 	default: // assistant/reasoning/refusal/user/result/etc. — answer or dismiss
-		decisions = []string{"respond", "ignore"}
+		return []string{"respond", "ignore"}
 	}
+}
+
+func (m Model) turnImpingeAffordances(t grammar.Turn) string {
+	decisions := impingeDecisionsFor(t.Kind)
 	verbs := make([]string, len(decisions))
 	for i, d := range decisions {
 		verbs[i] = grammar.C("brt", "["+d+"]")
 	}
+	primary := "respond"
+	if len(decisions) > 0 {
+		primary = decisions[0]
+	}
 	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, 42)))
+	// name the governed EVENT each decision maps to — the §4 legibility "x → gate_output" that the bare
+	// verb does not show — kept short so the honesty floor (NOT wired) survives the narrow detail pane.
+	// The FULL envelope (target/authority/preflight/receipt/Δ) is the :intent review pane's job.
+	gate := grammar.C("mut", "gate_output ▸ ") + grammar.C("2nd", "impinge("+primary+")") +
+		grammar.C("mut", " · ") + grammar.C("red", "NOT wired")
 	return "\n " + rule + "\n " + grammar.C("brt", "IMPINGE") + grammar.C("mut", " — act on this turn: ") +
-		strings.Join(verbs, " ") + grammar.C("mut", "  · governed COMMAND route · NOT wired (egress gated)") + "\n"
+		strings.Join(verbs, " ") + grammar.C("mut", "  · governed COMMAND route → :intent") + "\n " + gate + "\n"
 }
 
 func (m Model) eventsWideBody(w, h int) string {
