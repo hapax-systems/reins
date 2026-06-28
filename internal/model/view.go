@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
+	"github.com/hapax-systems/reins/internal/graph"
 	"github.com/hapax-systems/reins/internal/imgpreview"
 	"github.com/hapax-systems/reins/internal/layout"
 	"github.com/hapax-systems/reins/internal/relate"
@@ -173,6 +174,8 @@ func (m Model) pageMeta() (string, int, bool) {
 		return "capabilities", len(m.Sessions), m.SessionsDark
 	case PageDynamics:
 		return "dynamics", len(m.Dynamics.AtResolution(m.DynScale).Nodes), m.DynamicsDark
+	case PageLoops:
+		return "loops", len(m.loopRows()), m.DynamicsDark
 	case PageEpistemics:
 		return "epistemics", len(m.epistemicRows()), m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark
 	case PageHelp:
@@ -400,6 +403,14 @@ func (m Model) windowSignal(page int) (string, string) {
 		if n := len(m.Dynamics.AtResolution(m.DynScale).Nodes); n > 0 {
 			return fmt.Sprintf("%d@%s", n, dynScaleShort(m.DynScale)), "mut"
 		}
+	case PageLoops:
+		if m.DynamicsDark {
+			return "DARK", "red"
+		}
+		if n := len(m.loopRows()); n > 0 {
+			return fmt.Sprintf("%dL", n), "mut"
+		}
+		return "0L", "mut"
 	case PageEpistemics:
 		if m.EpistemicsDark && m.DynamicsDark && m.IntakeDark && m.DomainsDark && m.CapabilitiesDark {
 			return "DARK", "red"
@@ -683,6 +694,15 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.dynamicsMapBody(pw, ph) }},
 			&layout.Pane{MinW: 48, Render: func(pw, ph int) string { return m.renderDynamicsSelectedElement(pw) }},
 			0.62, "selected map element ← navigate the map")
+	case PageLoops:
+		// E7.1 — A5 Tier-1 causal-loop page promoted from --probe into a live, algebra-composed window.
+		// It derives qualitative feedback structure from m.Dynamics at render time: no simulation, no
+		// probe fixture unless the dynamics graph itself is empty. Empty acyclic graphs still compose and
+		// disclose that there are no current loops.
+		return m.specListContext(
+			&layout.Pane{MinW: 70, Render: func(pw, ph int) string { return m.loopListBody(pw, ph) }},
+			&layout.Pane{MinW: 50, Render: func(pw, ph int) string { return m.loopDetailBody(pw) }},
+			0.50, "loop -> structure")
 	case PageCaps:
 		// Inc 2 — SESSION-ANCHORED drilldown. Unlike the Inc 1 self-anchored pages, caps' secondary is
 		// the SELECTED SESSION's capability fit (renderSelectedCapabilityFit keys off FocusedSession), so
@@ -1389,7 +1409,7 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.tracesBody(w, h)
 	case PageSessionTurns:
 		return m.turnListBody(w, h)
-	case PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
+	case PageDynamics, PageLoops, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps:
 		return m.referenceBody(w, h)
 	default:
 		return m.eventsBody(w, h)
@@ -1781,6 +1801,8 @@ func (m Model) splitSessionContext(s grammar.Session) string {
 		return m.intakeSessionContext(s)
 	case PageDynamics:
 		return m.sourceOnlySessionContext(s, "system topology")
+	case PageLoops:
+		return m.sourceOnlySessionContext(s, "feedback structure")
 	case PageEpistemics:
 		return m.sourceOnlySessionContext(s, "evidence/provenance")
 	case PageHelp:
@@ -1903,7 +1925,7 @@ func (m Model) splitContextPane(w, h int) string {
 		body = m.sessionConstraintPane(w)
 	case PageCaps:
 		body = m.renderCapabilitySplitPane(w, bodyH)
-	case PageTraces, PageDynamics, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
+	case PageTraces, PageDynamics, PageLoops, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake:
 		body = m.splitReferenceSlice(w, bodyH)
 	default:
 		body = m.eventContextPane(w)
@@ -3108,6 +3130,377 @@ func (m Model) renderDynamicsSelectedElement(w int) string {
 		b.WriteString(m.renderDynamicsCompactBridge(row, w))
 	}
 	return b.String()
+}
+
+type loopEdge struct {
+	SourceID, TargetID string
+	Source, Target     string
+	Relation           string
+	Sign               graph.Sign
+	Delay              bool
+	Prov               graph.Provenance
+}
+
+type loopRow struct {
+	Nodes        []string
+	DisplayNodes []string
+	Edges        []loopEdge
+	Kind         graph.LoopKind
+	HasDelay     bool
+	Fallback     bool
+	NodeCount    int
+	EdgeCount    int
+}
+
+func loopFixtureGraph() grammar.Graph {
+	air := map[string]string{"id": "ok", "label": "ok", "kind": "ok", "layer": "ok", "status": "ok", "res": "ok"}
+	edgeAir := map[string]string{"source": "ok", "target": "ok", "relation": "ok", "status": "ok", "sign": "ok", "delay": "ok", "prov": "ok"}
+	return grammar.Graph{
+		MapID:  "loops-fixture",
+		Thesis: "offline causal-loop fixture used only when :dynamics is empty",
+		Nodes: []grammar.Node{
+			{ID: "attention", Label: "Operator attention", Kind: "stock", Layer: "system", Status: "asserted", Res: "1", AIR: air},
+			{ID: "coordination", Label: "Coordination", Kind: "flow", Layer: "system", Status: "asserted", Res: "1", AIR: air},
+			{ID: "work-clarity", Label: "Work clarity", Kind: "stock", Layer: "system", Status: "asserted", Res: "1", AIR: air},
+		},
+		Edges: []grammar.Edge{
+			{Source: "attention", Target: "coordination", Relation: "enables", Sign: "+", Status: "inferred", AIR: edgeAir},
+			{Source: "coordination", Target: "work-clarity", Relation: "feeds", Sign: "+", Status: "inferred", AIR: edgeAir},
+			{Source: "work-clarity", Target: "attention", Relation: "supports", Sign: "+", Status: "inferred", AIR: edgeAir},
+		},
+	}
+}
+
+func (m Model) dynamicsGraphForLoops() (grammar.Graph, bool) {
+	if len(m.Dynamics.Nodes) == 0 && len(m.Dynamics.Edges) == 0 {
+		return loopFixtureGraph(), true
+	}
+	return m.Dynamics, false
+}
+
+func graphSignFromDynamics(e grammar.Edge) graph.Sign {
+	switch strings.ToLower(strings.TrimSpace(e.Sign)) {
+	case "+", "pos", "positive", "plus", "1":
+		return graph.SignPos
+	case "-", "neg", "negative", "minus", "-1":
+		return graph.SignNeg
+	case "?", "unknown", "indeterminate":
+		return graph.SignUnknown
+	}
+	return graph.InferSign(e.Relation)
+}
+
+func graphProvFromDynamics(e grammar.Edge) graph.Provenance {
+	switch strings.ToLower(strings.TrimSpace(firstNonEmpty(e.Prov, e.Status))) {
+	case string(graph.Inferred):
+		return graph.Inferred
+	case string(graph.Derived):
+		return graph.Derived
+	case string(graph.Asserted), "observed":
+		return graph.Asserted
+	}
+	return ""
+}
+
+func dynamicsEdgeDelay(e grammar.Edge) bool {
+	if e.Delay {
+		return true
+	}
+	needle := strings.ToLower(strings.Join([]string{e.Relation, e.Summary, e.Docs}, " "))
+	return strings.Contains(needle, "delay") || strings.Contains(needle, "latency") || strings.Contains(needle, "lag")
+}
+
+func (m Model) loopRows() []loopRow {
+	dg, fallback := m.dynamicsGraphForLoops()
+	tg := graph.New()
+	for _, e := range dg.Edges {
+		if strings.TrimSpace(e.Source) == "" || strings.TrimSpace(e.Target) == "" {
+			continue
+		}
+		tg.Add(graph.Relation{
+			Src:   e.Source,
+			Dst:   e.Target,
+			Type:  e.Relation,
+			Sign:  graphSignFromDynamics(e),
+			Delay: dynamicsEdgeDelay(e),
+			Prov:  graphProvFromDynamics(e),
+		})
+	}
+	nodes := map[string]grammar.Node{}
+	for _, n := range dg.Nodes {
+		nodes[n.ID] = n
+	}
+	relations := map[[2]string]graph.Relation{}
+	for _, e := range tg.Edges {
+		key := [2]string{e.Src, e.Dst}
+		if _, exists := relations[key]; !exists {
+			relations[key] = e
+		}
+	}
+	rawEdges := map[[2]string]grammar.Edge{}
+	for _, e := range dg.Edges {
+		key := [2]string{e.Source, e.Target}
+		if _, exists := rawEdges[key]; !exists {
+			rawEdges[key] = e
+		}
+	}
+	displayNode := func(id string) string {
+		if n, ok := nodes[id]; ok {
+			return firstNonEmpty(dynamicsNodeFieldForAir(n, "id", m.AIR), "▒▒▒")
+		}
+		if m.AIR {
+			return "▒▒▒"
+		}
+		return firstNonEmpty(id, "·")
+	}
+	out := []loopRow{}
+	for _, lp := range tg.CausalLoops() {
+		row := loopRow{
+			Nodes:     append([]string(nil), lp.Nodes...),
+			Kind:      lp.Kind,
+			HasDelay:  lp.HasDelay,
+			Fallback:  fallback,
+			NodeCount: len(dg.Nodes),
+			EdgeCount: len(dg.Edges),
+		}
+		for _, id := range lp.Nodes {
+			row.DisplayNodes = append(row.DisplayNodes, displayNode(id))
+		}
+		for i := range lp.Nodes {
+			src, dst := lp.Nodes[i], lp.Nodes[(i+1)%len(lp.Nodes)]
+			key := [2]string{src, dst}
+			rel := relations[key]
+			raw := rawEdges[key]
+			relation := rel.Type
+			if strings.TrimSpace(raw.Relation) != "" {
+				relation = dynamicsEdgeFieldForAir(raw, "relation", m.AIR)
+			}
+			row.Edges = append(row.Edges, loopEdge{
+				SourceID: src,
+				TargetID: dst,
+				Source:   displayNode(src),
+				Target:   displayNode(dst),
+				Relation: relation,
+				Sign:     rel.Sign,
+				Delay:    rel.Delay,
+				Prov:     rel.Prov,
+			})
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func loopKindGlyph(kind graph.LoopKind) string {
+	switch kind {
+	case graph.Reinforcing:
+		return "⟳R"
+	case graph.Balancing:
+		return "⊖B"
+	default:
+		return "◌?"
+	}
+}
+
+func loopKindToken(kind graph.LoopKind) string {
+	switch kind {
+	case graph.Reinforcing:
+		return "grn"
+	case graph.Balancing:
+		return "yel"
+	default:
+		return "mut"
+	}
+}
+
+func loopKindWord(kind graph.LoopKind) string {
+	switch kind {
+	case graph.Reinforcing:
+		return "Reinforcing"
+	case graph.Balancing:
+		return "Balancing"
+	default:
+		return "Indeterminate"
+	}
+}
+
+func signGlyph(s graph.Sign) string {
+	switch s {
+	case graph.SignPos:
+		return "+"
+	case graph.SignNeg:
+		return "−"
+	default:
+		return "?"
+	}
+}
+
+func loopDominantSign(kind graph.LoopKind) string {
+	switch kind {
+	case graph.Reinforcing:
+		return "+"
+	case graph.Balancing:
+		return "−"
+	default:
+		return "?"
+	}
+}
+
+func (m Model) loopListBody(w, h int) string {
+	rows := m.loopRows()
+	dg, fallback := m.dynamicsGraphForLoops()
+	source := "live :dynamics"
+	if fallback {
+		source = "fixture fallback (:dynamics empty)"
+	}
+	header := []string{
+		" " + grammar.C("brt", "CAUSAL LOOPS") + grammar.C("mut", fmt.Sprintf(" — A5 Tier-1 over %s · %d nodes · %d edges", source, len(dg.Nodes), len(dg.Edges))),
+		" " + grammar.C("mut", "Reinforcing loops amplify change; Balancing loops counteract change. Legend: ") + grammar.C("grn", "⟳R") + grammar.C("mut", " reinforcing · ") + grammar.C("yel", "⊖B") + grammar.C("mut", " balancing · computed, no simulation."),
+		" " + grammar.C("mut", "TYPE is sign parity around the directed cycle: even negative links => R; odd negative links => B. Color is redundant; shape+position carry type."),
+		" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))),
+	}
+	visible := h - len(header)
+	if visible < 1 {
+		visible = 1
+	}
+	start := 0
+	if len(rows) > visible {
+		if m.LoopFocus >= visible {
+			start = m.LoopFocus - visible + 1
+		}
+		if mx := len(rows) - visible; start > mx {
+			start = mx
+		}
+	}
+	var b strings.Builder
+	for _, line := range header {
+		b.WriteString(fitWidth(line, w) + "\n")
+	}
+	if len(rows) == 0 {
+		b.WriteString(" " + grammar.C("mut", "no causal loops in the current graph — acyclic or single-node") + "\n")
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for i := start; i < start+visible && i < len(rows); i++ {
+		row := rows[i]
+		delay := ""
+		if row.HasDelay {
+			delay = " ‖"
+		}
+		path := strings.Join(row.DisplayNodes, " → ")
+		line := fmt.Sprintf("%s%s  len=%-2d sign=%s  %s", loopKindGlyph(row.Kind), delay, len(row.Nodes), loopDominantSign(row.Kind), path)
+		line = clipRunes(line, maxVisible(8, w-2))
+		if i == m.LoopFocus {
+			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(line, w-1) + "\n")
+		} else {
+			b.WriteString("  " + grammar.C(loopKindToken(row.Kind), line) + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) focusedLoopRow() (loopRow, bool) {
+	rows := m.loopRows()
+	if len(rows) == 0 {
+		return loopRow{}, false
+	}
+	idx := clamp(m.LoopFocus, 0, len(rows)-1)
+	return rows[idx], true
+}
+
+func loopArchetype(row loopRow) string {
+	if row.Kind == graph.Indeterminate {
+		return "sign-gap — assert missing polarity before naming the loop"
+	}
+	if row.Kind == graph.Balancing {
+		if row.HasDelay {
+			return "balancing-with-delay — oscillation risk"
+		}
+		if len(row.Nodes) == 2 {
+			return "balancing pair — a direct counteraction loop"
+		}
+		return "balancing control loop — goal/gap correction structure"
+	}
+	allPositive := true
+	for _, e := range row.Edges {
+		if e.Sign != graph.SignPos {
+			allPositive = false
+			break
+		}
+	}
+	if allPositive {
+		return "reinforcing growth engine — virtuous or vicious depending on the variable"
+	}
+	if len(row.Nodes) == 2 {
+		return "reinforcing dyad — even negative parity returns amplification"
+	}
+	return "reinforcing feedback loop — amplification by even sign parity"
+}
+
+func loopLeverage(row loopRow) []string {
+	switch row.Kind {
+	case graph.Reinforcing:
+		return []string{
+			"add damping/guardrails where amplification crosses an authority or capacity boundary",
+			"watch for saturation: a stock/limit outside the loop may turn growth into collapse",
+		}
+	case graph.Balancing:
+		if row.HasDelay {
+			return []string{
+				"shorten or expose the delayed link (‖); delay makes balancing loops oscillate",
+				"tune the goal/gap sensor before increasing corrective force",
+			}
+		}
+		return []string{
+			"inspect the negative edge: it is the control surface that turns motion back",
+			"make the intended setpoint explicit so balancing is legible, not invisible drag",
+		}
+	default:
+		return []string{
+			"assert a sign for every unknown edge before interpreting behavior",
+			"keep the structure visible but do not infer dominance without polarity",
+		}
+	}
+}
+
+func (m Model) loopDetailBody(w int) string {
+	row, ok := m.focusedLoopRow()
+	if !ok {
+		return " " + grammar.C("brt", "LOOP STRUCTURE") + "\n\n " + grammar.C("mut", "no causal loops in the current graph — acyclic or single-node")
+	}
+	var b strings.Builder
+	idx := clamp(m.LoopFocus, 0, maxVisible(0, len(m.loopRows())-1))
+	writeSectionHeader(&b, w, "LOOP STRUCTURE", fmt.Sprintf("focused loop %d/%d · %s · length %d · net sign %s", idx+1, maxVisible(1, len(m.loopRows())), loopKindWord(row.Kind), len(row.Nodes), loopDominantSign(row.Kind)), loopKindGlyph(row.Kind))
+	writeWrappedKV(&b, "path", strings.Join(row.DisplayNodes, " → "), loopKindToken(row.Kind), w)
+	if row.HasDelay {
+		writeWrappedKV(&b, "delay", "‖ at least one delayed edge; loop can oscillate even without simulation", "yel", w)
+	}
+	writeWrappedKV(&b, "archetype", loopArchetype(row), "pri", w)
+	writeSectionHeader(&b, w, "EDGE PARITY", "each link is read from :dynamics; sign parity determines loop type", "no simulation")
+	if len(row.Edges) == 0 {
+		writeWrappedKV(&b, "edges", "none", "mut", w)
+	} else {
+		for _, e := range row.Edges {
+			delay := ""
+			if e.Delay {
+				delay = " ‖"
+			}
+			prov := string(e.Prov)
+			if prov == "" {
+				prov = string(graph.Asserted)
+			}
+			rel := ""
+			if strings.TrimSpace(e.Relation) != "" && e.Relation != "▒▒▒" {
+				rel = " · " + e.Relation
+			}
+			writeWrappedKV(&b, signGlyph(e.Sign)+delay, fmt.Sprintf("%s → %s%s · %s", e.Source, e.Target, rel, prov), "2nd", w)
+		}
+	}
+	writeSectionHeader(&b, w, "LEVERAGE POINTS", "where to look first; still structural, not simulated dominance", "A5")
+	for _, leverage := range loopLeverage(row) {
+		writeWrappedBullet(&b, leverage, "yel", w)
+	}
+	writeWrappedKV(&b, "boundary", "loop TYPE/length/sign are structural and air-ok; node identities are gated through dynamics AIR", "mut", w)
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) renderDynamicsReferencePaths(row dynamicsFocusRow, w int) string {
@@ -9193,6 +9586,8 @@ func pageLabel(page int) string {
 		return "PageCaps"
 	case PageDynamics:
 		return "PageDynamics"
+	case PageLoops:
+		return "PageLoops"
 	case PageEpistemics:
 		return "PageEpistemics"
 	case PageHelp:
@@ -9515,6 +9910,8 @@ func (m Model) referenceContextHeading() string {
 		return "capability ontology"
 	case PageDynamics:
 		return "map context"
+	case PageLoops:
+		return "feedback loops"
 	case PageEpistemics:
 		return "epistemic context"
 	case PageHelp:
@@ -12169,6 +12566,16 @@ func (m Model) floorActions(w int) string {
 				parts = append(parts, grammar.C("mut", m.referenceScrollLabel()))
 			}
 		}
+	case PageLoops:
+		if n := len(m.loopRows()); n > 0 {
+			parts = append(parts,
+				grammar.C("yel", "[j/k]")+fmt.Sprintf("loop %d/%d", m.LoopFocus+1, n),
+				grammar.C("yel", "[g/G]")+"first/last",
+				grammar.C("mut", "computed no-sim"),
+			)
+		} else {
+			parts = append(parts, grammar.C("mut", "no causal loops"))
+		}
 	default:
 		if m.Page == PageDynamics {
 			if m.pageRows() > 0 {
@@ -12487,6 +12894,9 @@ func (m Model) trustSignalForPage(page int) trustSignal {
 	case PageDynamics:
 		fresh := dynamicsSourceAge(m.Dynamics.Package.Sources)
 		out = trustSignal{Authority: firstNonEmpty(m.Dynamics.Package.Authority, "map-package"), Freshness: fresh, Support: "metadata-only", Recency: fresh}
+	case PageLoops:
+		fresh := dynamicsSourceAge(m.Dynamics.Package.Sources)
+		out = trustSignal{Authority: firstNonEmpty(m.Dynamics.Package.Authority, "map-package"), Freshness: fresh, Support: "computed-structure", Recency: fresh}
 	case PageDomains:
 		fresh := domainSourceAge(m.Domains.LifecycleSources, m.Domains.Sources)
 		auth := "domain-pack"

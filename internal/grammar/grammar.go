@@ -1091,6 +1091,9 @@ type Edge struct {
 	Source          string            `json:"source"`
 	Target          string            `json:"target"`
 	Relation        string            `json:"relation"`
+	Sign            string            `json:"sign"`
+	Delay           bool              `json:"delay"`
+	Prov            string            `json:"prov"`
 	Status          string            `json:"status"`
 	Layer           string            `json:"layer"`
 	Res             string            `json:"res"`

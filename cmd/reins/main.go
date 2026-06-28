@@ -266,6 +266,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageIntake, true
 	case "dynamics", "dyn":
 		return model.PageDynamics, true
+	case "loops-page", "causal-page", "causal":
+		return model.PageLoops, true
 	case "epistemics", "epi", "epistemic":
 		return model.PageEpistemics, true
 	case "help":
