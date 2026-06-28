@@ -2942,6 +2942,53 @@ func (m Model) renderDynamicsSelectedElementCompact(w int) string {
 // map context). Height-parameterized (the pane height drives the primer gate), unlike the m.Height-
 // coupled referenceContent it was extracted from.
 func (m Model) dynamicsMapBody(w, h int) string {
+	return m.dynamicsMapWindow(m.dynamicsMapDocumentLines(w, h), w, h)
+}
+
+func (m Model) dynamicsMapDocumentLines(w, h int) []string {
+	s := strings.TrimRight(m.dynamicsMapDocument(w, h), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func (m Model) dynamicsMapWindow(lines []string, w, h int) string {
+	if len(lines) == 0 || h <= 0 {
+		return ""
+	}
+	maxOff := len(lines) - h
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	off := clamp(m.RefScroll, 0, maxOff)
+	end := off + h
+	if end > len(lines) {
+		end = len(lines)
+	}
+	window := append([]string(nil), lines[off:end]...)
+	if len(window) == 0 {
+		return ""
+	}
+	above := off
+	below := len(lines) - end
+	indicator := func(s string) string {
+		return fitWidth(" "+grammar.C("mut", s), w)
+	}
+	if above > 0 && below > 0 && len(window) == 1 {
+		window[0] = indicator(fmt.Sprintf("↑%d more · ↓%d more", above, below))
+	} else {
+		if above > 0 {
+			window[0] = indicator(fmt.Sprintf("↑%d more", above))
+		}
+		if below > 0 {
+			window[len(window)-1] = indicator(fmt.Sprintf("↓%d more", below))
+		}
+	}
+	return strings.Join(window, "\n")
+}
+
+func (m Model) dynamicsMapDocument(w, h int) string {
 	if m.DynamicsDark {
 		return m.contextLine() + "\n" + darkHint(m.DynamicsError, m.AIR)
 	}
@@ -9189,6 +9236,26 @@ func (m Model) referenceLayoutWidths(w int) (leftW, rightW int, split bool) {
 	return leftW, rightW, true
 }
 
+func dynamicsAlgebraPrimaryPaneDims(w, h int) (int, int) {
+	if w < 40 || h < 12 {
+		w, h = 120, 40
+	}
+	bodyH := h - 7
+	if bodyH < 1 {
+		bodyH = 1
+	}
+	if w < 3 {
+		return w, bodyH
+	}
+	inner := w - 1 // composePage/layout.Render reserve one connector column.
+	primaryW := clamp(int(float64(inner)*0.62), 1, inner-1)
+	primaryH := bodyH
+	if bodyH > 1 {
+		primaryH = bodyH - 1 // connector relation header consumes the first body row.
+	}
+	return primaryW, primaryH
+}
+
 func (m Model) referenceBody(w, h int) string {
 	leftW, rightW, split := m.referenceLayoutWidths(w)
 	lines := m.referenceLines(leftW)
@@ -9230,6 +9297,14 @@ func (m Model) referenceScrollMax() int {
 	w, h := m.Width, m.Height
 	if w < 40 || h < 12 {
 		w, h = 120, 40
+	}
+	if m.Page == PageDynamics {
+		primaryW, primaryH := dynamicsAlgebraPrimaryPaneDims(w, h)
+		max := len(m.dynamicsMapDocumentLines(primaryW, primaryH)) - primaryH
+		if max < 0 {
+			return 0
+		}
+		return max
 	}
 	leftW, _, _ := m.referenceLayoutWidths(w)
 	if m.splitContextActive() {
@@ -9290,6 +9365,20 @@ func (m Model) referenceScrollLabel() string {
 	w, h := m.Width, m.Height
 	if w < 40 || h < 12 {
 		w, h = 120, 40
+	}
+	if m.Page == PageDynamics {
+		primaryW, primaryH := dynamicsAlgebraPrimaryPaneDims(w, h)
+		lines := len(m.dynamicsMapDocumentLines(primaryW, primaryH))
+		if lines == 0 {
+			return "0/0"
+		}
+		max := m.referenceScrollMax()
+		off := clamp(m.RefScroll, 0, max)
+		end := off + primaryH
+		if end > lines {
+			end = lines
+		}
+		return fmt.Sprintf("%d-%d/%d", off+1, end, lines)
 	}
 	leftW, _, _ := m.referenceLayoutWidths(w)
 	if m.splitContextActive() {
