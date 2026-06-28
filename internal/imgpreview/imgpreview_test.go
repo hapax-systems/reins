@@ -103,3 +103,64 @@ func TestRenderFileAndMetadata(t *testing.T) {
 		t.Fatalf("non-image metadata should say so: %q", m)
 	}
 }
+
+func TestDetectTerminalCapabilityTierFromSyntheticEnv(t *testing.T) {
+	kitty := DetectTerminal(envFrom(map[string]string{"KITTY_WINDOW_ID": "1", "COLORTERM": "truecolor"}))
+	if kitty.Protocol != ProtoKitty || kitty.CapabilityTier != Tier3TruePixel || kitty.Authoritative {
+		t.Fatalf("kitty env pre-guess should be non-authoritative tier3, got %+v", kitty)
+	}
+	truecolor := DetectTerminal(envFrom(map[string]string{"COLORTERM": "truecolor"}))
+	if truecolor.Protocol != ProtoHalfBlock || truecolor.CapabilityTier != Tier2Braille {
+		t.Fatalf("truecolor env should support braille tier with half-block legacy protocol, got %+v", truecolor)
+	}
+	color := DetectTerminal(envFrom(map[string]string{"TERM": "xterm-256color"}))
+	if color.Protocol != ProtoHalfBlock || color.CapabilityTier != Tier1HalfBlock {
+		t.Fatalf("256color env should support half-block floor, got %+v", color)
+	}
+}
+
+func TestDetectTerminalPromotesAuthoritativeKittyResponse(t *testing.T) {
+	resp := "prefix" + "\x1b_Gi=77;OK\x1b\\" + "\x1b[?62;4c"
+	got := DetectTerminalFromResponse(envFrom(map[string]string{"TERM": "xterm-256color"}), 77, resp)
+	if !got.Authoritative || got.Protocol != ProtoKitty || got.CapabilityTier != Tier3TruePixel {
+		t.Fatalf("KGP OK before DA must promote to authoritative tier3, got %+v", got)
+	}
+	late := "\x1b[?62;4c" + "\x1b_Gi=77;OK\x1b\\"
+	got = DetectTerminalFromResponse(envFrom(map[string]string{"TERM": "xterm-256color"}), 77, late)
+	if got.Authoritative || got.CapabilityTier != Tier1HalfBlock {
+		t.Fatalf("DA before KGP OK must keep fallback tier, got %+v", got)
+	}
+	insideTmux := DetectTerminalFromResponse(envFrom(map[string]string{"TMUX": "/tmp/t", "COLORTERM": "truecolor"}), 77, resp)
+	if insideTmux.Protocol == ProtoKitty || insideTmux.CapabilityTier >= Tier3TruePixel {
+		t.Fatalf("tmux passthrough is stubbed in this increment; should not claim tier3, got %+v", insideTmux)
+	}
+}
+
+func TestEmitKittyPlaceholderDimensionsAndEncoding(t *testing.T) {
+	out := EmitKittyPlaceholder(0x123456, 3, 2)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rows should become lines, got %d in %q", len(lines), out)
+	}
+	for i, line := range lines {
+		if got := strings.Count(line, string(KittyPlaceholderRune())); got != 3 {
+			t.Fatalf("line %d should contain 3 placeholders, got %d: %q", i, got, line)
+		}
+	}
+	if !strings.Contains(out, "\x1b[38;2;18;52;86m") {
+		t.Fatalf("image id low 24 bits must be encoded as foreground color: %q", out)
+	}
+	if strings.Contains(out, "▀") {
+		t.Fatalf("placeholder render string must not contain half-block pixel glyphs: %q", out)
+	}
+	if EmitKittyPlaceholder(1, 0, 2) != "" || EmitKittyPlaceholder(0, 2, 2) != "" {
+		t.Fatal("zero id or non-positive dimensions should render empty")
+	}
+}
+
+func TestKittyGraphicsQueryShape(t *testing.T) {
+	q := KittyGraphicsQuery(99)
+	if !strings.Contains(q, "\x1b_Gi=99,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\") || !strings.HasSuffix(q, "\x1b[c") {
+		t.Fatalf("query must be a 1x1 KGP probe followed by CSI c: %q", q)
+	}
+}
