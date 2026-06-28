@@ -1628,23 +1628,6 @@ func (m Model) bodyForPage(w, h int) string {
 	}
 }
 
-func (m Model) splitContextBody(w, h int) string {
-	leftW, rightW, ok := splitContextWidths(w)
-	if !ok {
-		return m.bodyForPage(w, h)
-	}
-	left := fitBlock(m.splitSessionsPane(leftW, h), leftW, h)
-	right := fitBlockWithOverflowAndSlackFn(m.splitContextPane(rightW, h), rightW, h, "context", func(rows int) []string {
-		return m.slackRowsForPage(rightW, rows, slackSlotSplitContext)
-	})
-	div := grammar.C("border", "│")
-	out := make([]string, 0, h)
-	for i := 0; i < h; i++ {
-		out = append(out, left[i]+div+right[i])
-	}
-	return strings.Join(out, "\n")
-}
-
 func splitContextWidths(w int) (leftW, rightW int, ok bool) {
 	if w < splitContextMinWidth {
 		return 0, 0, false
