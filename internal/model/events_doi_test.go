@@ -60,6 +60,21 @@ func TestEventsListNoFoldedMarkerWhenAllFit(t *testing.T) {
 	}
 }
 
+// At the minimum height (visible == 1) there is no room to BOTH show a row and append the marker, so
+// the body must forfeit the marker rather than emit a line that overflows and gets clipped (the
+// reservation only helps when visible ≥ 2). Regression for glm review finding B1.
+func TestEventsListMarkerNeverOverflowsAtMinHeight(t *testing.T) {
+	m := New("REINS").Fold([]grammar.Event{
+		{TS: "t0", Kind: "note", Subject: "a", Score: 0.5, AIR: map[string]string{"ts": "ok", "kind": "ok", "score": "ok", "subject": "ok"}},
+		{TS: "t1", Kind: "note", Subject: "b", Score: 0.5, AIR: map[string]string{"ts": "ok", "kind": "ok", "score": "ok", "subject": "ok"}},
+	}, false)
+	m.EFocus = 1
+	out := strings.TrimRight(m.eventsListBody(120, 3), "\n") // h=3 → visible=1
+	if n := len(strings.Split(out, "\n")); n > 3 {
+		t.Fatalf("at h=3 the body must not overflow its height (marker would clip), got %d lines:\n%s", n, out)
+	}
+}
+
 // AIR derived-channel discipline: when an event's score is DENIED on air, it must not steer selection.
 // Otherwise the ORDER/membership of the visible set discloses the redacted score (the aggregation-key
 // leak class). Proof: two models identical but for a DENIED score (0.95 vs 0.0) must render byte-for-

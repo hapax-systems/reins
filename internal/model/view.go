@@ -11394,12 +11394,13 @@ func (m Model) eventsListBody(w, h int) string {
 	if visible < 1 {
 		visible = 1
 	}
+	// Reserve a cell for the "+N folded" marker ONLY when there's room for both a row AND the marker
+	// (visible ≥ 2). At visible == 1 we forfeit the marker rather than overflow the height and clip it;
+	// the context line still discloses the live count. (glm review B1.)
+	reserve := len(m.Events) > visible && visible >= 2
 	budget := visible
-	if len(m.Events) > visible {
-		budget = visible - 1 // reserve a cell for the "+N folded" honesty marker so it can't be clipped
-		if budget < 1 {
-			budget = 1
-		}
+	if reserve {
+		budget = visible - 1
 	}
 	order, folded := m.eventDoiSelection(budget)
 
@@ -11420,8 +11421,9 @@ func (m Model) eventsListBody(w, h int) string {
 			b.WriteString("  " + grammar.RenderEventRow(m.Events[i], m.AIR) + "\n")
 		}
 	}
-	if folded > 0 {
-		// the dropped tail, named honestly — the cure for today's silent older-event drop
+	if folded > 0 && reserve {
+		// the dropped tail, named honestly — the cure for today's silent older-event drop (only when a
+		// cell was reserved for it; at visible==1 the context-line count carries the disclosure instead)
 		b.WriteString(grammar.C("mut", fmt.Sprintf("  +%d folded (lower interest) · [j/k] to summon", folded)) + "\n")
 	}
 	return b.String()
