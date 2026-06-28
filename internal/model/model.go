@@ -375,10 +375,11 @@ type Model struct {
 	Mode                int  // ModeNormal | ModeCommand
 	Input               string
 	Status              string // last command result / error (one line, above the hint)
-	Quitting            bool   // Exec(:quit) sets this; Update turns it into tea.Quit
-	DynScale            int    // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
-	DynFocus            int    // selected dynamics element (node/edge/source) for epistemic inspection
-	Width               int    // terminal size (from tea.WindowSizeMsg) — the zones fill this
+	Reactions           grammar.ReactionSet
+	Quitting            bool // Exec(:quit) sets this; Update turns it into tea.Quit
+	DynScale            int  // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
+	DynFocus            int  // selected dynamics element (node/edge/source) for epistemic inspection
+	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height              int
 	Beat                int             // low-rate liveness frame; visual only, never authority/readiness
 	Focus               int             // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
@@ -1406,12 +1407,50 @@ func (m Model) updateFilesZone(v tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
+func eventReactionKey(ev grammar.Event) string {
+	return strings.Join([]string{ev.TS, ev.Kind, ev.Subject, ev.Actor, ev.Summary}, "\x00")
+}
+
+func eventReactionText(ev grammar.Event) string {
+	return strings.TrimSpace(strings.Join([]string{ev.Summary, ev.Subject}, " "))
+}
+
+func (m Model) appendStatusNotice(notice string) Model {
+	if strings.TrimSpace(m.Status) == "" {
+		m.Status = notice
+		return m
+	}
+	m.Status += "\n" + notice
+	return m
+}
+
+func (m Model) fireReactionsForNewEvents(evs []grammar.Event, seen map[string]struct{}) Model {
+	if len(m.Reactions) == 0 {
+		return m
+	}
+	for _, ev := range evs {
+		key := eventReactionKey(ev)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		for _, r := range m.Reactions.Fired(ev.Kind, eventReactionText(ev)) {
+			m = m.appendStatusNotice(fmt.Sprintf("armed reaction fired: %s (would emit %s; NOT wired)", r.Effect, r.Effect))
+		}
+	}
+	return m
+}
+
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
 func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 	// follow the tail: if the cursor was on (or past) the newest row, keep it pinned to newest as the
 	// stream grows — so the :events cursor defaults to (and tracks) the latest event, matching the
 	// newest-at-bottom window. If the operator scrolled up, hold their position (clamped into range).
 	follow := m.EFocus >= len(m.Events)-1
+	seen := make(map[string]struct{}, len(m.Events))
+	for _, ev := range m.Events {
+		seen[eventReactionKey(ev)] = struct{}{}
+	}
 	m.Events = evs
 	m.EventsDark = dark
 	if follow || m.EFocus >= len(m.Events) {
@@ -1420,6 +1459,7 @@ func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 	if m.EFocus < 0 {
 		m.EFocus = 0
 	}
+	m = m.fireReactionsForNewEvents(evs, seen)
 	return m
 }
 
@@ -1665,11 +1705,16 @@ func (m Model) Exec(line string) Model {
 	m.Input = ""
 	m.Mode = ModeNormal
 	line = m.resolveTemplate(line) // expand {{sel}}/{{ring.N}} refs (AIR-safe) before parsing
-	f := strings.Fields(strings.TrimSpace(line))
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, ":")
+	f := strings.Fields(line)
 	if len(f) == 0 {
 		return m
 	}
 	verb, args := f[0], f[1:]
+	if verb == "on" {
+		return m.execOn(args)
+	}
 	vd, ok := lookupVerb(verb)
 	if !ok {
 		m.Status = "unknown command: " + verb
@@ -1774,6 +1819,54 @@ func (m Model) Exec(line string) Model {
 		m.Quitting, m.Status = true, "bye"
 	}
 	return m
+}
+
+func (m Model) execOn(args []string) Model {
+	expr := strings.TrimSpace(strings.Join(args, " "))
+	if expr == "" {
+		m.Status = grammar.RenderReactionLegend(m.Reactions)
+		return m
+	}
+	r, err := parseReactionCommand(expr)
+	if err != nil {
+		m.Status = "on: " + err.Error()
+		return m
+	}
+	m.Reactions = append(m.Reactions, r)
+	m.Status = "armed reaction: " + grammar.RenderReactionLegend(grammar.ReactionSet{r}) + " · preview only; NOT wired"
+	return m
+}
+
+func parseReactionCommand(expr string) (grammar.Reaction, error) {
+	expr = strings.TrimSpace(expr)
+	if strings.HasPrefix(expr, "on ") {
+		expr = "/" + expr
+	}
+	if r, err := grammar.ParseReaction(expr); err == nil {
+		return r, nil
+	}
+	if !strings.Contains(expr, "->") {
+		return grammar.ParseReaction(expr)
+	}
+	parts := strings.SplitN(expr, "->", 2)
+	pre := strings.TrimSpace(parts[0])
+	effect := strings.TrimSpace(parts[1])
+	effect = strings.TrimPrefix(effect, "{")
+	effect = strings.TrimSuffix(effect, "}")
+	effect = strings.TrimSpace(effect)
+	toks := strings.Fields(pre)
+	if len(toks) == 0 {
+		return grammar.Reaction{}, fmt.Errorf("reaction: missing event kind before ->")
+	}
+	if effect == "" {
+		return grammar.Reaction{}, fmt.Errorf("reaction: missing effect after ->")
+	}
+	kind := toks[0]
+	match := "*"
+	if len(toks) > 1 {
+		match = toks[1]
+	}
+	return grammar.ParseReaction(fmt.Sprintf("/on %s %s { %s }", kind, match, effect))
 }
 
 func (m Model) commandsSummary() string {
