@@ -1066,7 +1066,9 @@ func (m Model) coordinatorChatPane(w, h int) string {
 			mark = "·"
 		}
 		sum := grammar.Redact(t.AIR, "summary", t.Summary, m.AIR)
-		line := grammar.C(grammar.LaneToken(t.Role), fmt.Sprintf(" %s %-8s ", mark, t.Role)) + grammar.C("pri", sum)
+		roleTok := airHue(grammar.LaneToken(t.Role), t.AIR, "role", m.AIR) // hue is a derived channel — demote on denied role
+		roleText := grammar.Redact(t.AIR, "role", t.Role, m.AIR)
+		line := grammar.C(roleTok, fmt.Sprintf(" %s %-8s ", mark, roleText)) + grammar.C("pri", sum)
 		b.WriteString(clipRunes(line, w) + "\n")
 	}
 	prompt := " › "
@@ -1658,16 +1660,7 @@ func (m Model) splitSessionsPane(w, h int) string {
 		context := m.splitSessionContext(s)
 		// gate each derived HUE on its field's AIR — the value redacts above, but the heat/lane/
 		// readiness color is itself a derived channel that discloses the denied field (fugu review).
-		rdyTok, laneTok, attnTok := readinessPaneToken(s.Readiness), grammar.LaneToken(s.Role), attentionToken(s.Attention)
-		if m.AIR && s.AIR["readiness"] != "ok" {
-			rdyTok = "mut"
-		}
-		if m.AIR && s.AIR["role"] != "ok" {
-			laneTok = "mut"
-		}
-		if m.AIR && s.AIR["attention"] != "ok" {
-			attnTok = "mut"
-		}
+		rdyTok, laneTok, attnTok := airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), airHue(attentionToken(s.Attention), s.AIR, "attention", m.AIR)
 		row := grammar.C("yel", mark) +
 			grammar.C(rdyTok, fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
 			grammar.C(laneTok, fmt.Sprintf(" %-14s", clipRunes(role, 14))) +
@@ -1719,10 +1712,7 @@ func (m Model) splitSourceTopologyRows(w, maxRows int) []string {
 	if !m.AIR || s.AIR["platform"] == "ok" {
 		routeStr = fmt.Sprintf("%d", len(m.capabilityRoutesForPlatform(strings.TrimSpace(s.Platform))))
 	}
-	srcTok := grammar.LaneToken(s.Role)
-	if m.AIR && s.AIR["role"] != "ok" {
-		srcTok = "mut"
-	}
+	srcTok := airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR)
 	writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{role, sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "), srcTok, w)
 	writeWrappedKV(&b, "relation", rel.RelationLabel()+" · "+rel.Contract, "org", w)
 	writeWrappedKV(&b, "links", fmt.Sprintf("events:%d · claim:%s · cap-routes:%s", len(m.sessionRelatedEvents(s)), taskLink, routeStr), "2nd", w)
@@ -2014,7 +2004,7 @@ func (m Model) renderSplitRelationCard(w int) string {
 		if strings.TrimSpace(role) == "" {
 			role = "·"
 		}
-		writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{role, sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "), grammar.LaneToken(s.Role), w)
+		writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{role, sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), w)
 	} else {
 		writeWrappedKV(&b, "source", "no selected lane", "mut", w)
 	}
@@ -4500,10 +4490,10 @@ func (m Model) renderYardCockpit(w int) string {
 			next := taskFieldValueForAir(t, "predicted_stage", m.AIR)
 			crit := taskFieldValueForAir(t, "criticality", m.AIR)
 			if w < 132 {
-				writeWrappedKV(&b, "task hold", fmt.Sprintf("task=%s · crit=%s · stage=%s -> %s", id, crit, shortStage2(stage), next), grammar.SeverityToken(t.Criticality), w)
+				writeWrappedKV(&b, "task hold", fmt.Sprintf("task=%s · crit=%s · stage=%s -> %s", id, crit, shortStage2(stage), next), airSeverityToken(t.Criticality, t.AIR, m.AIR), w)
 			} else {
 				b.WriteString(" " + grammar.C("red", "!") +
-					" " + grammar.C(grammar.SeverityToken(t.Criticality), fmt.Sprintf("%-5s", clipRunes(crit, 5))) +
+					" " + grammar.C(airSeverityToken(t.Criticality, t.AIR, m.AIR), fmt.Sprintf("%-5s", clipRunes(crit, 5))) +
 					grammar.C("2nd", fmt.Sprintf(" %-5s → %-5s", clipRunes(shortStage2(stage), 5), clipRunes(next, 5))) +
 					" " + grammar.C("pri", clipRunes(id, maxVisible(12, w-24))) + "\n")
 			}
@@ -4534,12 +4524,12 @@ func (m Model) renderYardCockpit(w int) string {
 					detail += " · route=" + routeChip
 				}
 				detail += " · blocker=" + blocker
-				writeWrappedKV(&b, role, detail, readinessPaneToken(s.Readiness), w)
+				writeWrappedKV(&b, role, detail, airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), w)
 			} else {
 				b.WriteString(" " + grammar.C("yel", "lane") +
-					" " + grammar.C(grammar.LaneToken(s.Role), fmt.Sprintf("%-12s", clipRunes(role, 12))) +
-					grammar.C(readinessPaneToken(s.Readiness), fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
-					grammar.C(attentionToken(s.Attention), fmt.Sprintf(" attn:%s", sessionFieldValueForAir(s, "attention", m.AIR))) +
+					" " + grammar.C(airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), fmt.Sprintf("%-12s", clipRunes(role, 12))) +
+					grammar.C(airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
+					grammar.C(airHue(attentionToken(s.Attention), s.AIR, "attention", m.AIR), fmt.Sprintf(" attn:%s", sessionFieldValueForAir(s, "attention", m.AIR))) +
 					grammar.C("mut", " · "+clipRunes(blockerTail, maxVisible(8, w-41))) + "\n")
 			}
 		}
@@ -4819,8 +4809,8 @@ func (m Model) renderSelectedYardLane(w int) string {
 		// any of those inputs is denied (else the gate label discloses the hidden field).
 		if s.AIR["readiness"] != "ok" || (hasTask && linkedTask.AIR["predicted_stage"] != "ok") {
 			gate, gateTok = "▒▒▒", "mut"
-		} else if s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
-			gate, gateTok = "blocked by redacted blocker", "red"
+		} else if s.AIR["blocker"] != "ok" {
+			gate, gateTok = "▒▒▒", "mut"
 		}
 	}
 	var b strings.Builder
@@ -4831,33 +4821,19 @@ func (m Model) renderSelectedYardLane(w int) string {
 		writeWrappedKV(&b, label, value, tok, w)
 	}
 	// hue-gate: a redacted value must not keep its derived color (the hue is itself a derived channel).
-	laneTok, rdyTok, stateTok, attnTok := grammar.LaneToken(s.Role), readinessPaneToken(s.Readiness), sessionStateToken(s.State), attentionToken(s.Attention)
-	if m.AIR {
-		if s.AIR["role"] != "ok" {
-			laneTok = "mut"
-		}
-		if s.AIR["readiness"] != "ok" {
-			rdyTok = "mut"
-		}
-		if s.AIR["state"] != "ok" {
-			stateTok = "mut"
-		}
-		if s.AIR["attention"] != "ok" {
-			attnTok = "mut"
-		}
-	}
+	laneTok, rdyTok, stateTok, attnTok := airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), airHue(sessionStateToken(s.State), s.AIR, "state", m.AIR), airHue(attentionToken(s.Attention), s.AIR, "attention", m.AIR)
 	writeSectionHeader(&b, w, "SELECTED TRAINYARD LANE", "session-driven drilldown; evidence, not control", "lane drilldown")
 	line("lane", sessionFieldValueForAir(s, "role", m.AIR), laneTok)
 	line("platform", sessionFieldValueForAir(s, "platform", m.AIR), "2nd")
 	line("readiness", sessionFieldValueForAir(s, "readiness", m.AIR), rdyTok)
 	line("state", sessionFieldValueForAir(s, "state", m.AIR), stateTok)
 	line("attention", sessionFieldValueForAir(s, "attention", m.AIR), attnTok)
-	line("blocker", blocker, blockerToken(blocker))
+	line("blocker", blocker, airHue(blockerToken(blocker), s.AIR, "blocker", m.AIR))
 	line("claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri")
 	line("task", taskState, taskTok)
 	if hasTask {
-		line("stage", taskStage, grammar.SeverityToken(linkedTask.Criticality))
-		line("next", taskNext, nextToken(linkedTask.PredictedStage))
+		line("stage", taskStage, airSeverityToken(linkedTask.Criticality, linkedTask.AIR, m.AIR))
+		line("next", taskNext, airHue(nextToken(linkedTask.PredictedStage), linkedTask.AIR, "predicted_stage", m.AIR))
 	}
 	line("events", fmt.Sprintf("%d actor/task events", len(related)), countToken(len(related)))
 	line("failures", fmt.Sprintf("%d recent", failures), severityCountToken(failures))
@@ -5381,22 +5357,11 @@ func (m Model) renderSelectedReadinessGate(w int) string {
 	if m.AIR {
 		if s.AIR["readiness"] != "ok" || (hasTask && linkedTask.AIR["predicted_stage"] != "ok") {
 			laneGate, laneTok = "▒▒▒", "mut"
-		} else if s.AIR["blocker"] != "ok" && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
-			laneGate, laneTok = "blocked by redacted blocker", "red"
+		} else if s.AIR["blocker"] != "ok" {
+			laneGate, laneTok = "▒▒▒", "mut"
 		}
 	}
-	laneHue, rdyHue, blkHue := grammar.LaneToken(s.Role), readinessPaneToken(s.Readiness), blockerToken(s.Blocker)
-	if m.AIR {
-		if s.AIR["role"] != "ok" {
-			laneHue = "mut"
-		}
-		if s.AIR["readiness"] != "ok" {
-			rdyHue = "mut"
-		}
-		if s.AIR["blocker"] != "ok" {
-			blkHue = "mut"
-		}
-	}
+	laneHue, rdyHue, blkHue := airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), airHue(blockerToken(s.Blocker), s.AIR, "blocker", m.AIR)
 	var b strings.Builder
 	writeSectionHeader(&b, w, "SELECTED LANE GATE", "source lane, claimed task, route receipt posture", "lane gate")
 	writeWrappedKV(&b, "lane", sessionFieldValueForAir(s, "role", m.AIR), laneHue, w)
@@ -5406,10 +5371,7 @@ func (m Model) renderSelectedReadinessGate(w int) string {
 	writeWrappedKV(&b, "task", taskState, taskTok, w)
 	writeWrappedKV(&b, "task gate", taskGate, gateTok, w)
 	if hasTask {
-		nextHue := nextToken(linkedTask.PredictedStage)
-		if m.AIR && linkedTask.AIR["predicted_stage"] != "ok" {
-			nextHue = "mut"
-		}
+		nextHue := airHue(nextToken(linkedTask.PredictedStage), linkedTask.AIR, "predicted_stage", m.AIR)
 		writeWrappedKV(&b, "stage", taskFieldValueForAir(linkedTask, "stage", m.AIR), airSeverityToken(linkedTask.Criticality, linkedTask.AIR, m.AIR), w)
 		writeWrappedKV(&b, "next", taskFieldValueForAir(linkedTask, "predicted_stage", m.AIR), nextHue, w)
 	}
@@ -5506,7 +5468,7 @@ func (m Model) renderIntakeProjection(w int) string {
 			writeWrappedKV(&b,
 				label,
 				strings.Join(parts, " · "),
-				intakeSeverityToken(row.Severity), w)
+				airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), w)
 		}
 	} else {
 		b.WriteString(" " + grammar.C("2nd", fmt.Sprintf("%-22s %-28s %-12s %-8s %7s %-18s %s", "SOURCE", "KIND", "STATUS", "SEV", "COUNT", "COVERAGE", "BLOCKER")) + "\n")
@@ -5515,7 +5477,7 @@ func (m Model) renderIntakeProjection(w int) string {
 				grammar.C("2nd", fmt.Sprintf("%-22s", clipRunes(intakeRowFieldForAir(row, "source", m.AIR), 22))) +
 				grammar.C("pri", fmt.Sprintf(" %-28s", clipRunes(intakeRowFieldForAir(row, "kind", m.AIR), 28))) +
 				grammar.C(intakeStatusToken(row.Status), fmt.Sprintf(" %-12s", clipRunes(intakeRowFieldForAir(row, "status", m.AIR), 12))) +
-				grammar.C(intakeSeverityToken(row.Severity), fmt.Sprintf(" %-8s", clipRunes(intakeRowFieldForAir(row, "severity", m.AIR), 8))) +
+				grammar.C(airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), fmt.Sprintf(" %-8s", clipRunes(intakeRowFieldForAir(row, "severity", m.AIR), 8))) +
 				grammar.C(countWarnToken(row.Count), fmt.Sprintf(" %7s", clipRunes(intakeRowFieldForAir(row, "count", m.AIR), 7))) +
 				grammar.C("2nd", fmt.Sprintf(" %-18s", clipRunes(intakeRowFieldForAir(row, "coverage", m.AIR), 18))) +
 				grammar.C("mut", " "+clipRunes(intakeRowFieldForAir(row, "blocker", m.AIR), maxVisible(8, w-105)))
@@ -5566,7 +5528,7 @@ func (m Model) renderSelectedIntakeLane(w int) string {
 	}
 	var b strings.Builder
 	writeSectionHeader(&b, w, "SELECTED INTAKE NEIGHBORHOOD", "lane source brushes actor events, claimed task, and ambient demand", "lane intake context")
-	writeWrappedKV(&b, "lane", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role), w)
+	writeWrappedKV(&b, "lane", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), w)
 	writeWrappedKV(&b, "claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri", w)
 	writeWrappedKV(&b, "task link", taskState, taskTok, w)
 	writeWrappedKV(&b, "actor events", fmt.Sprintf("%d related · %d failures", len(related), failures), severityCountToken(failures), w)
@@ -5608,7 +5570,7 @@ func (m Model) renderSelectedIntakeBucket(w int) string {
 			intakeRowFieldForAir(row, "status", m.AIR),
 			labeledPart("sev", intakeRowFieldForAir(row, "severity", m.AIR)),
 			labeledPart("n", intakeRowFieldForAir(row, "count", m.AIR)),
-		}), " · "), intakeSeverityToken(row.Severity), w)
+		}), " · "), airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), w)
 		writeWrappedKV(&b, "source", strings.Join(nonEmptyParts([]string{
 			intakeRowFieldForAir(row, "source", m.AIR),
 			labeledPart("id", intakeRowFieldForAir(row, "id", m.AIR)),
@@ -5626,9 +5588,9 @@ func (m Model) renderSelectedIntakeBucket(w int) string {
 	}
 	writeWrappedKV(&b, "id", intakeRowFieldForAir(row, "id", m.AIR), "pri", w)
 	writeWrappedKV(&b, "source", intakeRowFieldForAir(row, "source", m.AIR), "pri", w)
-	writeWrappedKV(&b, "kind", intakeRowFieldForAir(row, "kind", m.AIR), intakeSeverityToken(row.Severity), w)
+	writeWrappedKV(&b, "kind", intakeRowFieldForAir(row, "kind", m.AIR), airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), w)
 	writeWrappedKV(&b, "status", intakeRowFieldForAir(row, "status", m.AIR), intakeStatusToken(row.Status), w)
-	writeWrappedKV(&b, "severity", intakeRowFieldForAir(row, "severity", m.AIR), intakeSeverityToken(row.Severity), w)
+	writeWrappedKV(&b, "severity", intakeRowFieldForAir(row, "severity", m.AIR), airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), w)
 	writeWrappedKV(&b, "count", intakeRowFieldForAir(row, "count", m.AIR), countWarnToken(row.Count), w)
 	writeWrappedKV(&b, "authority", intakeRowFieldForAir(row, "authority", m.AIR), "yel", w)
 	writeWrappedKV(&b, "evidence", intakeRowFieldForAir(row, "evidence", m.AIR), "2nd", w)
@@ -5741,9 +5703,9 @@ func (m Model) renderIntakeDoor(w, h int) string {
 	add(" " + grammar.C("mut", "SELECTED BUCKET — current source filter: ") + grammar.C("pri", m.intakeFilterLabel()))
 	if row, ok := m.FocusedIntakeRow(); ok {
 		add(line("source", intakeRowFieldForAir(row, "source", m.AIR), "pri"))
-		add(line("kind", intakeRowFieldForAir(row, "kind", m.AIR), intakeSeverityToken(row.Severity)))
+		add(line("kind", intakeRowFieldForAir(row, "kind", m.AIR), airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR)))
 		add(line("status", intakeRowFieldForAir(row, "status", m.AIR), intakeStatusToken(row.Status)))
-		add(line("severity", intakeRowFieldForAir(row, "severity", m.AIR), intakeSeverityToken(row.Severity)))
+		add(line("severity", intakeRowFieldForAir(row, "severity", m.AIR), airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR)))
 		add(line("count", intakeRowFieldForAir(row, "count", m.AIR), countWarnToken(row.Count)))
 		add(line("coverage", intakeRowFieldForAir(row, "coverage", m.AIR), "2nd"))
 		add(line("task link", intakeRowFieldForAir(row, "task_link_state", m.AIR), "2nd"))
@@ -5765,7 +5727,7 @@ func (m Model) renderIntakeDoor(w, h int) string {
 				break
 			}
 			add(" " +
-				grammar.C(intakeSeverityToken(row.Severity), fmt.Sprintf("%-6s", clipRunes(intakeRowFieldForAir(row, "severity", m.AIR), 6))) +
+				grammar.C(airHue(intakeSeverityToken(row.Severity), row.AIR, "severity", m.AIR), fmt.Sprintf("%-6s", clipRunes(intakeRowFieldForAir(row, "severity", m.AIR), 6))) +
 				grammar.C("pri", " "+clipRunes(intakeRowFieldForAir(row, "kind", m.AIR), maxVisible(8, w-38))) +
 				grammar.C("2nd", " n="+intakeRowFieldForAir(row, "count", m.AIR)))
 			add(line("coverage", intakeRowFieldForAir(row, "coverage", m.AIR), "2nd"))
@@ -6597,10 +6559,10 @@ func (m Model) renderCapabilityProjection(w int) string {
 					role, plat, ready, sessionFieldValueForAir(s, "attention", m.AIR), fit, blocker), tok, w)
 			} else {
 				b.WriteString(" " +
-					grammar.C(grammar.LaneToken(s.Role), fmt.Sprintf("%-13s", clipRunes(role, 13))) +
+					grammar.C(airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), fmt.Sprintf("%-13s", clipRunes(role, 13))) +
 					grammar.C("2nd", fmt.Sprintf(" %-8s", clipRunes(plat, 8))) +
-					grammar.C(readinessPaneToken(s.Readiness), fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
-					grammar.C(attentionToken(s.Attention), fmt.Sprintf(" attn:%s", sessionFieldValueForAir(s, "attention", m.AIR))) +
+					grammar.C(airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR), fmt.Sprintf(" %-7s", clipRunes(ready, 7))) +
+					grammar.C(airHue(attentionToken(s.Attention), s.AIR, "attention", m.AIR), fmt.Sprintf(" attn:%s", sessionFieldValueForAir(s, "attention", m.AIR))) +
 					grammar.C(tok, fmt.Sprintf(" %-16s", clipRunes(fit, 16))) +
 					grammar.C("mut", " · "+clipRunes(blocker, maxVisible(8, w-64))) + "\n")
 			}
@@ -6643,9 +6605,9 @@ func (m Model) renderSelectedCapabilityFit(w int) string {
 		writeWrappedKV(&b, label, value, tok, w)
 	}
 	writeSectionHeader(&b, w, "SELECTED LANE FIT", "current split source; evidence, not dispatch authority", "source evidence; no dispatch")
-	line("lane", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role))
+	line("lane", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 	line("platform", sessionFieldValueForAir(s, "platform", m.AIR), "2nd")
-	line("readiness", sessionFieldValueForAir(s, "readiness", m.AIR), readinessPaneToken(s.Readiness))
+	line("readiness", sessionFieldValueForAir(s, "readiness", m.AIR), airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR))
 	line("fit", fit, fitTok)
 	line("claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri")
 	line("task", taskState, taskTok)
@@ -9673,9 +9635,9 @@ func (m Model) referenceContextRows() []contextRow {
 			if s, ok := m.FocusedSession(); ok {
 				fit, fitTok := m.selectedLaneCapabilityPosture(s)
 				return []contextRow{
-					{"lane", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role)},
+					{"lane", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR)},
 					{"platform", sessionFieldValueForAir(s, "platform", m.AIR), "2nd"},
-					{"readiness", sessionFieldValueForAir(s, "readiness", m.AIR), readinessPaneToken(s.Readiness)},
+					{"readiness", sessionFieldValueForAir(s, "readiness", m.AIR), airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR)},
 					{"fit", fit, fitTok},
 					{"claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "mut"},
 					{"authority", "source lane drives capability fit", "yel"},
@@ -10381,7 +10343,7 @@ func (m Model) eventContextPane(w int) string {
 	line("state", state, stateTok)
 	line("subject", subj, "pri")
 	line("kind", kind, "blu")
-	line("actor", actor, grammar.LaneToken(ev.Actor))
+	line("actor", actor, airHue(grammar.LaneToken(ev.Actor), ev.AIR, "actor", m.AIR))
 	line("summary", summary, "2nd")
 	line("score", grammar.Redact(ev.AIR, "score", fmt.Sprintf("%.2f", ev.Score), m.AIR), "pri")
 	b.WriteString(rule + "\n")
@@ -10437,7 +10399,7 @@ func (m Model) sessionEventContextPane(w int) string {
 	}
 	b.WriteString(" " + grammar.C("brt", "EVENT NEIGHBORHOOD") + grammar.C("mut", "  selected session, actor/task events") + "\n")
 	b.WriteString(rule + "\n")
-	line("source", role, grammar.LaneToken(s.Role))
+	line("source", role, airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 	line("claimed", task, "pri")
 	line("matched", fmt.Sprintf("%d events", len(related)), countToken(len(related)))
 	line("failures", fmt.Sprintf("%d recent", failures), severityCountToken(failures))
@@ -10668,12 +10630,9 @@ func (m Model) sessionConstraintPane(w int) string {
 	if strings.TrimSpace(role) == "" {
 		role = "·"
 	}
-	stateTok := sessionStateToken(s.State)
-	rdyTok := readinessPaneToken(s.Readiness)
-	blockTok := "grn"
-	if strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none" {
-		blockTok = "red"
-	}
+	stateTok := airHue(sessionStateToken(s.State), s.AIR, "state", m.AIR)
+	rdyTok := airHue(readinessPaneToken(s.Readiness), s.AIR, "readiness", m.AIR)
+	blockTok := airHue(blockerToken(s.Blocker), s.AIR, "blocker", m.AIR)
 	claim, stale, off, stalled := 0, 0, 0, 0
 	for _, x := range m.Sessions {
 		// On air a denied readiness/state/stalled must NOT be classified into the fleet tally — the
@@ -10703,7 +10662,7 @@ func (m Model) sessionConstraintPane(w int) string {
 	b.WriteString(" " + grammar.C("yel", ":intent resume") + grammar.C("mut", " · governed COMMAND route required") + "\n")
 	b.WriteString(" " + grammar.C("mut", "no transcript · no PTY · no stdin bridge") + "\n")
 	b.WriteString(rule + "\n")
-	line("lane", role, grammar.LaneToken(s.Role))
+	line("lane", role, airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 	line("ready", sessionReadinessLabel(s, m.AIR), rdyTok)
 	attnVal, attnTok := fmt.Sprintf("%.2f", s.Attention), attentionToken(s.Attention)
 	if m.AIR && s.AIR["attention"] != "ok" {
@@ -11200,15 +11159,15 @@ func (m Model) taskWorkDomainPane(w int) string {
 	line("task", id, "pri")
 	if m.splitContextActive() {
 		if s, ok := m.FocusedSession(); ok {
-			line("source", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role))
+			line("source", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 		}
 	}
 	line("state", taskFieldValueForAir(t, "stage", m.AIR), ctok)
 	line("was", taskFieldValueForAir(t, "prior_stage", m.AIR), "mut")
-	line("next", next, nextToken(t.PredictedStage))
+	line("next", next, airHue(nextToken(t.PredictedStage), t.AIR, "predicted_stage", m.AIR))
 	line("crit", taskFieldValueForAir(t, "criticality", m.AIR), ctok)
-	line("owner", taskFieldValueForAir(t, "owner", m.AIR), grammar.LaneToken(t.Owner))
-	line("freshness", grammar.Redact(t.AIR, "freshness", fmt.Sprintf("%.2f", t.Freshness), m.AIR), freshnessToken(t.Freshness))
+	line("owner", taskFieldValueForAir(t, "owner", m.AIR), airHue(grammar.LaneToken(t.Owner), t.AIR, "owner", m.AIR))
+	line("freshness", grammar.Redact(t.AIR, "freshness", fmt.Sprintf("%.2f", t.Freshness), m.AIR), airHue(freshnessToken(t.Freshness), t.AIR, "freshness", m.AIR))
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "authority") + "\n")
 	line("case", grammar.Redact(t.AIR, "authority_case", t.AuthorityCase, m.AIR), "2nd")
@@ -11253,7 +11212,7 @@ func (m Model) sessionTaskGapPane(w int, s grammar.Session) string {
 	}
 	b.WriteString(" " + grammar.C("brt", "WORK DOMAIN") + grammar.C("mut", "  selected session claimed-task join") + "\n")
 	b.WriteString(rule + "\n")
-	line("source", sessionFieldValueForAir(s, "role", m.AIR), grammar.LaneToken(s.Role))
+	line("source", sessionFieldValueForAir(s, "role", m.AIR), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR))
 	line("claimed", sessionFieldValueForAir(s, "claimed_task", m.AIR), "pri")
 	line("matched", "0 tasks", "red")
 	b.WriteString(rule + "\n")
@@ -12527,7 +12486,7 @@ func (m Model) genericSlackRows(w int) []string {
 	if s, ok := m.FocusedSession(); ok && showLaneContext {
 		writeWrappedKV(&b, "lane", fmt.Sprintf("%s · events:%d · cap-routes:%d",
 			strings.Join(nonEmptyParts([]string{sessionFieldValueForAir(s, "role", m.AIR), sessionAnchorSignal(s, m.AIR), m.sessionLivePulse(s)}), " · "),
-			len(m.sessionRelatedEvents(s)), len(m.capabilityRoutesForPlatform(strings.TrimSpace(s.Platform)))), grammar.LaneToken(s.Role), w)
+			len(m.sessionRelatedEvents(s)), len(m.capabilityRoutesForPlatform(strings.TrimSpace(s.Platform)))), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), w)
 	}
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }
@@ -12771,7 +12730,7 @@ func (m Model) capabilitySlackRows(w int) []string {
 	if m.splitContextActive() && !m.targetRowFocusActive() {
 		if s, ok := m.FocusedSession(); ok {
 			fit, fitTok := m.selectedLaneCapabilityPosture(s)
-			writeWrappedKV(&b, "selected lane", fmt.Sprintf("%s · %s · readiness=%s", sessionFieldValueForAir(s, "role", m.AIR), sessionFieldValueForAir(s, "platform", m.AIR), sessionFieldValueForAir(s, "readiness", m.AIR)), grammar.LaneToken(s.Role), w)
+			writeWrappedKV(&b, "selected lane", fmt.Sprintf("%s · %s · readiness=%s", sessionFieldValueForAir(s, "role", m.AIR), sessionFieldValueForAir(s, "platform", m.AIR), sessionFieldValueForAir(s, "readiness", m.AIR)), airHue(grammar.LaneToken(s.Role), s.AIR, "role", m.AIR), w)
 			writeWrappedKV(&b, "lane fit", fit, fitTok, w)
 		}
 		return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")

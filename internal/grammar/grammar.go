@@ -400,7 +400,11 @@ func RenderTurnRow(t Turn, airOn bool) string {
 		glyph = "▒"
 	}
 	glyph = C("mut", glyph) // turn-kind is SHAPE, not a meaning-channel hue
-	who := C(LaneToken(t.Role), dotsOr(redact(t.AIR, "role", t.Role, airOn), 10))
+	roleTok := LaneToken(t.Role)
+	if airOn && t.AIR["role"] != "ok" {
+		roleTok = "mut"
+	}
+	who := C(roleTok, dotsOr(redact(t.AIR, "role", t.Role, airOn), 10))
 	model := C("mut", dotsOr(redact(t.AIR, "model", t.Model, airOn), 14))
 	gate := pad("", 9)
 	if t.Gate != "" {
@@ -445,7 +449,11 @@ func RenderTurnDetail(t Turn, blocks []TurnBlock, airOn bool) string {
 		if airOn && blk.AIR["kind"] != "ok" {
 			glyph = "▒"
 		}
-		bar := C("mut", ScoreBar(blk.Magnitude))
+		bar := ScoreBar(blk.Magnitude)
+		if airOn && blk.AIR["magnitude"] != "ok" {
+			bar = "▒"
+		}
+		bar = C("mut", bar)
 		meta := ""
 		if blk.Meta != "" {
 			meta = C("mut", redact(blk.AIR, "meta", blk.Meta, airOn)) + "  "
