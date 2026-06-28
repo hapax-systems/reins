@@ -82,3 +82,30 @@ func TestTurnSessionPositionShowsClaimedTaskAndStageAirSafe(t *testing.T) {
 		t.Fatalf("on air the allowlisted stage must still air:\n%s", on)
 	}
 }
+
+// The breakdown-inbox (E4.5) AUTO-SURFACES only at breakdown — the blocked/awaiting lanes that need the
+// operator — and RECEDES to empty in steady state (the equipment-at-breakdown principle). A healthy
+// lane never appears.
+func TestTurnBreakdownInboxAutoSurfacesAndRecedes(t *testing.T) {
+	calm := New("REINS").FoldSessions([]grammar.Session{
+		{Role: "cx-a", State: "streaming", Readiness: "green", AIR: map[string]string{"role": "ok", "state": "ok", "readiness": "ok"}},
+	}, false)
+	if got := calm.turnBreakdownInbox(200); got != "" {
+		t.Fatalf("steady state must recede (empty), got:\n%s", got)
+	}
+	m := New("REINS").FoldSessions([]grammar.Session{
+		{Role: "cx-block", State: "stalled", Readiness: "red", Blocker: "stale_relay", Stalled: true,
+			AIR: map[string]string{"role": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "stalled": "ok"}},
+		{Role: "cx-wait", State: "awaiting", Readiness: "amber", AIR: map[string]string{"role": "ok", "state": "ok", "readiness": "ok"}},
+		{Role: "cx-ok", State: "streaming", Readiness: "green", AIR: map[string]string{"role": "ok", "state": "ok", "readiness": "ok"}},
+	}, false)
+	box := ansi.Strip(m.turnBreakdownInbox(200))
+	for _, want := range []string{"BREAKDOWN", "cx-block (blocked)", "cx-wait (awaiting)"} {
+		if !strings.Contains(box, want) {
+			t.Fatalf("breakdown-inbox must surface %q:\n%s", want, box)
+		}
+	}
+	if strings.Contains(box, "cx-ok") {
+		t.Fatalf("a healthy lane must not appear in the breakdown-inbox:\n%s", box)
+	}
+}

@@ -11064,6 +11064,9 @@ func (m Model) turnListBody(w, h int) string {
 	}
 	var b strings.Builder
 	b.WriteString(m.turnLaneRail(w) + "\n")
+	if bk := m.turnBreakdownInbox(w); bk != "" {
+		b.WriteString(bk + "\n")
+	}
 	if pos := m.turnSessionPosition(w); pos != "" {
 		b.WriteString(pos + "\n")
 	}
@@ -11132,6 +11135,40 @@ func (m Model) turnSessionPosition(w int) string {
 		parts = append(parts, grammar.C("mut", "stage not in view"))
 	}
 	return fitWidth(" "+strings.Join(parts, grammar.C("mut", " · ")), w)
+}
+
+// turnBreakdownInbox is the aggregated decision surface (E4.5): it AUTO-SURFACES only at breakdown —
+// the lanes that need the operator (gate-blocked or awaiting input) named with the reason. Steady state
+// returns "" (the equipment recedes; conditions appear only when abnormal — the legibility law).
+// AIR-safe: ranks/names off allowlisted role/state/readiness/blocker; a denied field degrades, no leak.
+func (m Model) turnBreakdownInbox(w int) string {
+	type need struct{ role, why string }
+	needs := make([]need, 0, len(m.Sessions))
+	for _, s := range m.Sessions {
+		denied := func(f string) bool { return m.AIR && s.AIR[f] != "ok" }
+		role := grammar.Redact(s.AIR, "role", s.Role, m.AIR)
+		switch {
+		case s.Stalled && !denied("stalled"),
+			!denied("readiness") && (s.Readiness == "red" || s.Readiness == "stall"),
+			!denied("blocker") && strings.TrimSpace(s.Blocker) != "" && s.Blocker != "none":
+			needs = append(needs, need{role, "blocked"})
+		case !denied("state") && s.State == "awaiting":
+			needs = append(needs, need{role, "awaiting"})
+		}
+	}
+	if len(needs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(needs))
+	for _, n := range needs {
+		tok := "red"
+		if n.why == "awaiting" {
+			tok = "yel"
+		}
+		parts = append(parts, grammar.C(tok, n.role+" ("+n.why+")"))
+	}
+	head := grammar.C("red", fmt.Sprintf(" ⚠ BREAKDOWN — %d lane(s) need you: ", len(needs)))
+	return fitWidth(head+strings.Join(parts, grammar.C("mut", " · ")), w)
 }
 
 // turnLaneRail is the FLEET lane-rail above the turn split (E4.5 — the one-coordinating-session model):
