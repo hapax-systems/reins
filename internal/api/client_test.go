@@ -7,15 +7,34 @@ import (
 	"testing"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func withReadAPI(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	old := newReadHTTPClient
+	newReadHTTPClient = func() *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, r)
+			return rec.Result(), nil
+		})}
+	}
+	t.Cleanup(func() { newReadHTTPClient = old })
+	return "http://reins.test"
+}
+
 func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
-	}))
-	defer srv.Close()
+	})
 
-	_, dark, err := FetchIntake(srv.URL)
+	_, dark, err := FetchIntake(apiURL)
 	if err == nil {
 		t.Fatal("FetchIntake should return an error for a missing endpoint")
 	}
@@ -28,7 +47,7 @@ func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
 }
 
 func TestFetchDomainsReadsSourceBackedSummary(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/domains" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -50,10 +69,9 @@ func TestFetchDomainsReadsSourceBackedSummary(t *testing.T) {
 				"lifecycle_authority": "support_non_authoritative"
 			}
 		}`))
-	}))
-	defer srv.Close()
+	})
 
-	domains, dark, err := FetchDomains(srv.URL)
+	domains, dark, err := FetchDomains(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +84,7 @@ func TestFetchDomainsReadsSourceBackedSummary(t *testing.T) {
 }
 
 func TestFetchDynamicsReadsThesis(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/dynamics" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -91,10 +109,9 @@ func TestFetchDynamicsReadsThesis(t *testing.T) {
 				}
 			}
 		}`))
-	}))
-	defer srv.Close()
+	})
 
-	g, dark, err := FetchDynamics(srv.URL)
+	g, dark, err := FetchDynamics(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +142,7 @@ func TestFetchDynamicsReadsThesis(t *testing.T) {
 }
 
 func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/epistemics" || r.URL.Query().Get("scope") != "dynamics" {
 			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
@@ -167,10 +184,9 @@ func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
 				"totals": {"sources":1,"rows":1,"map_edges":1}
 			}
 		}`))
-	}))
-	defer srv.Close()
+	})
 
-	ep, dark, err := FetchEpistemics(srv.URL)
+	ep, dark, err := FetchEpistemics(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +203,7 @@ func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
 }
 
 func TestFetchTracesReadsRowsAndDarkFlag(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/traces" {
 			t.Fatalf("FetchTraces should GET /read/traces, got %s", r.URL.Path)
 		}
@@ -200,9 +216,8 @@ func TestFetchTracesReadsRowsAndDarkFlag(t *testing.T) {
 				"air": {"trace_id": "ok", "model": "ok"}
 			}]
 		}`))
-	}))
-	defer srv.Close()
-	tr, dark, err := FetchTraces(srv.URL)
+	})
+	tr, dark, err := FetchTraces(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +243,75 @@ func TestFetchTracesUnreachableFoldsDark(t *testing.T) {
 	tr, dark, err := FetchTraces("http://127.0.0.1:0")
 	if len(tr) != 0 || !dark || err == nil {
 		t.Fatalf("unreachable api must fold honest-dark (nil traces, dark=true, err): len=%d dark=%v err=%v", len(tr), dark, err)
+	}
+}
+
+func TestFetchTurnsReadsTypedReceipts(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/session/cc-reins/turns" {
+			t.Fatalf("FetchTurns should GET session turns, got %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("limit") != "80" || r.URL.Query().Get("before") != "2026-06-26T18:40:07Z" {
+			t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"dark": false,
+			"error": "",
+			"oldest_ts": "2026-06-26T18:40:05Z",
+			"turns": [{
+				"ts": "2026-06-26T18:40:05Z",
+				"role": "cc-reins",
+				"kind": "assistant",
+				"prov": "model",
+				"summary": "fixture assistant response body",
+				"magnitude": 0.3,
+				"model": "fugu",
+				"route": "codex.exec",
+				"gate": "pass",
+				"air": {"ts":"ok","role":"ok","kind":"ok","summary":"deny","magnitude":"ok","model":"ok","route":"ok","gate":"ok"}
+			}]
+		}`))
+	})
+	t.Setenv("REINS_API_URL", apiURL)
+
+	turns, err := FetchTurns("cc-reins", "2026-06-26T18:40:07Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(turns))
+	}
+	turn := turns[0]
+	if turn.TS != "2026-06-26T18:40:05Z" || turn.Role != "cc-reins" || turn.Kind != "assistant" || turn.Prov != "model" {
+		t.Fatalf("turn identity fields did not decode: %+v", turn)
+	}
+	if turn.Summary != "fixture assistant response body" || turn.Magnitude != 0.3 || turn.Model != "fugu" || turn.Route != "codex.exec" || turn.Gate != "pass" {
+		t.Fatalf("turn payload fields did not decode: %+v", turn)
+	}
+	if turn.AIR["summary"] != "deny" || turn.AIR["route"] != "ok" {
+		t.Fatalf("turn AIR map did not decode: %+v", turn.AIR)
+	}
+}
+
+func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/session/missing/turns" {
+			t.Fatalf("FetchTurns should GET session turns, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"dark": true, "error": "no turn replay fixture for session role: missing", "turns": []}`))
+	})
+	t.Setenv("REINS_API_URL", apiURL)
+
+	turns, err := FetchTurns("missing", "")
+	if err == nil {
+		t.Fatal("FetchTurns should surface a dark turns endpoint as an error")
+	}
+	if len(turns) != 0 {
+		t.Fatalf("dark turns response should not fabricate rows: %+v", turns)
+	}
+	if !strings.Contains(err.Error(), "no turn replay fixture") {
+		t.Fatalf("FetchTurns error should include dark reason, got %q", err.Error())
 	}
 }

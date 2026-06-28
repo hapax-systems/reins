@@ -63,6 +63,78 @@ def to_event(raw: dict, allowlist: list[str], age_s: float) -> dict:
     return {**fields, "score": score_event(raw, age_s), "air": classify_air(fields, allowlist)}
 
 
+_TURN_SKELETON_AIR = {"ts", "role", "kind", "prov", "magnitude", "model", "route", "gate"}
+_TURN_FIXTURES: dict[str, list[dict[str, Any]]] = {
+    # Fixture/replay receipts until the CapabilityIO live turn feed is gated in. These are already
+    # typed Turn receipts (not raw JSONL): the endpoint only pages and AIR-classifies them.
+    "cc-reins": [
+        {
+            "ts": "2026-06-26T18:40:01Z",
+            "role": "cc-reins",
+            "kind": "user",
+            "prov": "operator",
+            "summary": "fixture operator request body",
+            "magnitude": 0.2,
+            "model": "—",
+            "route": "operator.input",
+            "gate": "",
+        },
+        {
+            "ts": "2026-06-26T18:40:05Z",
+            "role": "cc-reins",
+            "kind": "assistant",
+            "prov": "model",
+            "summary": "fixture assistant response body",
+            "magnitude": 0.3,
+            "model": "fugu",
+            "route": "codex.exec",
+            "gate": "pass",
+        },
+        {
+            "ts": "2026-06-26T18:40:07Z",
+            "role": "cc-reins",
+            "kind": "tool_call",
+            "prov": "structured",
+            "summary": "fixture tool invocation body",
+            "magnitude": 0.5,
+            "model": "fugu",
+            "route": "codex.exec",
+            "gate": "pass",
+        },
+    ],
+}
+
+
+def to_turn(raw: dict, allowlist: list[str]) -> dict:
+    """Normalize one fixture/replay row into the typed Turn receipt contract.
+
+    The session turn ladder is bimodal: skeleton facets air, body text never does. ``prov`` is a
+    provenance channel and can be further clamped by source class; operator/untrusted receipts stay
+    shape-only even if an instance allowlist opts the field name in later.
+    """
+    try:
+        magnitude = float(raw.get("magnitude", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        magnitude = 0.0
+    fields = {
+        "ts": str(raw.get("ts", "")),
+        "role": str(raw.get("role", "")),
+        "kind": str(raw.get("kind", "")),
+        "prov": str(raw.get("prov", "model") or "model"),
+        "summary": str(raw.get("summary", "")),
+        "magnitude": max(0.0, min(1.0, magnitude)),
+        "model": str(raw.get("model", "")),
+        "route": str(raw.get("route", "")),
+        "gate": str(raw.get("gate", "")),
+    }
+    # Keep using the same AIR mechanism, with the turn contract's structural skeleton pinned on-air.
+    air = classify_air(fields, sorted(set(allowlist) | _TURN_SKELETON_AIR))
+    air["summary"] = "deny"  # body text is never on-air allowlisted
+    if fields["prov"] in {"operator", "untrusted"}:
+        air["prov"] = "deny"
+    return {**fields, "air": air}
+
+
 def _stage_num(stage: str) -> int:
     m = re.match(r"S(\d+)", stage or "")
     return int(m.group(1)) if m else -1
@@ -3882,6 +3954,28 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
             return {"dark": False, "detail": to_session_detail(role, lane, allowlist, session_cfg, route_binding)}
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "detail": {}}
+
+    @app.get("/read/session/{role}/turns")
+    def read_session_turns(role: str, before: str | None = None, limit: int = 80) -> dict:
+        try:
+            fixtures = _TURN_FIXTURES.get(role)
+            if fixtures is None:
+                return {
+                    "dark": True,
+                    "error": f"no turn replay fixture for session role: {role}",
+                    "turns": [],
+                    "oldest_ts": "",
+                }
+            page = _page_before(fixtures, before, limit)
+            turns = [to_turn(row, allowlist) for row in page]
+            return {
+                "dark": False,
+                "error": "",
+                "turns": turns,
+                "oldest_ts": turns[0]["ts"] if turns else "",
+            }
+        except Exception as e:  # honest-dark
+            return {"dark": True, "error": str(e), "turns": [], "oldest_ts": ""}
 
     @app.get("/read/intake")
     def read_intake() -> dict:

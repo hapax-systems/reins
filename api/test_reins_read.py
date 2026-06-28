@@ -125,6 +125,41 @@ def test_to_event_shape():
     assert ev["air"]["actor"] == "deny" and ev["air"]["subject"] == "ok"
 
 
+def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
+    app = build_app("", EXPECTED_DEFAULT_ALLOW)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/session/{role}/turns")
+
+    data = endpoint("cc-reins", None, 2)
+    assert data["dark"] is False and data["error"] == ""
+    assert data["oldest_ts"] == "2026-06-26T18:40:05Z"
+    assert len(data["turns"]) == 2
+
+    turn = data["turns"][0]
+    assert set(turn) == {"ts", "role", "kind", "prov", "summary", "magnitude", "model", "route", "gate", "air"}
+    for field in ("ts", "role", "kind", "magnitude", "model", "route", "gate"):
+        assert turn["air"][field] == "ok"
+    assert turn["summary"] == "fixture assistant response body"
+    assert turn["air"]["summary"] == "deny"
+    assert turn["prov"] == "model" and turn["air"]["prov"] == "ok"
+
+    # Cursor pages strictly older than `before`; the operator receipt proves prov class forcing.
+    data = endpoint("cc-reins", "2026-06-26T18:40:05Z", 1)
+    assert data["oldest_ts"] == "2026-06-26T18:40:01Z"
+    assert data["turns"][0]["prov"] == "operator"
+    assert data["turns"][0]["air"]["prov"] == "deny"
+
+
+def test_read_session_turns_unknown_role_is_honest_dark():
+    app = build_app("", EXPECTED_DEFAULT_ALLOW)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/session/{role}/turns")
+
+    data = endpoint("no-such-role", None, 80)
+    assert data["dark"] is True
+    assert data["turns"] == []
+    assert data["oldest_ts"] == ""
+    assert "no turn replay fixture" in data["error"]
+
+
 def test_to_task_shape_and_air():
     t = {"task_id": "x-1", "stage": "S6", "authority_case": "CASE-1", "no_go": {"blocked": True, "ok": False}}
     out = to_task("x-1", t, allowlist=["task_id", "stage", "no_go"])
