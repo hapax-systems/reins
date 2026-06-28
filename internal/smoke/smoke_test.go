@@ -52,6 +52,22 @@ func TestInPageGesturesNoPanic(t *testing.T) {
 	}
 }
 
+// Deeper coverage: on EVERY page, the standard in-page gestures (move to both ends, descend a row,
+// open + close a door/detail, tab into fields) must not panic — a fresh seed per page so one page's
+// state never masks another's crash. This is the per-page nav backstop for new panes (A1/A6/…).
+func TestEveryPageGesturesNoPanic(t *testing.T) {
+	const gestures = "j j k g G enter esc tab esc l h"
+	for _, name := range PageCommands {
+		m := SeedModel(170, 46) // fresh per page — isolate each page's gesture crash
+		frames := Drive(m, []string{":" + name, gestures})
+		for _, f := range frames {
+			if f.Panic != "" {
+				t.Fatalf("page %q step %q PANICKED: %s", name, f.Step, f.Panic)
+			}
+		}
+	}
+}
+
 // On-air navigation must never panic and must show the redaction token somewhere (the cockpit is
 // default-deny on a livestream) — a coarse but real AIR-safety smoke across the nav surface.
 func TestNavigateOnAirRedactsAndNoPanic(t *testing.T) {
