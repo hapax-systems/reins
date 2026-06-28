@@ -77,6 +77,34 @@ func SeedModel(w, h int) model.Model {
 		{Role: "cc-reins", Kind: "tool_result", Summary: "ok internal/grammar", Prov: "untrusted"},
 		{Role: "cc-reins", Kind: "assistant", Summary: "the test is widened + green", Prov: "model", Model: "claude-opus-4"},
 	}
+
+	// Give each item the AIR map the live READ API would (the allowlisted structural fields air;
+	// everything else default-denies) so the OFFLINE on-air render is representative of live, not a
+	// blanket ▒▒▒. The turn SKELETON airs (role/kind/model/gate/ts); the body never gets "summary":ok.
+	taskAIR := map[string]string{"task_id": "ok", "stage": "ok", "predicted_stage": "ok", "prior_stage": "ok", "no_go": "ok", "criticality": "ok", "owner": "ok"}
+	eventAIR := map[string]string{"ts": "ok", "kind": "ok", "subject": "ok", "actor": "ok", "score": "ok"}
+	sessionAIR := map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok", "alive": "ok", "idle": "ok", "stalled": "ok"}
+	traceAIR := map[string]string{"ts": "ok", "trace_id": "ok", "model": "ok", "latency_ms": "ok", "total_tok": "ok", "cost": "ok"}
+	epiAIR := map[string]string{"row_id": "ok", "family": "ok", "subject": "ok", "status": "ok", "authority": "ok"}
+	turnAIR := map[string]string{"role": "ok", "kind": "ok", "model": "ok", "gate": "ok", "ts": "ok"}
+	for i := range m.Tasks {
+		m.Tasks[i].AIR = taskAIR
+	}
+	for i := range m.Events {
+		m.Events[i].AIR = eventAIR
+	}
+	for i := range m.Sessions {
+		m.Sessions[i].AIR = sessionAIR
+	}
+	for i := range m.Traces {
+		m.Traces[i].AIR = traceAIR
+	}
+	for i := range m.Epistemics.Rows {
+		m.Epistemics.Rows[i].AIR = epiAIR
+	}
+	for i := range m.TurnLadder {
+		m.TurnLadder[i].AIR = turnAIR
+	}
 	return m
 }
 
