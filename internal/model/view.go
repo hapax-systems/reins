@@ -11170,7 +11170,12 @@ func (m Model) turnDetailBody(w int) string {
 	}
 	blocks := m.TurnBlocks[TurnID(t)]
 	if len(blocks) == 0 {
-		return grammar.RenderTurnDetail(t, nil, m.AIR) + "   " + grammar.C("mut", "(no expanded blocks for this fixture turn)") + "\n"
+		// honest: a LIVE turn with no blocks is detail-fetch-pending, NOT a fixture (never-false-green).
+		note := "(no expanded blocks for this live turn — the per-turn detail fetch is pending)"
+		if m.TurnsFixture {
+			note = "(no expanded blocks for this fixture turn)"
+		}
+		return grammar.RenderTurnDetail(t, nil, m.AIR) + "   " + grammar.C("mut", note) + "\n"
 	}
 	return grammar.RenderTurnDetail(t, blocks, m.AIR)
 }
