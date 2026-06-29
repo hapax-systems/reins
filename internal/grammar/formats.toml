@@ -1,0 +1,267 @@
+version = '1'
+
+[[event.field]]
+name = 'ts'
+width = 8
+align = 'left'
+fill = false
+empty_dots = false
+
+[[event.field]]
+name = 'signal'
+width = 2
+align = 'left'
+fill = false
+empty_dots = false
+
+[[event.field]]
+name = 'subject'
+width = 26
+align = 'left'
+fill = false
+empty_dots = true
+
+[[event.field]]
+name = 'actor'
+width = 10
+align = 'left'
+fill = false
+empty_dots = true
+
+[[event.field]]
+name = 'summary'
+width = 0
+align = 'left'
+fill = true
+empty_dots = false
+
+[[event.field]]
+name = 'score'
+width = 4
+align = 'right'
+fill = false
+empty_dots = false
+
+[[task.field]]
+name = 'posture'
+width = 7
+align = 'left'
+fill = false
+empty_dots = true
+
+[[task.field]]
+name = 'rel'
+width = 3
+align = 'right'
+fill = false
+empty_dots = false
+
+[[task.field]]
+name = 'task_id'
+width = 0
+align = 'left'
+fill = true
+empty_dots = true
+
+[[task.field]]
+name = 'stage'
+width = 4
+align = 'right'
+fill = false
+empty_dots = true
+
+[[task.field]]
+name = 'prior_stage'
+width = 5
+align = 'right'
+fill = false
+empty_dots = true
+
+[[task.field]]
+name = 'predicted_stage'
+width = 5
+align = 'right'
+fill = false
+empty_dots = true
+
+[[task.field]]
+name = 'owner'
+width = 8
+align = 'right'
+fill = false
+empty_dots = true
+
+[[task.field]]
+name = 'freshness'
+width = 2
+align = 'right'
+fill = false
+empty_dots = false
+
+[[trace.field]]
+name = 'ts'
+width = 8
+align = 'left'
+fill = false
+empty_dots = false
+
+[[trace.field]]
+name = 'latency_ms'
+width = 13
+align = 'right'
+fill = false
+empty_dots = false
+
+[[trace.field]]
+name = 'trace_id'
+width = 0
+align = 'left'
+fill = true
+empty_dots = true
+
+[[trace.field]]
+name = 'model'
+width = 14
+align = 'right'
+fill = false
+empty_dots = true
+
+[[trace.field]]
+name = 'tokens'
+width = 11
+align = 'right'
+fill = false
+empty_dots = false
+
+[[trace.field]]
+name = 'cost'
+width = 10
+align = 'right'
+fill = false
+empty_dots = false
+
+[[session.field]]
+name = 'health'
+width = 1
+align = 'left'
+fill = false
+empty_dots = false
+
+[[session.field]]
+name = 'readiness'
+width = 5
+align = 'left'
+fill = false
+empty_dots = true
+
+[[session.field]]
+name = 'role'
+width = 13
+align = 'left'
+fill = false
+empty_dots = true
+
+[[session.field]]
+name = 'platform'
+width = 7
+align = 'left'
+fill = false
+empty_dots = true
+
+[[session.field]]
+name = 'state'
+width = 8
+align = 'left'
+fill = false
+empty_dots = true
+
+[[session.field]]
+name = 'claimed_task'
+width = 0
+align = 'left'
+fill = true
+empty_dots = true
+
+[[session.field]]
+name = 'attention'
+width = 5
+align = 'right'
+fill = false
+empty_dots = false
+
+[[session.field]]
+name = 'output_age_s'
+width = 7
+align = 'right'
+fill = false
+empty_dots = true
+
+[[session.field]]
+name = 'relay_age_s'
+width = 7
+align = 'right'
+fill = false
+empty_dots = true
+
+[[turn.field]]
+name = 'ts'
+width = 8
+align = 'left'
+fill = false
+empty_dots = false
+
+[[turn.field]]
+name = 'signal'
+width = 2
+align = 'left'
+fill = false
+empty_dots = false
+
+[[turn.field]]
+name = 'role'
+width = 10
+align = 'left'
+fill = false
+empty_dots = true
+
+[[turn.field]]
+name = 'model'
+width = 14
+align = 'left'
+fill = false
+empty_dots = true
+
+[[turn.field]]
+name = 'gate'
+width = 9
+align = 'left'
+fill = false
+empty_dots = true
+
+[[turn.field]]
+name = 'provenance'
+width = 1
+align = 'left'
+fill = false
+empty_dots = false
+
+[[turn.field]]
+name = 'summary'
+width = 0
+align = 'left'
+fill = true
+empty_dots = false
+
+[[turn.field]]
+name = 'tokens'
+width = 7
+align = 'right'
+fill = false
+empty_dots = false
+
+[[turn.field]]
+name = 'route'
+width = 12
+align = 'right'
+fill = false
+empty_dots = true
