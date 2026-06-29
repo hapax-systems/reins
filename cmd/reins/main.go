@@ -135,6 +135,15 @@ func fetchVaultOnce(url string) tea.Msg {
 	return msg
 }
 
+func fetchTurnBlocksOnce(role, ts, turnID string) tea.Msg {
+	blocks, dark, err := api.FetchTurnBlocks(role, ts)
+	msg := model.TurnBlocksMsg{TurnID: turnID, Blocks: blocks, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+
 func fetchGatesOnce(url string) tea.Msg {
 	gates, dark, err := api.FetchGates(url)
 	msg := model.GatesMsg{Gates: gates, Dark: dark}
@@ -183,6 +192,13 @@ func capabilitiesTick(url string) tea.Cmd {
 func vaultTick(url string) tea.Cmd { // vault metadata is near-static -> a slow refresh
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchVaultOnce(url) })
 }
+func turnBlocksTick(role, ts, turnID string) tea.Cmd { // the FOCUSED turn's detail blocks (honest-empty until capture-output)
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTurnBlocksOnce(role, ts, turnID) })
+}
+func turnBlocksTickFocused(r root) tea.Cmd { // re-arm against the CURRENTLY-focused turn (tracks j/k navigation)
+	role, ts, id, _ := r.m.FocusedTurnRef()
+	return turnBlocksTick(role, ts, id)
+}
 func gatesTick(url string) tea.Cmd {
 	return tea.Tick(10*time.Second, func(time.Time) tea.Msg { return fetchGatesOnce(url) })
 }
@@ -212,7 +228,14 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchTracesOnce(r.url) },
 		func() tea.Msg { return fetchTurnsOnce(r.m.TurnRole) },
 		func() tea.Msg { return fetchVaultOnce(r.url) },
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), beatTick(),
+		func() tea.Msg {
+			role, ts, id, ok := r.m.FocusedTurnRef()
+			if !ok {
+				return model.TurnBlocksMsg{}
+			}
+			return fetchTurnBlocksOnce(role, ts, id)
+		},
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), turnBlocksTickFocused(r), beatTick(),
 	)
 }
 
@@ -240,6 +263,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, capabilitiesTick(r.url) // re-arm capability-routing polling
 	case model.VaultMsg:
 		return r, vaultTick(r.url) // re-arm vault-metadata polling
+	case model.TurnBlocksMsg:
+		return r, turnBlocksTickFocused(r) // re-arm the focused-turn detail-block fetch
 	case model.GatesMsg:
 		return r, gatesTick(r.url) // re-arm readiness/gate polling
 	case model.DomainsMsg:

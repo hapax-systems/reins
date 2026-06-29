@@ -2463,6 +2463,25 @@ type TurnsMsg struct {
 	Error string
 }
 
+// TurnBlocksMsg carries the per-turn Block stream for ONE turn (keyed by its full TurnID = ts|role|kind,
+// so two turns sharing ts+role with different kind never mis-assign). Honest-empty until capture-output.
+type TurnBlocksMsg struct {
+	TurnID string
+	Blocks []grammar.TurnBlock
+	Dark   bool
+	Error  string
+}
+
+// FocusedTurnRef returns the focused turn's (role, ts, full TurnID) for the detail-block fetch, decoupled
+// from grammar.Turn so the cmd layer needn't import it.
+func (m Model) FocusedTurnRef() (role, ts, id string, ok bool) {
+	t, ok := m.FocusedTurn()
+	if !ok {
+		return "", "", "", false
+	}
+	return t.Role, t.TS, TurnID(t), true
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case EventsMsg:
@@ -2481,6 +2500,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TurnsMsg:
 		m = m.FoldTurns(v.Turns, v.Dark)
 		m.LastFold = "turns"
+		return m, nil
+	case TurnBlocksMsg:
+		// store the focused turn's Block stream under its full TurnID; empty/dark leaves the detail
+		// honest-empty (the render already discloses "per-turn detail fetch pending"). Never fabricated.
+		if v.TurnID != "" && len(v.Blocks) > 0 {
+			if m.TurnBlocks == nil {
+				m.TurnBlocks = map[string][]grammar.TurnBlock{}
+			}
+			m.TurnBlocks[v.TurnID] = v.Blocks
+		}
 		return m, nil
 	case LastlogPageMsg:
 		// a PgUp backward-page landed: prepend the older events (newest-at-bottom order)

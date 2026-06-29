@@ -258,6 +258,36 @@ type turnsResp struct {
 	Turns []grammar.Turn `json:"turns"`
 }
 
+type turnBlocksResp struct {
+	Dark   bool                `json:"dark"`
+	Error  string              `json:"error"`
+	Blocks []grammar.TurnBlock `json:"blocks"`
+}
+
+// FetchTurnBlocks GETs the per-turn Block stream for ONE turn (role, ts) — the focused turn only, not the
+// whole ladder. Honest-empty (blocks=[]) until CapabilityIO capture-output serves real Block streams.
+func FetchTurnBlocks(role, ts string) ([]grammar.TurnBlock, bool, error) {
+	apiURL := readBaseURL()
+	endpoint := "/read/session/" + url.PathEscape(role) + "/turns/" + url.PathEscape(ts) + "/blocks"
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + endpoint)
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, endpoint); err != nil {
+		return nil, true, err
+	}
+	var r turnBlocksResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Error != "" {
+		return r.Blocks, true, fmt.Errorf("%s", r.Error)
+	}
+	return r.Blocks, r.Dark, nil
+}
+
 func readBaseURL() string {
 	if v := os.Getenv("REINS_API_URL"); v != "" {
 		return strings.TrimRight(v, "/")
