@@ -449,37 +449,45 @@ func RenderTurnHeader() string {
 // the structurally-intact, redacted, livestream-safe projection of a turn. Magnitude is SHAPE (bar),
 // never hue; the kind is SHAPE (glyph), never hue; only GATE rides the criticality hue (it is a state).
 func RenderTurnRow(t Turn, airOn bool) string {
-	ts := compactTS(t.TS)
-	if airOn && t.AIR["ts"] != "ok" {
-		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	reg := FacetRegistry{} // built-in default binding (same offline path RenderTraceRow uses)
+	d := func(field string) bool { return t.AIR[field] != "ok" }
+
+	tsText := compactTS(t.TS)
+	tsDenied := d("ts")
+	if airOn && tsDenied {
+		tsText = "▒▒▒▒▒▒▒▒" // legacy full-width timestamp redaction, not the generic ▒▒▒ token
+		tsDenied = false
 	}
-	bar := ScoreBar(t.Magnitude)
-	if airOn && t.AIR["magnitude"] != "ok" {
-		bar = "▒"
+	ts := traceGlyphLabel(reg, "time", CellValue{Text: tsText, Denied: tsDenied, Width: 8}, airOn)
+
+	barDenied := d("magnitude")
+	bar := traceGlyphLabel(reg, "measure", CellValue{Magnitude: t.Magnitude, Denied: barDenied}, airOn)
+	if airOn && barDenied {
+		bar = "▒" // legacy single-cell magnitude redaction; keep the screenshot-vetted row shape
 	}
 	bar = C("mut", bar)
-	glyph := turnGlyphOr(t.Kind)
-	if airOn && t.AIR["kind"] != "ok" {
-		glyph = "▒"
+
+	kindDenied := d("kind")
+	glyph := ansi.Strip(EncodeCell(reg, "action", CellValue{Text: turnGlyphOr(t.Kind), Denied: kindDenied}, airOn).Rendered)
+	if airOn && kindDenied {
+		glyph = "▒" // legacy single-cell turn-kind redaction
 	}
 	glyph = C("mut", glyph) // turn-kind is SHAPE, not a meaning-channel hue
-	roleTok := LaneToken(t.Role)
-	if airOn && t.AIR["role"] != "ok" {
-		roleTok = "mut"
-	}
-	who := C(roleTok, dotsOr(redact(t.AIR, "role", t.Role, airOn), 10))
-	model := C("mut", dotsOr(redact(t.AIR, "model", t.Model, airOn), 14))
+
+	who := EncodeCell(reg, "ownership", CellValue{Text: t.Role, Denied: d("role"), Width: 10}, airOn).Rendered
+	model := traceTextCell(reg, "variant", "mut", CellValue{Text: t.Model, Denied: d("model"), Width: 14}, airOn)
 	gate := pad("", 9)
 	if t.Gate != "" {
-		g := redact(t.AIR, "gate", t.Gate, airOn)
-		if sev := gateSeverity(t.Gate); sev != "" && !(airOn && t.AIR["gate"] != "ok") {
+		g := ansi.Strip(EncodeCell(reg, "action", CellValue{Text: t.Gate, Denied: d("gate")}, airOn).Rendered)
+		if sev := gateSeverity(t.Gate); sev != "" && !(airOn && d("gate")) {
 			gate = C(SeverityToken(sev), pad("["+g+"]", 9))
 		} else {
 			gate = C("mut", pad("["+g+"]", 9))
 		}
 	}
-	prov := C("mut", provGlyph(t.Prov)) // provenance is SHAPE, decoded by the legend
-	what := C("mut", turnBodyForAir(t.AIR, t.Prov, t.Summary, airOn))
+	prov := C("mut", ansi.Strip(EncodeCell(reg, "action", CellValue{Text: provGlyph(t.Prov)}, airOn).Rendered)) // provenance is SHAPE, decoded by the legend
+	bodyDenied := provDeniesOnAir(t.Prov) || d("summary")
+	what := traceTextCell(reg, "variant", "mut", CellValue{Text: t.Summary, Denied: bodyDenied}, airOn)
 	return fmt.Sprintf("%s %s%s %s %s %s %s %s", ts, bar, glyph, who, model, gate, prov, what)
 }
 
@@ -1093,35 +1101,53 @@ func compactAttention(score float64) string {
 // RenderSessionRow renders one lane without exposing raw output. AIR gates every value by field,
 // including the derived health ages; default config leaves claimed_task redacted.
 func RenderSessionRow(s Session, airOn bool) string {
+	reg := FacetRegistry{} // built-in default binding (same offline path RenderTaskRow uses)
+	d := func(field string) bool { return s.AIR[field] != "ok" }
+
 	tok := sessionToken(s.State)
 	if !sessionHealthVisible(s, airOn) {
 		tok = "mut"
 	}
-	glyph := C(tok, sessionGlyph(s, airOn))
-	roleTok := LaneToken(s.Role)
-	if airOn && s.AIR["role"] != "ok" {
-		roleTok = "mut"
-	}
+	glyph := C(tok, ansi.Strip(EncodeCell(reg, "action", CellValue{Text: sessionGlyph(s, airOn)}, airOn).Rendered))
+
 	rdyTok := readinessToken(s.Readiness)
-	if airOn && s.AIR["readiness"] != "ok" {
+	if airOn && d("readiness") {
 		rdyTok = "mut"
 	}
-	rdy := C(rdyTok, dotsOr(redact(s.AIR, "readiness", s.Readiness, airOn), 5))
-	role := C(roleTok, dotsOr(redact(s.AIR, "role", s.Role, airOn), 13))
-	plat := C("2nd", dotsOr(redact(s.AIR, "platform", s.Platform, airOn), 7))
-	state := C(tok, dotsOr(redact(s.AIR, "state", s.State, airOn), 8))
-	attn := C("pri", dotsOr(redact(s.AIR, "attention", compactAttention(s.Attention), airOn), 5))
-	out := C("mut", dotsOr(redact(s.AIR, "output_age_s", compactAge(s.OutputAgeS), airOn), 7))
-	relay := C("mut", dotsOr(redact(s.AIR, "relay_age_s", compactAge(s.RelayAgeS), airOn), 7))
+	rdyText := ansi.Strip(EncodeCell(reg, "action", CellValue{Text: s.Readiness, Denied: d("readiness"), Width: 5}, airOn).Rendered)
+	rdy := C(rdyTok, rdyText)
+
+	role := EncodeCell(reg, "ownership", CellValue{Text: s.Role, Denied: d("role"), Width: 13}, airOn).Rendered
+	plat := traceTextCell(reg, "variant", "2nd", CellValue{Text: s.Platform, Denied: d("platform"), Width: 7}, airOn)
+
+	stateText := ansi.Strip(EncodeCell(reg, "action", CellValue{Text: s.State, Denied: d("state"), Width: 8}, airOn).Rendered)
+	state := C(tok, stateText)
+
+	attnScore := s.Attention
+	if attnScore < 0 {
+		attnScore = 0
+	}
+	if attnScore > 1 {
+		attnScore = 1
+	}
+	attnText := traceGlyphLabel(reg, "measure", CellValue{Magnitude: attnScore, Denied: d("attention")}, airOn) + fmt.Sprintf("%.2f", attnScore)
+	if airOn && d("attention") {
+		attnText = redactToken // legacy attention redaction is the generic token padded to the ATTN width
+	}
+	attn := C("pri", dotsOr(attnText, 5))
+
+	out := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: compactAge(s.OutputAgeS), Denied: d("output_age_s"), Width: 7}, airOn))
+	relay := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: compactAge(s.RelayAgeS), Denied: d("relay_age_s"), Width: 7}, airOn))
+
 	taskTok := "2nd"
-	if airOn && s.AIR["claimed_task"] != "ok" {
+	if airOn && d("claimed_task") {
 		taskTok = "mut"
 	}
-	taskVal := redact(s.AIR, "claimed_task", s.ClaimedTask, airOn)
-	if strings.TrimSpace(taskVal) == "" {
-		taskVal = "·····"
+	taskText := s.ClaimedTask
+	if strings.TrimSpace(taskText) == "" {
+		taskText = "·····"
 	}
-	task := C(taskTok, dotsOr(taskVal, 48))
+	task := C(taskTok, ansi.Strip(EncodeCell(reg, "identity", CellValue{Text: taskText, Denied: d("claimed_task"), Width: 48}, airOn).Rendered))
 	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s", glyph, rdy, role, plat, state, attn, out, relay, task)
 }
 
