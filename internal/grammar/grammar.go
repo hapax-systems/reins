@@ -325,6 +325,16 @@ func RenderTraceRow(tr Trace, airOn bool) string {
 // tagged unit normalized across Claude Code / Codex / Agy. This row is the RECEDED (turn-ladder)
 // projection; the expanded block-tree is a later increment. ---
 
+// TurnPart is one structured multimodal chat body part, matching the LiteLLM-style
+// content-part distinction needed by callers that preserve text and image_url payloads.
+// Type is expected to be "text" or "image_url"; Text carries text bodies, and URL
+// carries image_url references.
+type TurnPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	URL  string `json:"url"`
+}
+
 // Turn is the unified-API READ contract for one session-turn row. BIMODAL AIR (the governing rule):
 // the SKELETON (ts/kind/role/model/route/gate/magnitude — operational metadata, the "x via y"
 // provenance) airs; the BODY (summary — the turn content: operator free-text, model prose, tool
@@ -336,6 +346,7 @@ type Turn struct {
 	Kind      string            `json:"kind"`      // turn-kind key into turnGlyph (skeleton)
 	Prov      string            `json:"prov"`      // provenance: operator|model|structured|untrusted (glyph channel)
 	Summary   string            `json:"summary"`   // the BODY — default-deny on air
+	Parts     []TurnPart        `json:"parts"`     // structured BODY parts; nil/empty keeps Summary as legacy body
 	Magnitude float64           `json:"magnitude"` // normalized 0..1 size (tokens/lines) -> ScoreBar
 	Model     string            `json:"model"`     // served model ("x via y") (skeleton)
 	Route     string            `json:"route"`     // route_id (skeleton)

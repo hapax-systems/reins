@@ -1,6 +1,7 @@
 package grammar
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -401,6 +402,42 @@ func TestRenderTurnRowLocal(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("turn row missing %q:\n%q", want, got)
 		}
+	}
+}
+
+func TestTurnPartsRoundTripAndNilPartsUsesSummary(t *testing.T) {
+	tk := sampleTurn()
+	tk.Summary = "legacy summary body"
+	tk.Parts = []TurnPart{
+		{Type: "text", Text: "look at this"},
+		{Type: "image_url", URL: "https://example.test/image.png"},
+	}
+
+	raw, err := json.Marshal(tk)
+	if err != nil {
+		t.Fatalf("marshal turn with parts: %v", err)
+	}
+
+	var round Turn
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal turn with parts: %v", err)
+	}
+	if len(round.Parts) != 2 {
+		t.Fatalf("parts did not round-trip: got %#v", round.Parts)
+	}
+	if round.Parts[0].Type != "text" || round.Parts[0].Text != "look at this" {
+		t.Fatalf("text part did not round-trip: %#v", round.Parts[0])
+	}
+	if round.Parts[1].Type != "image_url" || round.Parts[1].URL != "https://example.test/image.png" {
+		t.Fatalf("image_url part did not round-trip: %#v", round.Parts[1])
+	}
+
+	legacy := sampleTurn()
+	legacy.Parts = nil
+	legacy.Summary = "legacy summary body"
+	got := RenderTurnRow(legacy, false)
+	if !strings.Contains(got, "legacy summary body") {
+		t.Fatalf("nil Parts must keep Summary as the rendered body:\n%q", got)
 	}
 }
 
