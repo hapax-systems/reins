@@ -5046,6 +5046,11 @@ func (m Model) renderCommandCatalog(w int) string {
 		b.WriteString(" " + grammar.C("2nd", fmt.Sprintf("%-10s", row.label)) +
 			grammar.C(row.token, clipRunes(row.value, maxVisible(12, w-13))) + "\n")
 	}
+	// E4.7 chat-UX-bar: the catalog above is reins's OWN verbs; this manifest holds reins ACCOUNTABLE to
+	// the native-session verb set (CC/Codex/Agy/GLMCP §6) — each native verb maps to a reins projection,
+	// an honest N/A (direction-only doctrine), or a flagged GAP. The bar is "≥ native"; the holes are owned.
+	b.WriteString("\n" + rule + "\n")
+	b.WriteString(grammar.RenderChatParity(grammar.ChatParityManifest(), w) + "\n")
 	return strings.TrimRight(b.String(), "\n")
 }
 
