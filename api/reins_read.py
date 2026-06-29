@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from fastapi import FastAPI
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
@@ -3113,6 +3114,59 @@ def to_session_detail(name: str, lane: dict, allowlist: list[str], cfg: dict | N
     }
 
 
+
+def _vault_root(cfg: dict | None = None) -> Path:
+    cfg = cfg or {}
+    raw = os.environ.get("REINS_VAULT_ROOT") or str(cfg.get("vault_root") or "")
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / "Documents" / "Personal"
+
+
+def _vault_note(path: Path, vault_root: Path) -> dict:
+    rel = path.relative_to(vault_root)
+    parts = rel.parts
+    return {
+        "title": path.stem,
+        "rel_path": rel.as_posix(),
+        "obsidian_uri": "obsidian://open?path=" + quote(str(path.absolute()), safe=""),
+        "folder": parts[0] if len(parts) > 1 else "",
+        "modified": _iso_mtime(path),
+    }
+
+
+def read_vault_summary(cfg: dict | None = None) -> dict:
+    """List Obsidian vault notes as metadata only.
+
+    Bodies are default-deny: this only stats paths and never opens note files.
+    """
+    root = _vault_root(cfg)
+    if not root.is_dir() or not os.access(root, os.R_OK):
+        return {"vault_root": str(root), "dark": True, "notes": []}
+
+    notes: list[tuple[float, dict]] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith(".") and d not in {".obsidian", ".trash"}
+            ]
+            base = Path(dirpath)
+            for filename in filenames:
+                if not filename.endswith(".md"):
+                    continue
+                path = base / filename
+                try:
+                    mtime = path.stat().st_mtime
+                    notes.append((mtime, _vault_note(path, root)))
+                except OSError:
+                    continue
+    except OSError:
+        return {"vault_root": str(root), "dark": True, "notes": []}
+
+    notes.sort(key=lambda row: row[0], reverse=True)
+    return {"vault_root": str(root), "dark": False, "notes": [row for _, row in notes[:500]]}
+
 def _seed(council_root: str) -> dict:
     """The curated system-dynamics map (council-root-relative; instance-config pattern).
     This is the source :dynamics renders — it obsoletes the standalone :8765 cytoscape viewer."""
@@ -4005,6 +4059,10 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "domains": {"sources": [], "rows": [], "relations": [], "totals": {}, "lifecycle_sources": [], "lifecycles": [], "lifecycle_totals": {}}}
 
+    @app.get("/read/vault")
+    def read_vault() -> dict:
+        return read_vault_summary(session_cfg)
+
     @app.get("/read/facets")
     def read_facets() -> dict:
         # the facet-cut SSOT served in-band (A6: the decoder travels with the artifact) — the 9
@@ -4092,6 +4150,7 @@ def instance_config() -> dict:
     hkp_shadow_root = os.environ.get("REINS_HKP_SHADOW_ROOT") or str(toml_cfg.get("hkp_shadow_root", ""))
     hkp_index_root = os.environ.get("REINS_HKP_INDEX_ROOT") or str(toml_cfg.get("hkp_index_root", ""))
     hkp_report_root = os.environ.get("REINS_HKP_REPORT_ROOT") or str(toml_cfg.get("hkp_report_root", ""))
+    vault_root = os.environ.get("REINS_VAULT_ROOT") or str(toml_cfg.get("vault_root", ""))
     hkp_bundles_env = os.environ.get("REINS_HKP_BUNDLES")
     if hkp_bundles_env:
         hkp_bundles = [v.strip() for v in hkp_bundles_env.split(",") if v.strip()]
@@ -4152,6 +4211,7 @@ def instance_config() -> dict:
         "hkp_index_root": hkp_index_root,
         "hkp_report_root": hkp_report_root,
         "hkp_bundles": hkp_bundles,
+        "vault_root": vault_root,
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }

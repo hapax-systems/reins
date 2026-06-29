@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -26,6 +28,7 @@ from reins_read import (
     read_lifecycle_registry_summary,
     read_domain_pack_summary,
     read_gate_summary,
+    read_vault_summary,
     build_app,
     instance_config,
 )
@@ -1353,9 +1356,49 @@ def test_read_domain_pack_summary_missing_config_is_explicit():
     assert summary["rows"] == []
 
 
+
+def test_read_vault_endpoint_returns_metadata_only(tmp_path):
+    vault = tmp_path / "vault"
+    projects = vault / "Projects"
+    areas = vault / "Areas"
+    hidden = vault / ".obsidian"
+    projects.mkdir(parents=True)
+    areas.mkdir()
+    hidden.mkdir()
+    note_a = projects / "First Note.md"
+    note_b = areas / "Second Note.md"
+    note_a.write_text("SECRET FIRST BODY", encoding="utf-8")
+    note_b.write_text("SECRET SECOND BODY", encoding="utf-8")
+    (hidden / "Hidden.md").write_text("SECRET HIDDEN BODY", encoding="utf-8")
+    os.utime(note_a, (1_700_000_000, 1_700_000_000))
+    os.utime(note_b, (1_700_000_100, 1_700_000_100))
+
+    app = build_app("", EXPECTED_DEFAULT_ALLOW, {"vault_root": str(vault)})
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/vault")
+
+    data = endpoint()
+    assert data["vault_root"] == str(vault)
+    assert data["dark"] is False
+    assert [note["title"] for note in data["notes"]] == ["Second Note", "First Note"]
+    by_title = {note["title"]: note for note in data["notes"]}
+    assert by_title["First Note"]["rel_path"] == "Projects/First Note.md"
+    assert by_title["First Note"]["folder"] == "Projects"
+    assert by_title["First Note"]["obsidian_uri"] == "obsidian://open?path=" + quote(str(note_a.resolve()), safe="")
+    assert by_title["Second Note"]["folder"] == "Areas"
+    dumped = json.dumps(data)
+    assert "SECRET" not in dumped
+    assert "Hidden" not in dumped
+
+
+def test_read_vault_missing_root_is_dark(tmp_path):
+    missing = tmp_path / "missing-vault"
+    data = read_vault_summary({"vault_root": str(missing)})
+
+    assert data == {"vault_root": str(missing), "dark": True, "notes": []}
+
 def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     monkeypatch.setenv("REINS_CONFIG", "/no/such/reins.toml")  # force the no-file path
-    for k in ("REINS_COUNCIL_ROOT", "REINS_AIR_ALLOWLIST", "REINS_PORT", "REINS_LIFECYCLE_REGISTRIES", "REINS_DOMAIN_PACKS", "REINS_CAPABILITY_SURFACE_PACKS", "REINS_HKP_SHADOW_ROOT", "REINS_HKP_INDEX_ROOT", "REINS_HKP_REPORT_ROOT", "REINS_HKP_BUNDLES"):
+    for k in ("REINS_COUNCIL_ROOT", "REINS_AIR_ALLOWLIST", "REINS_PORT", "REINS_LIFECYCLE_REGISTRIES", "REINS_DOMAIN_PACKS", "REINS_CAPABILITY_SURFACE_PACKS", "REINS_HKP_SHADOW_ROOT", "REINS_HKP_INDEX_ROOT", "REINS_HKP_REPORT_ROOT", "REINS_HKP_BUNDLES", "REINS_VAULT_ROOT"):
         monkeypatch.delenv(k, raising=False)
     cfg = instance_config()
     assert cfg["council_root"] == ""  # NO baked operator path
@@ -1366,6 +1409,7 @@ def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     assert cfg["hkp_index_root"] == ""
     assert cfg["hkp_report_root"] == ""
     assert cfg["hkp_bundles"] == []
+    assert cfg["vault_root"] == ""
     assert "kind" in cfg["allowlist"] and "subject" not in cfg["allowlist"]  # conservative on-air default
     # the default AIR allowlist now derives from the facet-cut SSOT (operator-approved 2026-06-26),
     # which airs the structural skeleton + denies free-text/PII (proven safe by test_facet_registry).
@@ -1384,6 +1428,7 @@ def test_instance_config_env_overrides(monkeypatch):
     monkeypatch.setenv("REINS_HKP_INDEX_ROOT", "/hkp-index")
     monkeypatch.setenv("REINS_HKP_REPORT_ROOT", "/hkp-reports")
     monkeypatch.setenv("REINS_HKP_BUNDLES", "sdlc,rdlc")
+    monkeypatch.setenv("REINS_VAULT_ROOT", "/vault")
     cfg = instance_config()
     assert cfg["council_root"] == "/env/root"
     assert cfg["allowlist"] == ["kind", "subject"]
@@ -1394,3 +1439,4 @@ def test_instance_config_env_overrides(monkeypatch):
     assert cfg["hkp_index_root"] == "/hkp-index"
     assert cfg["hkp_report_root"] == "/hkp-reports"
     assert cfg["hkp_bundles"] == ["sdlc", "rdlc"]
+    assert cfg["vault_root"] == "/vault"
