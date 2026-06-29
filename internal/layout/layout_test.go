@@ -85,6 +85,25 @@ func TestRelationHeaderOwnsTopRow(t *testing.T) {
 // The connector header states the typed-join VERDICT honestly: a real-join split appends its asserted
 // join key (⋈), and a DOOR appends "no join" — the honesty floor: a Door must never imply a join the
 // data does not carry. Verdict/JoinKey unset preserves the bare-relation header (back-compat).
+func TestRelationHeaderIncludesCouplingWhenSet(t *testing.T) {
+	w := 48
+	with := relationHeader(Connector{Relation: "ambient context", Coupling: "Door"}, w)
+	if !strings.Contains(with, "ambient context · Door") {
+		t.Fatalf("coupling word must be included inside the centered label: %q", with)
+	}
+	if got := ansi.StringWidth(with); got != w {
+		t.Fatalf("header with coupling width = %d, want %d: %q", got, w, with)
+	}
+
+	without := relationHeader(Connector{Relation: "ambient context"}, w)
+	if strings.Contains(without, "Door") || strings.Contains(without, " · ") {
+		t.Fatalf("empty coupling must be omitted from the label: %q", without)
+	}
+	if got := ansi.StringWidth(without); got != w {
+		t.Fatalf("header without coupling width = %d, want %d: %q", got, w, without)
+	}
+}
+
 func TestRelationHeaderStatesJoinVerdict(t *testing.T) {
 	joined := Split(Leaf(block("A", 1)), Leaf(block("B", 1)), 0.5,
 		Connector{Glyph: "│", Relation: "focused event → neighborhood", Verdict: "Standing", JoinKey: "selection -> detail"})

@@ -52,6 +52,7 @@ type Connector struct {
 	Relation string
 	Verdict  string
 	JoinKey  string
+	Coupling string
 }
 
 // Leaf wraps a pane as a spec node.
@@ -112,13 +113,21 @@ func render(s *Spec, w, h int) []string {
 // suffixed with the typed-join clause so the split states its join honestly. A real-join verdict
 // asserts its key (⋈ <key>); a Door declares "no join"; an unset verdict keeps the bare relation.
 func relationHeader(c Connector, w int) string {
-	label := " " + c.Relation + joinClause(c) + " "
+	label := " " + c.Relation + joinClause(c) + couplingClause(c) + " "
 	lw := ansi.StringWidth(label)
 	if lw >= w {
 		return fitLine(label, w)
 	}
 	side := (w - lw) / 2
 	return strings.Repeat("─", side) + label + strings.Repeat("─", w-lw-side)
+}
+
+// couplingClause renders the verdict-tier coupling word inside the centered relation label.
+func couplingClause(c Connector) string {
+	if c.Coupling == "" {
+		return ""
+	}
+	return " · " + c.Coupling
 }
 
 // joinClause renders the gate's ruling: nothing when the verdict is unset (bare relation), "· no join"

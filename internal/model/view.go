@@ -1003,6 +1003,7 @@ func (m Model) verdictConnector(relation string) layout.Connector {
 		Relation: relation,
 		Verdict:  v.String(),
 		JoinKey:  key,
+		Coupling: v.String(),
 	}
 }
 
