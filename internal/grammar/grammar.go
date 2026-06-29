@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hapax-systems/reins/internal/palette"
 )
 
@@ -240,22 +241,73 @@ func RenderTraceHeader() string {
 	return C("mut", fmt.Sprintf(" %-8s %-13s %-16s %-14s %-11s %s", "TIME", "LATENCY", "TRACE", "MODEL", "TOKENS p/c/t", "COST"))
 }
 
+// traceGlyphLabel projects a glyph-bearing encoded cell (time / measure) back into the legacy trace
+// column envelope. The semantic channel still comes from EncodeCell; the leading channel glyph is
+// withheld here only because RenderTraceRow's operator-vetted columns already carry latency shape in
+// the six-block histogram and must remain byte/width stable.
+func traceGlyphLabel(reg FacetRegistry, facet string, v CellValue, airOn bool) string {
+	return traceEncodedGlyphLabel(EncodeCell(reg, facet, v, airOn))
+}
+
+func traceEncodedGlyphLabel(c Cell) string {
+	plain := ansi.Strip(c.Rendered)
+	r := []rune(plain)
+	if len(r) >= 2 && r[1] == ' ' {
+		return string(r[2:])
+	}
+	return plain
+}
+
+// traceTextCell keeps the legacy trace ink while delegating padding, truncation, structured silence,
+// and AIR redaction to EncodeCell's text-channel grammar.
+func traceTextCell(reg FacetRegistry, facet, token string, v CellValue, airOn bool) string {
+	return C(token, ansi.Strip(EncodeCell(reg, facet, v, airOn).Rendered))
+}
+
 // RenderTraceRow: one self-explaining LLM-call row — TIME · LATENCY(histogram) · TRACE · MODEL ·
 // TOKENS(prompt/completion/total) · COST. Magnitudes are SHAPE (bar) + TEXT (literal), never hue,
 // so the row is channel-pure and monochrome-legible; `airOn` redacts per field (structure kept).
 func RenderTraceRow(tr Trace, airOn bool) string {
-	ts := compactTS(tr.TS)
-	if airOn && tr.AIR["ts"] != "ok" {
-		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	reg := FacetRegistry{} // built-in default binding (same offline path RenderTaskRow uses)
+	d := func(field string) bool { return tr.AIR[field] != "ok" }
+
+	tsText := compactTS(tr.TS)
+	tsDenied := d("ts")
+	if airOn && tsDenied {
+		tsText = "▒▒▒▒▒▒▒▒" // legacy full-width timestamp redaction, not the generic ▒▒▒ token
+		tsDenied = false
 	}
-	lat := latencyHistogram(tr.LatencyMs)
-	if airOn && tr.AIR["latency_ms"] != "ok" {
+	ts := traceGlyphLabel(reg, "time", CellValue{Text: tsText, Denied: tsDenied, Width: 8}, airOn)
+
+	latDenied := d("latency_ms")
+	n := latencyBucket(tr.LatencyMs)
+	latCell := EncodeCell(reg, "measure", CellValue{
+		Text:      fmt.Sprintf("%5dms", tr.LatencyMs),
+		Magnitude: float64(n) / 6.0,
+		Denied:    latDenied,
+	}, airOn)
+	var lat string
+	if airOn && latDenied {
+		// Keep the screenshot-vetted 9-cell latency redaction while still routing the field through
+		// the measure facet; the visible legacy histogram shape must not gain the encoder's extra pip.
 		lat = C("mut", "▒▒▒▒▒▒▒▒▒")
+	} else {
+		bar := strings.Repeat("█", n) + strings.Repeat("░", 6-n)
+		label := traceEncodedGlyphLabel(latCell)
+		lat = C("mut", bar) + " " + C("mut", label)
 	}
-	id := C("pri", dotsOr(redact(tr.AIR, "trace_id", tr.TraceID, airOn), 16))
-	model := C("mut", dotsOr(redact(tr.AIR, "model", tr.Model, airOn), 14))
-	tok := C("mut", pad(redact(tr.AIR, "total_tok", fmt.Sprintf("%d/%d/%d", tr.PromptTok, tr.CompletionTok, tr.TotalTok), airOn), 11))
-	cost := C("mut", redact(tr.AIR, "cost", fmt.Sprintf("$%.6f", tr.Cost), airOn))
+
+	id := traceTextCell(reg, "identity", "pri", CellValue{Text: tr.TraceID, Denied: d("trace_id"), Width: 16}, airOn)
+	model := traceTextCell(reg, "variant", "mut", CellValue{Text: tr.Model, Denied: d("model"), Width: 14}, airOn)
+	tok := C("mut", traceGlyphLabel(reg, "measure", CellValue{
+		Text:   fmt.Sprintf("%d/%d/%d", tr.PromptTok, tr.CompletionTok, tr.TotalTok),
+		Denied: d("total_tok"),
+		Width:  11,
+	}, airOn))
+	cost := C("mut", traceGlyphLabel(reg, "measure", CellValue{
+		Text:   fmt.Sprintf("$%.6f", tr.Cost),
+		Denied: d("cost"),
+	}, airOn))
 	return fmt.Sprintf("%s %s %s %s %s %s", ts, lat, id, model, tok, cost)
 }
 
