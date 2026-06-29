@@ -40,6 +40,10 @@ const (
 	PageAxes         = 22 // the six case-role axes — representational framework + five-tuple contracts
 	PageIdentity     = 23 // A1 Identity — the principal roster (who is acting) derived from role/actor/owner
 	PageRelational   = 24 // A6 Relational — the consent/access-control posture (who is affected)
+	PageObserve      = 25 // E11.7 whole-system awareness (health/drift/agents/governance/cost/GPU) — read-only projection
+	PageVault        = 26 // E11.5b Obsidian research/planning navigation (titles + obsidian:// links; bodies deny)
+	PageRdlc         = 27 // E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists
+	PagePresence     = 28 // E11.8 presence-plane binder (figure/control vs ground/presence) — honest-dark pending agy
 )
 
 const (
@@ -1873,6 +1877,10 @@ var verbs = []verbDef{
 	{name: "relational", aliases: []string{"consent", "a6"}, kind: commandRead, group: "window", gloss: "A6 Relational — the consent/access-control posture (frame · authorship · gating · stakeholders)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "turns", aliases: []string{"session-turns", "session"}, kind: commandRead, group: "window", gloss: "SESSION TURN-LADDER fixture (chat-pane flagship ahead of CapabilityIO)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "epistemics", aliases: []string{"epi", "epistemic"}, kind: commandRead, group: "window", gloss: "evidence/provenance posture over dynamics, observations, domains, capabilities, and sessions", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "observe", aliases: []string{"system", "awareness"}, kind: commandRead, group: "window", gloss: "E11.7 whole-system awareness — health/drift/agents/governance/cost/GPU (read-only projection)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "vault", aliases: []string{"obsidian"}, kind: commandRead, group: "window", gloss: "E11.5 Obsidian research/planning nav — titles + obsidian:// links (bodies default-deny)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "rdlc", aliases: []string{"claims", "labrack"}, kind: commandRead, group: "window", gloss: "E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "presence", aliases: []string{"concourse"}, kind: commandRead, group: "window", gloss: "E11.8 presence-plane binder — figure/control vs ground/presence (honest-dark, pending design)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "commands", aliases: []string{"cmds"}, kind: commandRead, group: "registry", gloss: "open the unified command catalog", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2007,6 +2015,18 @@ func (m Model) Exec(line string) Model {
 	case "epistemics":
 		m = m.switchPage(PageEpistemics)
 		m.Status = ":epistemics"
+	case "observe", "system", "awareness":
+		m = m.switchPage(PageObserve)
+		m.Status = ":observe"
+	case "vault", "obsidian":
+		m = m.switchPage(PageVault)
+		m.Status = ":vault"
+	case "rdlc", "claims", "labrack":
+		m = m.switchPage(PageRdlc)
+		m.Status = ":rdlc"
+	case "presence", "concourse":
+		m = m.switchPage(PagePresence)
+		m.Status = ":presence"
 	case "air":
 		switch arg0(args) {
 		case "on":

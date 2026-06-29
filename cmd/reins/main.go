@@ -338,6 +338,14 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageIntent, true
 	case "legend":
 		return model.PageLegend, true
+	case "observe", "system", "awareness":
+		return model.PageObserve, true
+	case "vault", "obsidian":
+		return model.PageVault, true
+	case "rdlc", "claims", "labrack":
+		return model.PageRdlc, true
+	case "presence", "concourse":
+		return model.PagePresence, true
 	}
 	return 0, false
 }
