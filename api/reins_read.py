@@ -3167,6 +3167,292 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
     notes.sort(key=lambda row: row[0], reverse=True)
     return {"vault_root": str(root), "dark": False, "notes": [row for _, row in notes[:500]]}
 
+
+_OBSERVE_DIMENSION_KEYS = (
+    "health",
+    "drift",
+    "nudges",
+    "agents",
+    "governance",
+    "consent",
+    "profile",
+    "cost",
+    "gpu",
+    "stimmung",
+)
+
+_OBSERVE_LIST_KEYS = {
+    "health": ("checks", "services", "failed_checks", "failures"),
+    "drift": ("drift", "drifts", "items", "rows"),
+    "nudges": ("nudges", "items", "rows"),
+    "agents": ("agents", "lanes", "sessions", "rows"),
+    "governance": ("gates", "tasks", "rows"),
+    "consent": ("consents", "rows", "items"),
+    "profile": ("dimensions", "facts", "rows"),
+    "cost": ("records", "traces", "rows"),
+    "gpu": ("gpus", "devices", "rows"),
+    "stimmung": ("events", "states", "rows"),
+}
+
+
+def _observe_dim(key: str, status: str, summary: str, count: int | None) -> dict:
+    if status == "dark":
+        count = None
+    elif count is not None:
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = None
+    return {
+        "key": key,
+        "status": "live" if status == "live" else "dark",
+        "summary": str(summary or ""),
+        "count": count,
+    }
+
+
+def _observe_dark(key: str, reason: str) -> dict:
+    return _observe_dim(key, "dark", f"source dark: {reason}", None)
+
+
+def _observe_api_base_url(cfg: dict | None = None) -> str:
+    cfg = cfg or {}
+    return str(
+        os.environ.get("REINS_OBSERVE_API_URL")
+        or os.environ.get("REINS_COCKPIT_API_URL")
+        or cfg.get("observe_api_url")
+        or cfg.get("cockpit_api_url")
+        or "http://localhost:8051"
+    ).strip()
+
+
+def _observe_timeout_s(cfg: dict | None = None) -> float:
+    cfg = cfg or {}
+    raw = os.environ.get("REINS_OBSERVE_TIMEOUT_S") or cfg.get("observe_timeout_s") or 0.2
+    try:
+        return max(0.01, min(2.0, float(raw)))
+    except (TypeError, ValueError):
+        return 0.2
+
+
+def _observe_http_json(url: str, timeout: float) -> Any:
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(1024 * 1024)
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+
+def _observe_payload_count(key: str, payload: Any) -> int | None:
+    if isinstance(payload, list):
+        return len(payload)
+    if not isinstance(payload, dict):
+        return None
+    for direct in ("count", "total", "total_count"):
+        value = payload.get(direct)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    dims = payload.get("dimensions")
+    if isinstance(dims, list):
+        for dim in dims:
+            if isinstance(dim, dict) and str(dim.get("key") or "") == key:
+                count = dim.get("count")
+                if isinstance(count, bool):
+                    return None
+                if isinstance(count, (int, float)):
+                    return int(count)
+                return None
+    for list_key in _OBSERVE_LIST_KEYS.get(key, ()):
+        value = payload.get(list_key)
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            return len(value)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return None
+
+
+def _observe_payload_summary(key: str, payload: Any, count: int | None) -> str:
+    if isinstance(payload, dict):
+        for field in ("summary", "detail", "message"):
+            value = payload.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        status = payload.get("status") or payload.get("state")
+        if status:
+            if count is None:
+                return f"cockpit/logos api live: {key} status={status}"
+            return f"cockpit/logos api live: {key} status={status}; count={count}"
+    if count is not None:
+        return f"cockpit/logos api live: {key} count={count}"
+    return f"cockpit/logos api live: {key}"
+
+
+def _observe_from_http(cfg: dict | None, key: str) -> dict:
+    base = _observe_api_base_url(cfg)
+    if not base:
+        return _observe_dark(key, "observe api url not configured")
+    url = base.rstrip("/") + "/" + quote(key, safe="")
+    try:
+        payload = _observe_http_json(url, _observe_timeout_s(cfg))
+    except Exception as e:
+        return _observe_dark(key, str(e))
+    if isinstance(payload, dict) and payload.get("dark") is True:
+        return _observe_dark(key, str(payload.get("error") or payload.get("summary") or "api returned dark"))
+    count = _observe_payload_count(key, payload)
+    return _observe_dim(key, "live", _observe_payload_summary(key, payload, count), count)
+
+
+def _observe_session_dimensions() -> tuple[dict, dict]:
+    try:
+        raw = _raw_sessions()
+    except Exception as e:
+        reason = str(e)
+        return _observe_dark("health", reason), _observe_dark("agents", reason)
+
+    total = len(raw)
+    stalled = sum(1 for _, lane in raw if lane.get("stalled"))
+    offline = sum(1 for _, lane in raw if not lane.get("alive"))
+    idle = sum(1 for _, lane in raw if lane.get("idle") and lane.get("alive") and not lane.get("stalled"))
+    active = max(0, total - stalled - offline - idle)
+    health = _observe_dim(
+        "health",
+        "live",
+        f"coordinator_state live: lanes={total}; stalled={stalled}; offline={offline}",
+        stalled + offline,
+    )
+    agents = _observe_dim(
+        "agents",
+        "live",
+        f"coordinator_state live: lanes={total}; active={active}; idle={idle}; stalled={stalled}; offline={offline}",
+        total,
+    )
+    return health, agents
+
+
+def _observe_governance(cfg: dict | None) -> dict:
+    cfg = cfg or {}
+    council_root = str(cfg.get("council_root") or "")
+    if not council_root:
+        return _observe_dark("governance", "council_root not configured")
+    try:
+        tasks = (_projection(council_root).get("tasks") or {})
+        if not isinstance(tasks, dict):
+            tasks = {}
+        blocked = 0
+        for task in tasks.values():
+            no_go = task.get("no_go") if isinstance(task, dict) else {}
+            if isinstance(no_go, dict) and any(value is False for value in no_go.values()):
+                blocked += 1
+        return _observe_dim(
+            "governance",
+            "live",
+            f"coord projection live: tasks={len(tasks)}; blocked={blocked}",
+            blocked,
+        )
+    except Exception as e:
+        return _observe_dark("governance", str(e))
+
+
+def _dispatch_ledger_path(cfg: dict | None = None) -> Path:
+    cfg = cfg or {}
+    raw = os.environ.get("REINS_DISPATCH_LEDGER_PATH") or str(cfg.get("dispatch_ledger_path") or "")
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".cache" / "hapax" / "sdlc-routing" / "dispatch-events.jsonl"
+
+
+def _observe_cost(cfg: dict | None) -> dict:
+    path = _dispatch_ledger_path(cfg)
+    if path.exists():
+        records = _read_jsonl_tail(path, 1000)
+        measured = 0
+        total_cost = 0.0
+        for record in records:
+            value = record.get("cost_usd")
+            if value is None:
+                continue
+            try:
+                total_cost += float(value)
+                measured += 1
+            except (TypeError, ValueError):
+                continue
+        return _observe_dim(
+            "cost",
+            "live",
+            f"dispatch ledger live: records={len(records)}; measured_cost={measured}; total_cost_usd={round(total_cost, 6)}",
+            len(records),
+        )
+
+    cfg = cfg or {}
+    council_root = str(cfg.get("council_root") or "")
+    if council_root:
+        traces = read_traces(council_root, 40)
+        if not traces.get("dark"):
+            rows = traces.get("traces") or []
+            total_cost = 0.0
+            measured = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    total_cost += float(row.get("cost") or 0.0)
+                    measured += 1
+                except (TypeError, ValueError):
+                    continue
+            return _observe_dim(
+                "cost",
+                "live",
+                f"langfuse traces live: traces={len(rows)}; measured_cost={measured}; total_cost={round(total_cost, 6)}",
+                len(rows),
+            )
+        return _observe_dark("cost", str(traces.get("error") or "dispatch ledger missing and traces dark"))
+    return _observe_dark("cost", f"dispatch ledger missing: {path}")
+
+
+def read_observe_summary(cfg: dict | None = None) -> dict:
+    """Aggregate whole-system observation dimensions without minting authority or AIR policy.
+
+    This is a raw read projection for the :observe page. Each dimension is independently honest:
+    if its source is unreachable, that dimension is dark and carries no fabricated count.
+    """
+    cfg = cfg or {}
+    health, agents = _observe_session_dimensions()
+    local = {
+        "health": health,
+        "agents": agents,
+        "governance": _observe_governance(cfg),
+        "cost": _observe_cost(cfg),
+    }
+
+    dimensions: list[dict] = []
+    for key in _OBSERVE_DIMENSION_KEYS:
+        local_dim = local.get(key)
+        if local_dim and local_dim["status"] == "live":
+            dimensions.append(local_dim)
+            continue
+        api_dim = _observe_from_http(cfg, key)
+        if api_dim["status"] == "live":
+            dimensions.append(api_dim)
+        elif local_dim is not None:
+            dimensions.append(local_dim)
+        else:
+            dimensions.append(api_dim)
+
+    return {
+        "dark": not any(dim["status"] == "live" for dim in dimensions),
+        "dimensions": dimensions,
+    }
+
+
 def _seed(council_root: str) -> dict:
     """The curated system-dynamics map (council-root-relative; instance-config pattern).
     This is the source :dynamics renders — it obsoletes the standalone :8765 cytoscape viewer."""
@@ -4076,6 +4362,13 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     @app.get("/read/vault")
     def read_vault() -> dict:
         return read_vault_summary(session_cfg)
+
+    @app.get("/read/observe")
+    def read_observe() -> dict:
+        observe_cfg = dict(session_cfg)
+        if council_root and not observe_cfg.get("council_root"):
+            observe_cfg["council_root"] = council_root
+        return read_observe_summary(observe_cfg)
 
     @app.get("/read/facets")
     def read_facets() -> dict:

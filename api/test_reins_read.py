@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
+import reins_read
 from reins_read import (
     _page_before,
     _raw_sessions,
@@ -29,6 +30,7 @@ from reins_read import (
     read_domain_pack_summary,
     read_gate_summary,
     read_vault_summary,
+    read_observe_summary,
     build_app,
     instance_config,
 )
@@ -1413,6 +1415,61 @@ def test_read_vault_missing_root_is_dark(tmp_path):
     data = read_vault_summary({"vault_root": str(missing)})
 
     assert data == {"vault_root": str(missing), "dark": True, "notes": []}
+
+
+def test_read_observe_summary_is_per_dimension_honest_dark(tmp_path, monkeypatch):
+    state = tmp_path / "coordinator-state.json"
+    state.write_text(json.dumps({
+        "lanes": {
+            "cc-live": {
+                "role": "cc-live",
+                "session": "tmux-live",
+                "platform": "codex",
+                "alive": True,
+                "idle": False,
+                "stalled": False,
+                "claimed_task": "",
+                "output_age_s": 1,
+                "relay_age_s": 2,
+            }
+        }
+    }))
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
+
+    def dark_http(_url, _timeout):
+        raise OSError("blocked test source")
+
+    monkeypatch.setattr(reins_read, "_observe_http_json", dark_http)
+
+    data = read_observe_summary({"council_root": "", "observe_api_url": "http://127.0.0.1:9"})
+    dims = {dim["key"]: dim for dim in data["dimensions"]}
+
+    assert data["dark"] is False
+    assert dims["agents"]["status"] == "live"
+    assert dims["agents"]["count"] == 1
+    assert "lanes=1" in dims["agents"]["summary"]
+    assert dims["gpu"]["status"] == "dark"
+    assert dims["gpu"]["count"] is None  # no fabricated zero when the source is unreachable
+    assert dims["drift"]["status"] == "dark"
+    assert dims["drift"]["count"] is None
+
+
+def test_read_observe_endpoint_returns_summary(tmp_path, monkeypatch):
+    state = tmp_path / "coordinator-state.json"
+    state.write_text(json.dumps({"lanes": {}}))
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
+    monkeypatch.setattr(reins_read, "_observe_http_json", lambda _url, _timeout: {"status": "ok", "count": 2})
+
+    app = build_app("", EXPECTED_DEFAULT_ALLOW, {"observe_api_url": "http://observe.test"})
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/observe")
+
+    data = endpoint()
+    dims = {dim["key"]: dim for dim in data["dimensions"]}
+    assert data["dark"] is False
+    assert dims["health"]["status"] == "live"  # local coordinator source was reachable, even empty
+    assert dims["health"]["count"] == 0
+    assert dims["gpu"]["status"] == "live"     # HTTP-backed dimension used the mocked observe API
+    assert dims["gpu"]["count"] == 2
 
 def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     monkeypatch.setenv("REINS_CONFIG", "/no/such/reins.toml")  # force the no-file path
