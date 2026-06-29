@@ -11571,6 +11571,12 @@ func (m Model) eventContextPane(w int) string {
 	b.WriteString(" " + grammar.C("brt", "EVENT CONTEXT") + grammar.C("mut", "  selected row, constraints, next legal moves") + "\n")
 	b.WriteString(rule + "\n")
 	line("state", state, stateTok)
+	// show-WHY legibility rail (classification→affordance seed): the live signals DRIVING this row's
+	// treatment, made legible — importance (the DOI/score allocator) → the state classification, plus the
+	// emergent relation (brushed peers). The signal is shown, not yet acted on. AIR-safe: score redacts
+	// per its field gate; the related count is derived from AIR-aware facets (never leaks a denied facet).
+	signalScore := grammar.Redact(ev.AIR, "score", fmt.Sprintf("%.2f", ev.Score), m.AIR)
+	line("signal", fmt.Sprintf("importance %s · %d related", signalScore, len(m.brushedEvents())), "mut")
 	line("subject", subj, "pri")
 	line("kind", kind, "blu")
 	line("actor", actor, airHue(grammar.LaneToken(ev.Actor), ev.AIR, "actor", m.AIR))
