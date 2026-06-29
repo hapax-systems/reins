@@ -126,6 +126,15 @@ func fetchCapabilitiesOnce(url string) tea.Msg {
 	return msg
 }
 
+func fetchVaultOnce(url string) tea.Msg {
+	notes, dark, err := api.FetchVault(url)
+	msg := model.VaultMsg{Notes: notes, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+
 func fetchGatesOnce(url string) tea.Msg {
 	gates, dark, err := api.FetchGates(url)
 	msg := model.GatesMsg{Gates: gates, Dark: dark}
@@ -171,6 +180,9 @@ func intakeTick(url string) tea.Cmd {
 func capabilitiesTick(url string) tea.Cmd {
 	return tea.Tick(12*time.Second, func(time.Time) tea.Msg { return fetchCapabilitiesOnce(url) })
 }
+func vaultTick(url string) tea.Cmd { // vault metadata is near-static -> a slow refresh
+	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchVaultOnce(url) })
+}
 func gatesTick(url string) tea.Cmd {
 	return tea.Tick(10*time.Second, func(time.Time) tea.Msg { return fetchGatesOnce(url) })
 }
@@ -199,7 +211,8 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchDomainsOnce(r.url) },
 		func() tea.Msg { return fetchTracesOnce(r.url) },
 		func() tea.Msg { return fetchTurnsOnce(r.m.TurnRole) },
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), beatTick(),
+		func() tea.Msg { return fetchVaultOnce(r.url) },
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), beatTick(),
 	)
 }
 
@@ -225,6 +238,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, intakeTick(r.url) // re-arm intake snapshot polling
 	case model.CapabilitiesMsg:
 		return r, capabilitiesTick(r.url) // re-arm capability-routing polling
+	case model.VaultMsg:
+		return r, vaultTick(r.url) // re-arm vault-metadata polling
 	case model.GatesMsg:
 		return r, gatesTick(r.url) // re-arm readiness/gate polling
 	case model.DomainsMsg:

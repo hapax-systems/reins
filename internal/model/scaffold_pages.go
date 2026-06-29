@@ -63,16 +63,34 @@ func (m Model) renderObserve(w int) string {
 		"honest-dark: aggregated from the cockpit read endpoint (localhost:8051) — the read-projection wire is pending. No shadow model, no fabricated state.")
 }
 
-// renderVault — E11.5b Obsidian research/planning navigation (titles + obsidian:// links; bodies deny).
+// renderVault — E11.5b Obsidian research/planning navigation, LIVE from /read/vault (titles + obsidian://
+// links; bodies default-deny, never fetched). AIR: the vault is operator-private life-planning (LDLC
+// air_class "private-life") → the list SEALS on air (the count airs, the titles do not). Honest-dark when
+// the endpoint is unreachable / vault_root unset.
 func (m Model) renderVault(w int) string {
-	return renderScaffoldPage(w, "VAULT", "Obsidian research/planning navigation — metadata + obsidian:// links",
-		[]scaffoldRow{
-			{"notes", "pending", "research/planning note titles + obsidian:// open"},
-			{"observations", "pending", "intake research observations (→ :intake)"},
-			{"backlinks", "dark", "backlink graph (deferred per spec)"},
-			{"search", "dark", "full-text body search (deferred — bodies default-deny)"},
-		},
-		"honest-dark: the vault read endpoint is pending. Bodies stay default-deny (AIR); this surfaces titles + obsidian:// deep-links + research-observation metadata, never raw note bodies.")
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(" " + grammar.C("brt", "VAULT") + grammar.C("mut", "  Obsidian research/planning — titles + obsidian:// links (bodies default-deny)") + "\n")
+	b.WriteString(" " + rule + "\n")
+	if m.AIR {
+		b.WriteString(" " + grammar.C("mut", fmt.Sprintf("▒▒▒ vault SEALED on air — %d notes (operator-private life-planning, not for the wire)", len(m.Vault))))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if m.VaultDark || len(m.Vault) == 0 {
+		b.WriteString(" " + grammar.C("mut", "(vault dark — set vault_root / REINS_VAULT_ROOT in config; metadata only, bodies never read)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for _, n := range m.Vault {
+		folder := n.Folder
+		if folder == "" {
+			folder = "·"
+		}
+		row := fmt.Sprintf("%-16s %s", clipRunes(folder, 16), n.Title)
+		b.WriteString(" " + grammar.C("2nd", "▸ ") + grammar.C("mut", clipRunes(row, maxVisible(10, w-4))) + "\n")
+	}
+	b.WriteString(" " + rule + "\n")
+	b.WriteString(" " + grammar.C("mut", fmt.Sprintf("%d notes · obsidian:// deep-links · bodies default-deny ([J] scrolls)", len(m.Vault))))
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderRdlc — E11.4 Research Development Lifecycle (Labrack) — honest-DARK by design (no fabricated cockpit).

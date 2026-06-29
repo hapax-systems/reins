@@ -350,6 +350,35 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 	return r.Capabilities, r.Dark, nil
 }
 
+type vaultResp struct {
+	VaultRoot string              `json:"vault_root"`
+	Dark      bool                `json:"dark"`
+	Notes     []grammar.VaultNote `json:"notes"`
+	Error     string              `json:"error"`
+}
+
+// FetchVault reads the Obsidian vault note METADATA (/read/vault) — titles/paths/links only, never
+// bodies. dark=true (unreachable or root missing) renders the :vault page honest-dark.
+func FetchVault(apiURL string) ([]grammar.VaultNote, bool, error) {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/vault")
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/vault"); err != nil {
+		return nil, true, err
+	}
+	var r vaultResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Error != "" {
+		return r.Notes, true, fmt.Errorf("%s", r.Error)
+	}
+	return r.Notes, r.Dark, nil
+}
+
 type gatesResp struct {
 	Dark  bool                `json:"dark"`
 	Error string              `json:"error"`

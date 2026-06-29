@@ -444,6 +444,8 @@ type Model struct {
 	CapabilitiesDark    bool
 	GatesDark           bool
 	DomainsDark         bool
+	Vault               []grammar.VaultNote // E11.5b Obsidian vault metadata (live /read/vault)
+	VaultDark           bool
 	DynamicsDark        bool
 	EpistemicsDark      bool
 	EventsError         string
@@ -1800,6 +1802,13 @@ func (m Model) FoldIntake(in grammar.IntakeSummary, dark bool) Model {
 }
 
 // FoldCapabilities: the pure projection for capability-routing source state.
+// FoldVault is the pure projection for :vault — live Obsidian metadata or honest-dark.
+func (m Model) FoldVault(notes []grammar.VaultNote, dark bool) Model {
+	m.Vault = notes
+	m.VaultDark = dark
+	return m
+}
+
 func (m Model) FoldCapabilities(caps grammar.CapabilitySummary, dark bool) Model {
 	m.Capabilities = caps
 	m.CapabilitiesDark = dark
@@ -2414,6 +2423,11 @@ type CapabilitiesMsg struct {
 	Dark         bool
 	Error        string
 }
+type VaultMsg struct {
+	Notes []grammar.VaultNote
+	Dark  bool
+	Error string
+}
 type GatesMsg struct {
 	Gates grammar.GateSummary
 	Dark  bool
@@ -2502,6 +2516,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.CapabilitiesError = v.Error
 		m.CapabilitiesSeq++
 		m.LastFold = "capabilities"
+		return m, nil
+	case VaultMsg:
+		m = m.FoldVault(v.Notes, v.Dark)
+		m.LastFold = "vault"
 		return m, nil
 	case GatesMsg:
 		m = m.FoldGates(v.Gates, v.Dark)
