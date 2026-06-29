@@ -1656,7 +1656,45 @@ func (m Model) coordinatorSelectionContext(w int) string {
 	ctx := fmt.Sprintf("   stage %s · prior %s · next %s · owner %s · %s · %s ties",
 		d(stage), d(prior), d(next), d(owner), critV, rel)
 	b.WriteString(" " + grammar.C("mut", clipRunes(ctx, maxVisible(8, w-1))) + "\n")
+	b.WriteString(m.coordContextReadout(t, w))
 	return b.String()
+}
+
+// coordContextReadout is the PROJECTION-2 line (tri-audience): WHAT IS LIVE in the coordinating session's
+// compressed context for the focused work-unit — the lane bound to it (resolved from the pane's OWN
+// cursor via ClaimedTask, never TurnRole), its route-binding (C2) and eval signals (readiness/blocker/
+// attention). Reins SHOWS what's live (it is not the injector — the dig ruling); the operator re-focuses.
+// AIR: the binding is disclosed only when claimed_task + task_id BOTH air (else the association leaks);
+// each eval token redacts per-field via the proven sessionFieldValueForAir+airHue pattern; honest-dark
+// when no lane is bound (or the binding is withheld on air).
+func (m Model) coordContextReadout(t grammar.Task, w int) string {
+	var sess grammar.Session
+	found := false
+	for _, s := range m.Sessions {
+		if s.ClaimedTask == "" || s.ClaimedTask != t.TaskID {
+			continue
+		}
+		if m.AIR && (s.AIR["claimed_task"] != "ok" || t.AIR["task_id"] != "ok") {
+			continue // disclosing this binding on air would leak a denied claimed_task/task_id
+		}
+		sess, found = s, true
+		break
+	}
+	if !found {
+		return " " + grammar.C("mut", "   coord ctx  no lane bound (or binding withheld on air)") + "\n"
+	}
+	role := sessionFieldValueForAir(sess, "role", m.AIR)
+	seg := grammar.C("2nd", "   coord ctx  ") +
+		grammar.C(airHue(grammar.LaneToken(sess.Role), sess.AIR, "role", m.AIR), "lane "+role)
+	if chip := sessionRouteChip(sess, m.AIR); chip != "" {
+		seg += grammar.C("org", " · route "+chip)
+	}
+	seg += grammar.C(airHue(readinessPaneToken(sess.Readiness), sess.AIR, "readiness", m.AIR), " · ready "+sessionFieldValueForAir(sess, "readiness", m.AIR))
+	if blk := sessionFieldValueForAir(sess, "blocker", m.AIR); strings.TrimSpace(blk) != "" && blk != "none" {
+		seg += grammar.C(airHue(blockerToken(sess.Blocker), sess.AIR, "blocker", m.AIR), " · blocker "+blk)
+	}
+	seg += grammar.C(airHue(attentionToken(sess.Attention), sess.AIR, "attention", m.AIR), " · attn "+sessionFieldValueForAir(sess, "attention", m.AIR))
+	return " " + seg + "\n"
 }
 
 func (m Model) bodyForPage(w, h int) string {
