@@ -11127,7 +11127,11 @@ func (m Model) turnSourceLabel() string {
 }
 
 func (m Model) turnListBody(w, h int) string {
+	topIdx, attnScore, _ := m.turnTopAttention()
 	visible := h - 5 // two-row lane rail + source label + rule + header
+	if attnScore > 0 {
+		visible-- // reserve the attention pointer line (E4.9 synergy 2 — the one turn that needs you)
+	}
 	if visible < 1 {
 		visible = 1
 	}
@@ -11159,11 +11163,17 @@ func (m Model) turnListBody(w, h int) string {
 		b.WriteString(" " + grammar.C("mut", "(no turn fixture loaded — CapabilityIO SESSION feed gated)") + "\n")
 		return b.String()
 	}
+	if p := m.turnAttentionPointer(w, start, visible); p != "" {
+		b.WriteString(p + "\n")
+	}
 	for i := start; i < start+visible && i < len(m.TurnLadder); i++ {
 		row := grammar.RenderTurnRow(m.TurnLadder[i], m.AIR)
-		if i == m.TurnFocus {
+		switch {
+		case i == m.TurnFocus:
 			b.WriteString(grammar.C("yel", m.focusGlyph()) + focusBar(row, w-1) + "\n")
-		} else {
+		case i == topIdx:
+			b.WriteString(grammar.C("yel", "‼") + " " + row + "\n") // E4.9 synergy 2 — the attention turn
+		default:
 			b.WriteString("  " + row + "\n")
 		}
 	}
