@@ -446,6 +446,8 @@ type Model struct {
 	DomainsDark         bool
 	Vault               []grammar.VaultNote // E11.5b Obsidian vault metadata (live /read/vault)
 	VaultDark           bool
+	Observe             []grammar.ObserveDimension // E11.7 whole-system awareness (live /read/observe)
+	ObserveDark         bool
 	DynamicsDark        bool
 	EpistemicsDark      bool
 	EventsError         string
@@ -1809,6 +1811,13 @@ func (m Model) FoldVault(notes []grammar.VaultNote, dark bool) Model {
 	return m
 }
 
+// FoldObserve is the pure projection for :observe — live whole-system dimensions or honest-dark.
+func (m Model) FoldObserve(dims []grammar.ObserveDimension, dark bool) Model {
+	m.Observe = dims
+	m.ObserveDark = dark
+	return m
+}
+
 func (m Model) FoldCapabilities(caps grammar.CapabilitySummary, dark bool) Model {
 	m.Capabilities = caps
 	m.CapabilitiesDark = dark
@@ -2428,6 +2437,11 @@ type VaultMsg struct {
 	Dark  bool
 	Error string
 }
+type ObserveMsg struct {
+	Dimensions []grammar.ObserveDimension
+	Dark       bool
+	Error      string
+}
 type GatesMsg struct {
 	Gates grammar.GateSummary
 	Dark  bool
@@ -2549,6 +2563,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case VaultMsg:
 		m = m.FoldVault(v.Notes, v.Dark)
 		m.LastFold = "vault"
+		return m, nil
+	case ObserveMsg:
+		m = m.FoldObserve(v.Dimensions, v.Dark)
+		m.LastFold = "observe"
 		return m, nil
 	case GatesMsg:
 		m = m.FoldGates(v.Gates, v.Dark)

@@ -387,6 +387,34 @@ type vaultResp struct {
 	Error     string              `json:"error"`
 }
 
+type observeResp struct {
+	Dark       bool                       `json:"dark"`
+	Error      string                     `json:"error"`
+	Dimensions []grammar.ObserveDimension `json:"dimensions"`
+}
+
+// FetchObserve reads the whole-system awareness aggregate (/read/observe) — per-dimension live/dark, raw
+// (the Go renderObserve applies AIR). dark=true renders the :observe page honest-dark.
+func FetchObserve(apiURL string) ([]grammar.ObserveDimension, bool, error) {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/observe")
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/observe"); err != nil {
+		return nil, true, err
+	}
+	var r observeResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Error != "" {
+		return r.Dimensions, true, fmt.Errorf("%s", r.Error)
+	}
+	return r.Dimensions, r.Dark, nil
+}
+
 // FetchVault reads the Obsidian vault note METADATA (/read/vault) — titles/paths/links only, never
 // bodies. dark=true (unreachable or root missing) renders the :vault page honest-dark.
 func FetchVault(apiURL string) ([]grammar.VaultNote, bool, error) {

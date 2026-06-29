@@ -45,22 +45,42 @@ func renderScaffoldPage(w int, title, tagline string, rows []scaffoldRow, note s
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderObserve — E11.7 whole-system awareness (read-only projection; never mints authority).
+// renderObserve — E11.7 whole-system awareness, LIVE from /read/observe (read-only projection; never mints
+// authority). Per-dimension honest-dark (a dimension whose source is unreachable shows ·dark, no fabricated
+// count). AIR: whole-system state is operator-private → the VALUES (summary/count) SEAL on air while the
+// dimension KEY + live/dark STATUS air (structural skeleton). Honest-dark when the whole endpoint is down.
 func (m Model) renderObserve(w int) string {
-	return renderScaffoldPage(w, "OBSERVE", "whole-system awareness — read-only projection, never minting authority",
-		[]scaffoldRow{
-			{"health", "pending", "service/unit health roll-up (cockpit /health)"},
-			{"drift", "pending", "config/state drift items"},
-			{"nudges", "pending", "actionable nudges + dismissals"},
-			{"agents", "pending", "fleet roster + lane state (→ :yard)"},
-			{"governance", "pending", "gate stack + outcomes (→ :govern)"},
-			{"consent", "pending", "HKP consent/egress posture (→ :relational)"},
-			{"profile", "pending", "operator profile dimensions"},
-			{"cost", "pending", "per-route spend (→ :dispatch economics)"},
-			{"gpu", "pending", "dual-rig VRAM / utilization"},
-			{"stimmung", "pending", "ambient operator stance"},
-		},
-		"honest-dark: aggregated from the cockpit read endpoint (localhost:8051) — the read-projection wire is pending. No shadow model, no fabricated state.")
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(" " + grammar.C("brt", "OBSERVE") + grammar.C("mut", "  whole-system awareness — read-only projection, never minting authority") + "\n")
+	b.WriteString(" " + rule + "\n")
+	if m.ObserveDark || len(m.Observe) == 0 {
+		b.WriteString(" " + grammar.C("mut", "(observe dark — the cockpit read endpoint is unreachable; no fabricated state)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for _, dim := range m.Observe {
+		g, tok := "·", "mut"
+		if dim.Status == "live" {
+			g, tok = "●", "grn"
+		}
+		val := grammar.C("mut", "▒▒▒")
+		if !m.AIR {
+			summary := dim.Summary
+			if dim.Count != nil {
+				summary = fmt.Sprintf("%s (%d)", strings.TrimSpace(summary), *dim.Count)
+			}
+			if strings.TrimSpace(summary) == "" {
+				summary = "—"
+			}
+			val = grammar.C("mut", clipRunes(summary, maxVisible(8, w-20)))
+		}
+		b.WriteString(" " + grammar.C(tok, g) + " " + grammar.C("2nd", fmt.Sprintf("%-12s", dim.Key)) + " " + val + "\n")
+	}
+	if m.AIR {
+		b.WriteString(" " + rule + "\n")
+		b.WriteString(" " + grammar.C("mut", "▒ values sealed on air — whole-system state is operator-private (status airs, values do not)"))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderVault — E11.5b Obsidian research/planning navigation, LIVE from /read/vault (titles + obsidian://
