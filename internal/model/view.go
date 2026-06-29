@@ -809,10 +809,33 @@ func (m Model) dispatchLedgerPane(w, h int) string {
 // dispatchMeasurementPane renders the measurement readout (the secondary, derived from the same
 // ledger): the measurement-completion summary (cost/quality/outcome gaps COUNTED + named, never
 // faked), the latent-resource utilization split, and the standing blind-spots. Measurement-first.
+// econCells projects the live dispatch ledger into (task×capability) economics cells. v̂ is UNBUILT
+// (dev2's STEP-7 producer) → every live cell carries ValueStatus "absent", so the partition honestly
+// reads FRONTIER UNDEFINED until the producer ships (never a fabricated rank). Cost rides the ledger's
+// pointer (nil = UNMEASURED). Gate-state from !Launched — orthogonal to dominance.
+func (m Model) econCells() []grammar.EconCell {
+	cells := make([]grammar.EconCell, 0, len(m.DispatchRecords))
+	for _, r := range m.DispatchRecords {
+		cells = append(cells, grammar.EconCell{
+			Capability:  r.Capability,
+			Task:        r.CCTask,
+			CostUSD:     r.CostUSD,
+			ValueStatus: "absent", // v̂ producer unbuilt
+			Conf:        "candidate",
+			Held:        !r.Launched,
+		})
+	}
+	return cells
+}
+
 func (m Model) dispatchMeasurementPane(w int) string {
 	var b strings.Builder
 	b.WriteString(" " + grammar.C("brt", "MEASUREMENT") + grammar.C("mut", "  derived from the ledger") + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+	// the (task×capability) Pareto PARTITION (frontier/dominated/incomparable) — a partial order, never a
+	// rank. AIR policy: $cost denies on air → the partition SEALS (value airs, cost does not).
+	part := grammar.ClassifyEcon(m.econCells(), m.AIR, func(axis string) bool { return axis == "value" })
+	b.WriteString(grammar.RenderEconPartition(part, m.AIR, false, w) + "\n\n")
 	b.WriteString(grammar.RenderMeasurementSummary(grammar.SummarizeMeasurement(m.DispatchRecords)) + "\n\n")
 	b.WriteString(grammar.RenderUtilization(grammar.Utilization(m.DispatchRecords, dispatchRoutableSet)) + "\n\n")
 	b.WriteString(grammar.RenderDispatchBlindSpots())
