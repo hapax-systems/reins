@@ -29,7 +29,12 @@ type DispatchRecord struct {
 	Outcome           *string  `json:"outcome"`        // null = in-flight (not done)
 	CostUSD           *float64 `json:"cost_usd"`       // null = UNMEASURED (never $0.00)
 	QualitySignal     *string  `json:"quality_signal"` // null = asserted/unverified (never a fake score)
-	SessionRole       string   `json:"session_role"`
+	// STEP-7 v̂ producer (dev2 #4338) consumer-readiness: the read-API serves these once #4338 lands; until
+	// then they arrive zero/"" and econCells reads value_status "" as "absent" (frontier honestly UNDEFINED).
+	ValueHat    *float64 `json:"value_hat"`    // STEP-7 Beta-posterior mean (nil ⇔ value_status "absent")
+	ValueStatus string   `json:"value_status"` // "measured" | "projected" | "absent" ("" ⇒ absent)
+	Fit         *float64 `json:"fit"`          // requirement_vector ↔ routing_class match (nil = unmeasured)
+	SessionRole string   `json:"session_role"`
 }
 
 // dispatchDash renders an empty routing field as an em-dash so a blank platform/mode reads honestly.

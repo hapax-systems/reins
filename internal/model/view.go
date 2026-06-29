@@ -816,11 +816,20 @@ func (m Model) dispatchLedgerPane(w, h int) string {
 func (m Model) econCells() []grammar.EconCell {
 	cells := make([]grammar.EconCell, 0, len(m.DispatchRecords))
 	for _, r := range m.DispatchRecords {
+		// consumer-ready for STEP-7 (#4338): take the served v̂/value_status/fit when present; an unserved
+		// record (value_status "") reads as ABSENT — the frontier stays honestly UNDEFINED, never fabricated,
+		// and lights up the instant the producer serves measured cells (zero further reins change).
+		status := r.ValueStatus
+		if status == "" {
+			status = "absent"
+		}
 		cells = append(cells, grammar.EconCell{
 			Capability:  r.Capability,
 			Task:        r.CCTask,
+			ValueHat:    r.ValueHat,
+			ValueStatus: status,
 			CostUSD:     r.CostUSD,
-			ValueStatus: "absent", // v̂ producer unbuilt
+			Fit:         r.Fit,
 			Conf:        "candidate",
 			Held:        !r.Launched,
 		})
