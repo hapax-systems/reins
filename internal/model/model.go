@@ -1640,6 +1640,18 @@ func eventReactionText(ev grammar.Event) string {
 	return strings.TrimSpace(strings.Join([]string{ev.Summary, ev.Subject}, " "))
 }
 
+// reactionEffectIsLocal reports whether a /on reaction effect is a LOCAL (in-cockpit) effect that reins
+// may apply directly. Anything that leaves the box (ntfy/webhook/post/email/slack/http) is EGRESS and
+// stays gated under the egress-always-gate rule — reins never emits off-box from an automation.
+func reactionEffectIsLocal(effect string) bool {
+	switch strings.ToLower(strings.TrimSpace(effect)) {
+	case "flash", "log", "echo", "highlight", "status", "bell":
+		return true
+	default:
+		return false // ntfy / webhook / post / email / slack / http / … → egress, gated
+	}
+}
+
 func (m Model) appendStatusNotice(notice string) Model {
 	if strings.TrimSpace(m.Status) == "" {
 		m.Status = notice
@@ -1660,7 +1672,16 @@ func (m Model) fireReactionsForNewEvents(evs []grammar.Event, seen map[string]st
 		}
 		seen[key] = struct{}{}
 		for _, r := range m.Reactions.Fired(ev.Kind, eventReactionText(ev)) {
-			m = m.appendStatusNotice(fmt.Sprintf("armed reaction fired: %s (would emit %s; NOT wired)", r.Effect, r.Effect))
+			// E8.2 command-as-automation, PREVIEW-ONLY by design: reins is a PROJECTION, so an armed
+			// reaction SURFACES that it fired but never executes the effect itself (effects belong to the
+			// substrate — executing them here would fork divergent state across broadcast/multi-instance
+			// views and breach never-mint). The notice names WHY it's unwired: a network effect is egress
+			// (gated), a local one is preview pending the substrate hook.
+			gated := ""
+			if !reactionEffectIsLocal(r.Effect) {
+				gated = " — network egress gated"
+			}
+			m = m.appendStatusNotice(fmt.Sprintf("armed reaction fired: %s (would emit %s; NOT wired%s)", r.Effect, r.Effect, gated))
 		}
 	}
 	return m
