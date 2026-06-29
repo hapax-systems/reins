@@ -157,35 +157,44 @@ func shortKind(k string) string {
 // WHAT. Subject is wide enough to read; actor is lane-colored; the "what" falls back to the kind
 // when there is no summary (so a row is never just a truncated stub). `airOn` redacts per field.
 func RenderEventRow(ev Event, airOn bool) string {
-	ts := compactTS(ev.TS)
-	if airOn && ev.AIR["ts"] != "ok" {
-		ts = pad("▒▒▒▒▒▒▒▒", 8)
+	reg := FacetRegistry{} // built-in default binding (same offline path RenderTraceRow uses)
+	d := func(field string) bool { return ev.AIR[field] != "ok" }
+
+	tsText := compactTS(ev.TS)
+	tsDenied := d("ts")
+	if airOn && tsDenied {
+		tsText = "▒▒▒▒▒▒▒▒" // legacy full-width timestamp redaction, not the generic ▒▒▒ token
+		tsDenied = false
 	}
-	bar := ScoreBar(ev.Score)
-	if airOn && ev.AIR["score"] != "ok" {
-		bar = C("mut", "▒▒▒▒")
+	ts := traceGlyphLabel(reg, "time", CellValue{Text: tsText, Denied: tsDenied, Width: 8}, airOn)
+
+	scoreDenied := d("score")
+	scoreCell := EncodeCell(reg, "measure", CellValue{Magnitude: ev.Score, Denied: scoreDenied}, airOn)
+	bar := traceEncodedGlyphLabel(scoreCell)
+	if airOn && scoreDenied {
+		bar = C("mut", "▒▒▒▒") // legacy four-cell score redaction; the row shape is screenshot-vetted
 	}
-	glyph := Glyph(ev.Kind) // single rune — colorized AFTER width math
-	if airOn && ev.AIR["kind"] != "ok" {
+
+	kindDenied := d("kind")
+	glyphCell := EncodeCell(reg, "action", CellValue{Text: Glyph(ev.Kind), Denied: kindDenied}, airOn)
+	glyph := ansi.Strip(glyphCell.Rendered) // single rune — colorized AFTER width math
+	if airOn && kindDenied {
 		glyph = C("mut", "▒")
 	} else if sev := kindSeverity(ev.Kind); sev != "" {
 		tok := palette.SeverityToken(sev)
-		if !(airOn && ev.AIR["score"] != "ok") {
+		if !(airOn && scoreDenied) {
 			bar = pal.Colorize(tok, bar)
 		}
 		glyph = pal.Colorize(tok, glyph)
 	}
-	subj := C("pri", dotsOr(redact(ev.AIR, "subject", ev.Subject, airOn), 26))
-	whoTok := LaneToken(ev.Actor)
-	if airOn && ev.AIR["actor"] != "ok" {
-		whoTok = "mut"
-	}
-	who := C(whoTok, dotsOr(redact(ev.AIR, "actor", ev.Actor, airOn), 10))
+
+	subj := traceTextCell(reg, "identity", "pri", CellValue{Text: ev.Subject, Denied: d("subject"), Width: 26}, airOn)
+	who := EncodeCell(reg, "ownership", CellValue{Text: ev.Actor, Denied: d("actor"), Width: 10}, airOn).Rendered
 	what := ev.Summary
 	if strings.TrimSpace(what) == "" {
 		what = shortKind(ev.Kind)
 	}
-	what = C("mut", redact(ev.AIR, "summary", what, airOn))
+	what = traceTextCell(reg, "variant", "mut", CellValue{Text: what, Denied: d("summary")}, airOn)
 	return fmt.Sprintf("%s %s%s %s %s %s", ts, bar, glyph, subj, who, what)
 }
 
