@@ -11070,8 +11070,54 @@ func (m Model) traceDoiSelection(budget int) (order []int, folded int) {
 	return doiVisible(imps, m.TFocus, budget)
 }
 
+// traceCostRollup is the E0.3 aggregate spend/token signal across the loaded traces — the offload-thesis
+// readout the per-trace list can't show at a glance. AIR-safe by the derived-channel discipline: an
+// aggregate over a DENIED field would leak it, so any per-trace denial SEALS that aggregate. $cost is
+// never in the AIR allowlist (the operator's deny-$cost livestream policy) → cost always seals on air.
+func (m Model) traceCostRollup(w int) string {
+	n := len(m.Traces)
+	if n == 0 {
+		return ""
+	}
+	var totTok int
+	tokSealed := false
+	lat := make([]int, 0, n)
+	latSealed := false
+	var totCost float64
+	for _, tr := range m.Traces {
+		if m.AIR && tr.AIR["total_tok"] != "ok" {
+			tokSealed = true
+		} else {
+			totTok += tr.TotalTok
+		}
+		if m.AIR && tr.AIR["latency_ms"] != "ok" {
+			latSealed = true
+		} else {
+			lat = append(lat, tr.LatencyMs)
+		}
+		totCost += tr.Cost
+	}
+	tok := fmt.Sprintf("%d tok", totTok)
+	if tokSealed {
+		tok = "▒▒▒ tok"
+	}
+	cost := fmt.Sprintf("$%.4f", totCost)
+	if m.AIR { // $cost denied on the livestream (not in the AIR allowlist) → seal the aggregate
+		cost = "$ ▒▒▒"
+	}
+	p50 := "—"
+	if len(lat) > 0 && !latSealed {
+		sort.Ints(lat)
+		p50 = fmt.Sprintf("%dms", lat[len(lat)/2])
+	} else if latSealed {
+		p50 = "▒▒▒"
+	}
+	row := fmt.Sprintf("Σ %d traces · %s · %s · p50 %s", n, tok, cost, p50)
+	return " " + grammar.C("2nd", "ROLLUP") + grammar.C("mut", "  "+row)
+}
+
 func (m Model) tracesListBody(w, h int) string {
-	visible := h - 2 // context + header
+	visible := h - 3 // context + rollup + header
 	if visible < 1 {
 		visible = 1
 	}
@@ -11084,6 +11130,7 @@ func (m Model) tracesListBody(w, h int) string {
 
 	var b strings.Builder
 	b.WriteString(m.contextLine() + "\n")
+	b.WriteString(m.traceCostRollup(w) + "\n")
 	b.WriteString("  " + grammar.RenderTraceHeader() + "\n")
 	brushed := m.brushedTraces()
 	for _, i := range order {
