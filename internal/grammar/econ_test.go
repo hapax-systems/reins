@@ -121,3 +121,23 @@ func TestRenderEconPartitionBandsAndAirSeal(t *testing.T) {
 		t.Fatalf("on air a denied $cost must not steer the rendered partition (byte-identical):\nHI:\n%s\nLO:\n%s", hi, lo)
 	}
 }
+
+// AIR derived-channel floor for the VALUE axis (the latent leak the adversarial verify caught, armed by
+// the STEP-7 consumer-readiness): on air, two partitions differing ONLY in the measured v̂ magnitude must
+// render BYTE-IDENTICALLY — the seal covers value, not just cost/task.
+func TestRenderEconValueMagnitudeSealsOnAir(t *testing.T) {
+	mk := func(vhat float64) string {
+		cells := []EconCell{
+			{Capability: "glm", ValueStatus: "measured", ValueHat: f(vhat), CostUSD: f(0.001)},
+			{Capability: "codex", ValueStatus: "measured", ValueHat: f(7), CostUSD: f(0.002)},
+		}
+		return ansi.Strip(RenderEconPartition(ClassifyEcon(cells, true, func(axis string) bool { return false }), true, false, 80))
+	}
+	hi, lo := mk(99.9), mk(0.1)
+	if hi != lo {
+		t.Fatalf("on air the measured v̂ magnitude must not steer the render (byte-identical):\nHI:\n%s\nLO:\n%s", hi, lo)
+	}
+	if strings.Contains(hi, "99.9") || strings.Contains(hi, "0.1") {
+		t.Fatalf("the v̂ magnitude must not appear on air:\n%s", hi)
+	}
+}

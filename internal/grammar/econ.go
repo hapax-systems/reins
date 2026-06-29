@@ -115,7 +115,15 @@ func econRow(pl EconPlacement, airOn bool, costAirs bool) string {
 	val := C("mut", "val· absent ")
 	switch {
 	case c.ValueStatus == "measured" && c.ValueHat != nil:
-		val = C("eme", fmt.Sprintf("val◉ %-6.1f", *c.ValueHat))
+		// v̂ is an economic estimate, NOT a structural-skeleton field → it DENIES on air (not in the AIR
+		// allowlist, same posture as cost). Redact the magnitude so the SEALED partition is truly
+		// byte-identical regardless of the withheld v̂ (the derived-channel/composition-leak floor — the
+		// leak STEP-7's measured cells would otherwise arm: the seal claim covered cost/task, not value).
+		if airOn {
+			val = C("mut", "val◉ ▒▒▒  ")
+		} else {
+			val = C("eme", fmt.Sprintf("val◉ %-6.1f", *c.ValueHat))
+		}
 	case c.ValueStatus == "projected":
 		val = C("mut", "val◍ proj  ")
 	}
