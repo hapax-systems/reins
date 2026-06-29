@@ -163,6 +163,24 @@ def test_read_session_turns_unknown_role_is_honest_dark():
     assert "no turn replay fixture" in data["error"]
 
 
+def test_read_session_turn_blocks_are_honest_empty_for_any_role_and_ts():
+    app = build_app("", EXPECTED_DEFAULT_ALLOW)
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/read/session/{role}/turns/{ts}/blocks"
+    )
+
+    for role, ts in (
+        ("cc-reins", "2026-06-26T18:40:05Z"),
+        ("no-such-role", "not-a-fixture-turn"),
+    ):
+        data = endpoint(role, ts)
+        assert data["dark"] is True
+        assert data["blocks"] == []
+        assert "no turn block stream" in data["error"]
+
+
 def test_to_task_shape_and_air():
     t = {"task_id": "x-1", "stage": "S6", "authority_case": "CASE-1", "no_go": {"blocked": True, "ok": False}}
     out = to_task("x-1", t, allowlist=["task_id", "stage", "no_go"])

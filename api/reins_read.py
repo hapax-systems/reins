@@ -4031,6 +4031,20 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "turns": [], "oldest_ts": ""}
 
+    @app.get("/read/session/{role}/turns/{ts}/blocks")
+    def read_session_turn_blocks(role: str, ts: str) -> dict:
+        try:
+            # Consumer-ahead read wire: no fixture block data exists, and CapabilityIO
+            # capture-output has not yet promoted real per-turn block streams into the READ API.
+            # Stay honest-empty for every role/turn instead of fabricating demo detail blocks.
+            return {
+                "dark": True,
+                "error": f"no turn block stream for session role/turn: {role}/{ts}",
+                "blocks": [],
+            }
+        except Exception as e:  # honest-dark
+            return {"dark": True, "error": str(e), "blocks": []}
+
     @app.get("/read/intake")
     def read_intake() -> dict:
         try:
