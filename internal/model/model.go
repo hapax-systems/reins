@@ -44,6 +44,7 @@ const (
 	PageVault        = 26 // E11.5b Obsidian research/planning navigation (titles + obsidian:// links; bodies deny)
 	PageRdlc         = 27 // E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists
 	PagePresence     = 28 // E11.8 presence-plane binder (figure/control vs ground/presence) — honest-dark pending agy
+	PageDeck         = 29 // E8.3 DECK — the non-evicting operator-readout history (no-loss, vs the event STREAM)
 )
 
 const (
@@ -498,6 +499,7 @@ type Model struct {
 	EpiFocus            int                // selected epistemic posture row
 	IntentFocus         int                // selected governed target row on :intent
 	RefScroll           int                // scroll offset for full-width reference pages (:dynamics/:help/:legend/:commands/:windows)
+	Deck                []string           // E8.3 DECK: non-evicting operator-readout history (vs the evicting event STREAM) — no-loss
 	Ring                []RingEntry        // the yank kill-ring (most-recent first)
 	DoorOpen            bool               // the /whois full-screen drill-in is open for the focused task
 	SessionDoorOpen     bool               // the /session full-screen lane card is open for the focused session
@@ -1653,11 +1655,32 @@ func reactionEffectIsLocal(effect string) bool {
 }
 
 func (m Model) appendStatusNotice(notice string) Model {
+	m = m.deckPush(notice)
 	if strings.TrimSpace(m.Status) == "" {
 		m.Status = notice
 		return m
 	}
 	m.Status += "\n" + notice
+	return m
+}
+
+// deckPush records an operator-facing readout into the non-evicting DECK (E8.3). The event STREAM windows
+// and drops; the DECK is the no-loss audit of what reins told the operator — it survives a stream clear
+// and the /lastlog window. Bounded at deckCap (a generous ceiling, not a 1-screen window).
+const deckCap = 500
+
+func (m Model) deckPush(notice string) Model {
+	notice = strings.TrimSpace(notice)
+	if notice == "" {
+		return m
+	}
+	if n := len(m.Deck); n > 0 && m.Deck[n-1] == notice {
+		return m // dedup: the Exec wrapper and appendStatusNotice can both push the same final readout
+	}
+	m.Deck = append(m.Deck, notice)
+	if len(m.Deck) > deckCap {
+		m.Deck = m.Deck[len(m.Deck)-deckCap:]
+	}
 	return m
 }
 
@@ -1902,6 +1925,7 @@ var verbs = []verbDef{
 	{name: "vault", aliases: []string{"obsidian"}, kind: commandRead, group: "window", gloss: "E11.5 Obsidian research/planning nav — titles + obsidian:// links (bodies default-deny)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "rdlc", aliases: []string{"claims", "labrack"}, kind: commandRead, group: "window", gloss: "E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "presence", aliases: []string{"concourse"}, kind: commandRead, group: "window", gloss: "E11.8 presence-plane binder — figure/control vs ground/presence (honest-dark, pending design)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "deck", kind: commandRead, group: "window", gloss: "E8.3 the non-evicting operator-readout DECK — no-loss history vs the windowed event STREAM", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "commands", aliases: []string{"cmds"}, kind: commandRead, group: "registry", gloss: "open the unified command catalog", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2048,6 +2072,9 @@ func (m Model) Exec(line string) Model {
 	case "presence", "concourse":
 		m = m.switchPage(PagePresence)
 		m.Status = ":presence"
+	case "deck":
+		m = m.switchPage(PageDeck)
+		m.Status = ":deck"
 	case "air":
 		switch arg0(args) {
 		case "on":

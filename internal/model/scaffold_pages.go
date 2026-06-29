@@ -87,6 +87,28 @@ func (m Model) renderRdlc(w int) string {
 		"honest-dark: the RDLC model is not yet defined — no fabricated claim cockpit is shown. When the RDLC substrate exists this surfaces claims/observations/validation/evidence at the SDLC parity floor.")
 }
 
+// renderDeck — E8.3 the DECK: the non-evicting operator-readout history (no-loss), vs the windowed event
+// STREAM. AIR-safe: the deck holds rendered readouts captured OFF-air (possibly cleartext), so on air it
+// SEALS — the count airs, the content does not (an operator-private history must not replay on the wire).
+func (m Model) renderDeck(w int) string {
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(" " + grammar.C("brt", "DECK") + grammar.C("mut", "  operator-readout history — no-loss (survives the event STREAM window)") + "\n")
+	b.WriteString(" " + rule + "\n")
+	if m.AIR {
+		b.WriteString(" " + grammar.C("mut", fmt.Sprintf("▒▒▒ deck SEALED on air — %d readouts (operator-private history, not for the wire)", len(m.Deck))))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	if len(m.Deck) == 0 {
+		b.WriteString(" " + grammar.C("mut", "(no readouts yet — operator-facing notices accumulate here, newest last)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for _, r := range m.Deck {
+		b.WriteString(" " + grammar.C("2nd", "▸ ") + grammar.C("mut", clipRunes(r, maxVisible(10, w-4))) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // renderPresence — E11.8 presence-plane binder (figure/control vs ground/presence) — honest-dark pending agy.
 func (m Model) renderPresence(w int) string {
 	return renderScaffoldPage(w, "PRESENCE", "Section / Figure-Ground / Concourse — the presence-plane binder",

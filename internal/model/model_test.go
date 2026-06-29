@@ -257,7 +257,7 @@ func TestRegistrySlackRowsArePageSpecific(t *testing.T) {
 		page int
 		want []string
 	}{
-		{name: "commands", page: PageCommands, want: []string{"read:28", "arg verbs", "mutation surface"}},
+		{name: "commands", page: PageCommands, want: []string{"read:29", "arg verbs", "mutation surface"}},
 		{name: "windows", page: PageWindows, want: []string{"registered:25", "linked:8", "source-only:15"}},
 		{name: "surfaces", page: PageSurfaces, want: []string{"mode:4", "projection:12", "open=[:]"}},
 		{name: "intent", page: PageIntent, want: []string{"resume", "9 targets", "preview only", "{{sel.*}}"}},
@@ -426,7 +426,7 @@ func TestTitleBarRendersChannelHotlistWithActivity(t *testing.T) {
 	m.Width, m.Height, m.Page = 120, 40, PageSessions
 
 	title := ansi.Strip(m.viewTitle(300))
-	for _, want := range []string{"REINS", "win", "1.events:", "2.tasks:2!1", "‹3.sess:1!1›", "Y.yard:2!1", "R.ready:1!0", "I.obs", "C.caps:18c!12", "4.dyn:1@all", "A.loops:0L", "X.axes:6A", ".ident:4I", "E.epi", "5.help:ref", "B.consent:4A6", "6.cmds:32", "7.wins:25", "8.intent:9", "9.surf:35", "0.doms:17", "L.life:6", "+3›"} {
+	for _, want := range []string{"REINS", "win", "1.events:", "2.tasks:2!1", "‹3.sess:1!1›", "Y.yard:2!1", "R.ready:1!0", "I.obs", "C.caps:18c!12", "4.dyn:1@all", "A.loops:0L", "X.axes:6A", ".ident:4I", "E.epi", "5.help:ref", "B.consent:4A6", "6.cmds:33", "7.wins:25", "8.intent:9", "9.surf:35", "0.doms:17", "L.life:6", "+3›"} {
 		if !strings.Contains(title, want) {
 			t.Fatalf("title hotlist missing %q:\n%s", want, title)
 		}
@@ -2736,8 +2736,8 @@ func TestNavigableCompletion(t *testing.T) {
 }
 
 func TestWhichKeyMenu(t *testing.T) {
-	if mv := matchVerbs("d"); len(mv) != 3 || mv[0].name != "dispatch" || mv[1].name != "dynamics" || mv[2].name != "domains" {
-		t.Fatalf("'d' should match dispatch, dynamics, domains, got %v", mv)
+	if mv := matchVerbs("d"); len(mv) != 4 || mv[0].name != "dispatch" || mv[1].name != "dynamics" || mv[2].name != "deck" || mv[3].name != "domains" {
+		t.Fatalf("'d' should match dispatch, dynamics, deck, domains, got %v", mv)
 	}
 	if mv := matchVerbs("dy"); len(mv) != 1 || mv[0].name != "dynamics" {
 		t.Fatalf("'dy' should narrow to dynamics, got %v", mv)
@@ -2979,7 +2979,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		t.Fatalf(":commands j should move command focus, focus=%d status=%q", cmds.CommandFocus, cmds.Status)
 	}
 	cmdView = ansi.Strip(cmds.View())
-	for _, want := range []string{"tasks (t)", "read/window", "selected    tasks (t)", "[j/k]command 2/32"} {
+	for _, want := range []string{"tasks (t)", "read/window", "selected    tasks (t)", "[j/k]command 2/33"} {
 		if !strings.Contains(cmdView, want) {
 			t.Fatalf("commands selected-row context missing %q:\n%s", want, cmdView)
 		}

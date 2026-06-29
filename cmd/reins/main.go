@@ -346,6 +346,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageRdlc, true
 	case "presence", "concourse":
 		return model.PagePresence, true
+	case "deck":
+		return model.PageDeck, true
 	}
 	return 0, false
 }
