@@ -156,8 +156,18 @@ class CommandLedger:
 
 
 def ledger_path() -> str:
+    env = os.environ.get("REINS_COMMAND_LEDGER", "").strip()
+    if env:
+        return env
     home = os.path.expanduser("~")
     return os.path.join(home, ".cache", "hapax", "reins", "commands.jsonl")
+
+
+def iso_utc_now() -> str:
+    """Production clock for the ledger — ISO-8601 UTC. Injected so tests stay deterministic."""
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def read_commands(path: str | None, allowlist: list[str] | None = None, limit: int = 80) -> dict:

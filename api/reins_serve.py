@@ -113,29 +113,53 @@ def _resume_preview_closures():
     return verify, preflight, transport
 
 
-def _mount_command_router(app: FastAPI) -> None:
+def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
     """The verb-table router. Raises on construction failure — the caller degrades
-    to read-only and discloses (never a half-mounted write surface)."""
+    to read-only and discloses (never a half-mounted write surface).
+
+    Every attempt is WITNESSED through the durable ledger (design pack A3.2): a DEMAND row
+    is recorded BEFORE the wired-gate (so even a gated/unregistered attempt leaves a
+    demand+verdict pair), and a VERDICT row records the outcome. Idempotency is the ledger's
+    durable seen-set — the in-memory map is retired (a replayed key across a restart is a
+    duplicate, not a re-invoke). /read/commands projects these rows, so the frontdoor is
+    witnessed in the RUNNING server, not just the module."""
     verify, preflight, transport = _resume_preview_closures()
-    emitted: dict[str, str] = {}
 
     @app.post("/command/{verb}")
     def command(verb: str, req: reins_command.CommandRequest) -> JSONResponse:
+        # 1. WITNESS the demand first — durable + idempotent, for every verb (A3.2).
+        demand = ledger.record_demand(
+            verb, req.target, req.idempotency_key,
+            reins_ledger.CommandRefs(command_id="demand-" + verb),
+        )
+        eid = demand["event_id"]
+        if demand.get("duplicate"):
+            ledger.record_verdict(eid, "idempotent-replay", 200)
+            return JSONResponse(
+                {"status": "idempotent-replay", "http": 200, "duplicate": True,
+                 "event_id": eid, "reason": "replayed idempotency_key — durable dedup"},
+                status_code=200,
+            )
+
         spec = VERB_TABLE.get(verb)
         if spec is None:
+            ledger.record_verdict(eid, "unregistered", 501, f"unregistered verb: {verb}")
             return JSONResponse(
-                {"status": "not-implemented", "http": 501, "wired": False,
+                {"status": "not-implemented", "http": 501, "wired": False, "event_id": eid,
                  "reason": f"unregistered verb: {verb}"},
                 status_code=501,
             )
         if not spec.get("wired"):
+            reason = (f"{verb} is declared but not wired — the governed rail "
+                      "(demand receipt → verify → preflight → transport → witness) "
+                      "arms at U7; no ungated path exists")
+            ledger.record_verdict(eid, "not-wired", 501, reason)
             return JSONResponse(
-                {"status": "not-wired", "http": 501, "wired": False,
-                 "reason": f"{verb} is declared but not wired — the governed rail "
-                           "(demand receipt → verify → preflight → transport → witness) "
-                           "lands at U3+; no ungated path exists"},
+                {"status": "not-wired", "http": 501, "wired": False, "event_id": eid,
+                 "reason": reason},
                 status_code=501,
             )
+
         envelope = reins_command.Envelope(
             verb=verb,
             target=req.target,
@@ -143,24 +167,30 @@ def _mount_command_router(app: FastAPI) -> None:
             preflight_receipt=req.preflight_receipt,
             idempotency_key=req.idempotency_key,
         )
+        # the ledger already deduped the demand, so route_command sees a fresh emitted map.
         resp = reins_command.route_command(
             envelope,
             verify_authority=verify,
             preflight=preflight,
             transport=transport,
-            already_emitted=emitted,
+            already_emitted={},
         )
-        if resp.status == "ok" and resp.receipt_id:
-            emitted[envelope.idempotency_key] = resp.receipt_id
-        return JSONResponse(reins_command._resp_to_dict(resp), status_code=resp.http)
+        ledger.record_verdict(eid, resp.status, resp.http, resp.reason or "")
+        out = reins_command._resp_to_dict(resp)
+        out["event_id"] = eid
+        return JSONResponse(out, status_code=resp.http)
 
 
 def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
     app = reins_read.build_app(council_root, allowlist, session_cfg)
 
+    # the durable command ledger IS the frontdoor's externalized state (A3.9): one instance shared
+    # by the command router (writes demand/verdict) and /read/commands (reads the same file).
+    ledger = reins_ledger.CommandLedger(reins_ledger.ledger_path(), clock=reins_ledger.iso_utc_now)
+
     router_state = "mounted"
     try:
-        _mount_command_router(app)
+        _mount_command_router(app, ledger)
     except Exception as e:  # degrade to read-only, disclosed — never dark
         router_state = f"degraded:{e}"
 

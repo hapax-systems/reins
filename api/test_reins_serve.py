@@ -1,10 +1,19 @@
-"""U1 contract tests — the composed serving surface (reins_serve)."""
+"""U1/U3 contract tests — the composed serving surface (reins_serve)."""
 
 import pathlib
+
+import pytest
 
 import reins_command
 import reins_serve
 from reins_serve import VERB_TABLE, build_serve_app
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ledger(tmp_path, monkeypatch):
+    # every serve test that POSTs a command writes to an ISOLATED ledger, never the real
+    # ~/.cache/hapax/reins/commands.jsonl (U3 wiring: the router now witnesses every attempt).
+    monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
 
 
 def _endpoint(app, path):
@@ -109,3 +118,53 @@ def test_read_commands_mounted_and_absent_enforcement():
     assert proj["dark"] is False
     assert proj["enforcement"] == "absent"
     assert isinstance(proj["commands"], list)
+
+
+def test_router_witnesses_every_attempt_in_the_ledger():
+    # U3 wiring (design pack A3.2): a gated/unregistered command attempt STILL leaves a durable
+    # demand+verdict pair, so /read/commands projects the running server's activity — the
+    # frontdoor is witnessed in the live server, not just the module.
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="lane-a", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="w1"
+    )
+    resp = cmd("dispatch", req)  # unwired -> 501, but witnessed
+    assert resp.status_code == 501
+    assert b"event_id" in resp.body
+
+    proj = _endpoint(app, "/read/commands")()
+    assert len(proj["commands"]) == 1
+    row = proj["commands"][0]
+    assert row["verb"] == "dispatch" and row["status"] == "not-wired"
+    assert row["witness"] == "pending"  # spine echo arms at U7/SA-3
+
+
+def test_router_durable_idempotency_replay_is_duplicate():
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="lane-b", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="dup-key"
+    )
+    first = cmd("dispatch", req)
+    assert first.status_code == 501  # not-wired, but demand recorded
+    replay = cmd("dispatch", req)  # same idempotency_key
+    assert replay.status_code == 200
+    assert b"idempotent-replay" in replay.body
+
+    # exactly ONE command datom despite the replay (durable dedup, not a second demand).
+    proj = _endpoint(app, "/read/commands")()
+    assert len(proj["commands"]) == 1
+
+
+def test_resume_preview_is_witnessed_ok():
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="lane-c", authority_packet={"kind": "escape-grant"},
+        preflight_receipt={}, idempotency_key="rp1",
+    )
+    resp = cmd("resume", req)
+    assert resp.status_code == 200 and b"would emit session.resume" in resp.body
+    proj = _endpoint(app, "/read/commands")()
+    assert proj["commands"][0]["verb"] == "resume" and proj["commands"][0]["status"] == "ok"
