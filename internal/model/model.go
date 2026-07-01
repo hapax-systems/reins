@@ -3373,17 +3373,12 @@ func (m Model) sessionResumeStatus(s grammar.Session) string {
 	return grammar.RenderCommandEnvelope(env, m.AIR)
 }
 
-// taskWindow: the visible row window (offset, count) — the SAME math taskBody renders with, so a
-// hint label maps to the right absolute row index.
+// taskWindow: the visible row window (offset, count) — derived through the SAME helpers the
+// render path uses (frameMidH + taskRowsVisible), so a hint label always maps to the exact
+// absolute row index tasksListBody drew. A second hand-derived copy of the frame math is how
+// the scrolled hint-teleport off-by-one happened (dossier F5) — one source of truth now.
 func (m Model) taskWindow() (off, visible int) {
-	h := m.Height
-	if h < 12 {
-		h = 40 // matches View's default frame
-	}
-	visible = h - 9 // midH(h-7) - context - header
-	if visible < 1 {
-		visible = 1
-	}
+	visible = taskRowsVisible(frameMidH(m.Height))
 	return m.scrollOffset(visible), visible
 }
 

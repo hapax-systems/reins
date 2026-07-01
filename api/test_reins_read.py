@@ -135,7 +135,10 @@ def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
     endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/session/{role}/turns")
 
     data = endpoint("cc-reins", None, 2)
-    assert data["dark"] is False and data["error"] == ""
+    # never-mint / never-false-green (dossier F2): fixtures ship dark:true + fixture_only so no
+    # consumer can label hand-authored replay rows "live — streaming".
+    assert data["dark"] is True and data["fixture_only"] is True
+    assert "fixture-only" in data["error"]
     assert data["oldest_ts"] == "2026-06-26T18:40:05Z"
     assert len(data["turns"]) == 2
 
@@ -1515,3 +1518,29 @@ def test_instance_config_env_overrides(monkeypatch):
     assert cfg["hkp_report_root"] == "/hkp-reports"
     assert cfg["hkp_bundles"] == ["sdlc", "rdlc"]
     assert cfg["vault_root"] == "/vault"
+
+
+def test_age_s_unknown_ts_never_fabricates_recency_or_freshness():
+    # dossier F3: a missing/unparseable timestamp is UNKNOWN age (+inf), never 0.0 —
+    # recency and freshness collapse to 0.0 (the starved direction) instead of minting 1.0.
+    now = 1_000_000.0
+    assert reins_read._age_s("", now) == float("inf")
+    assert reins_read._age_s("not-a-timestamp", now) == float("inf")
+    ev = {"event_type": "coord.task.updated"}
+    s_unknown = score_event(ev, reins_read._age_s("", now))
+    s_fresh = score_event(ev, 0.0)
+    assert s_unknown < s_fresh  # unknown ts must not score like a just-now event
+    assert reins_read._freshness("", now) == 0.0
+    assert reins_read._freshness("garbage", now) == 0.0
+
+
+def test_to_trace_row_air_is_allowlist_classified_default_deny():
+    # dossier F4: trace rows classify AIR against the operator allowlist like every other
+    # row kind — nothing hardcodes ok; no allowlist means default-DENY across the board.
+    raw = {"id": "trace-1", "timestamp": "2026-06-26T12:00:00Z",
+           "metadata": {"model": "m"}, "tokenUsage": {}, "totalPrice": 0.01, "duration": 1.0}
+    deny_row = to_trace_row(raw)
+    assert all(v == "deny" for v in deny_row["air"].values())
+    allow_row = to_trace_row(raw, ["model", "latency_ms"])
+    assert allow_row["air"]["model"] == "ok" and allow_row["air"]["latency_ms"] == "ok"
+    assert allow_row["air"]["cost"] == "deny" and allow_row["air"]["trace_id"] == "deny"

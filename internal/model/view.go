@@ -80,10 +80,7 @@ func (m Model) View() string {
 	if railW > 0 {
 		mainW = w - railW - 1 // 1 col for the │ divider between main and rail
 	}
-	midH := h - 7 // title(1)+vital(2)+rule(1)+rule(1)+floor(2)
-	if midH < 1 {
-		midH = 1
-	}
+	midH := frameMidH(h)
 
 	rows := make([]string, 0, h)
 	rows = append(rows, fitWidth(m.viewTitle(w), w))
@@ -1478,7 +1475,9 @@ func (m Model) coordinatorLensPane(w, h int) string {
 		if crit == "" {
 			crit = "ok"
 		}
-		z3 = fmt.Sprintf("%s·%s·%s", grammar.Redact(t.AIR, "criticality", crit, m.AIR), dashOr(t.Stage), dashOr(grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)))
+		// stage rides the same AIR classification as every other task field — a raw t.Stage here
+		// leaked stage on air even when the row's stage cell redacted (dossier F1).
+		z3 = fmt.Sprintf("%s·%s·%s", grammar.Redact(t.AIR, "criticality", crit, m.AIR), dashOr(grammar.Redact(t.AIR, "stage", t.Stage, m.AIR)), dashOr(grammar.Redact(t.AIR, "owner", t.Owner, m.AIR)))
 	}
 	crumb := fmt.Sprintf("▶ path  Z0▸tasks ▸ Z2▸row %d/%d ▸ Z3▸[%s]   ·   [j/k] row · [c] chat", m.Focus+1, len(tasks), z3)
 	b.WriteString(" " + grammar.C("mut", clipRunes(crumb, maxVisible(8, w-1))) + "\n")
@@ -11243,7 +11242,18 @@ func (m Model) turnSourceLabel() string {
 
 func (m Model) turnListBody(w, h int) string {
 	topIdx, attnScore, _ := m.turnTopAttention()
+	// every optional header line must be RESERVED before the row window is sized, or the rows
+	// overflow the pane and fitBlock clips the tail — exactly where the focused turn sits when
+	// scrolled to the breakdown (dossier F6). Compute the optional lines once, reserve, reuse.
+	bk := m.turnBreakdownInbox(w)
+	pos := m.turnSessionPosition(w)
 	visible := h - 5 // two-row lane rail + source label + rule + header
+	if bk != "" {
+		visible-- // reserve the breakdown-inbox line
+	}
+	if pos != "" {
+		visible-- // reserve the session-position line
+	}
 	if attnScore > 0 {
 		visible-- // reserve the attention pointer line (E4.9 synergy 2 — the one turn that needs you)
 	}
@@ -11261,10 +11271,10 @@ func (m Model) turnListBody(w, h int) string {
 	}
 	var b strings.Builder
 	b.WriteString(m.turnLaneRail(w) + "\n")
-	if bk := m.turnBreakdownInbox(w); bk != "" {
+	if bk != "" {
 		b.WriteString(bk + "\n")
 	}
-	if pos := m.turnSessionPosition(w); pos != "" {
+	if pos != "" {
 		b.WriteString(pos + "\n")
 	}
 	srcTok := "2nd"
@@ -12433,11 +12443,31 @@ func (m Model) tasksWideBody(w, h int) string {
 	return strings.Join(out, "\n")
 }
 
-func (m Model) tasksListBody(w, h int) string {
-	visible := h - 2 // context line + header
-	if visible < 1 {
-		visible = 1
+// frameMidH is THE Z2 body height for a full frame: title(1)+vital(2)+rule(1)+rule(1)+floor(2).
+// Mirrors View's default-frame fallback (no WindowSizeMsg yet -> h=40) so non-render callers
+// (taskWindow hint resolution) derive the exact same window the renderer draws.
+func frameMidH(h int) int {
+	if h <= 0 {
+		h = 40 // View's default frame (no WindowSizeMsg yet)
 	}
+	mid := h - 7
+	if mid < 1 {
+		mid = 1
+	}
+	return mid
+}
+
+// taskRowsVisible is tasksListBody's row capacity for a given body height: context line + header.
+func taskRowsVisible(midH int) int {
+	v := midH - 2
+	if v < 1 {
+		v = 1
+	}
+	return v
+}
+
+func (m Model) tasksListBody(w, h int) string {
+	visible := taskRowsVisible(h)
 	vt := m.visibleTasks()
 	if len(vt) == 0 {
 		return m.contextLine() + "\n" + m.emptyTasksBody()

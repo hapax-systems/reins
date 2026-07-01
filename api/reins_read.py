@@ -33,14 +33,17 @@ def _kind(raw: dict) -> str:
 
 
 def _age_s(ts_str: str, now: float) -> float:
+    """Age in seconds; UNKNOWN (missing/unparseable ts) is +inf, never 0.0 — an unknown
+    timestamp must not fabricate max recency/freshness (honest-when-starved: the derived
+    recency/freshness collapse to 0.0, the starved direction, instead of minting 1.0)."""
     if not ts_str:
-        return 0.0
+        return float("inf")
     try:
         from datetime import datetime
         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         return max(0.0, now - dt.timestamp())
     except Exception:
-        return 0.0
+        return float("inf")
 
 
 def score_event(ev: dict, age_s: float) -> float:
@@ -4134,11 +4137,12 @@ def read_epistemics(council_root: str, allowlist: list[str], scope: str = "dynam
     }
 
 
-def to_trace_row(t: dict, _allowlist: list[str]) -> dict:
+def to_trace_row(t: dict, allowlist: list[str] | None = None) -> dict:
     """Fold a Langfuse trace into an operational Reins row: model/tokens/cost/latency.
     Input/output (operator content = PII) NEVER enter the row — the livestream-safe
-    projection of an LLM call. All fields are operational metadata (no PII), so all are
-    on-air safe."""
+    projection of an LLM call. AIR is classified against the operator allowlist like every
+    other row kind — trace fields (model ids, spend, latency) default-DENY on air until the
+    operator allowlists them; nothing here hardcodes ok."""
     tu = t.get("tokenUsage") or {}
     md = t.get("metadata") or {}
     row = {
@@ -4151,11 +4155,11 @@ def to_trace_row(t: dict, _allowlist: list[str]) -> dict:
         "cost": round(float(t.get("totalPrice") or 0.0), 6),
         "latency_ms": int(round(float(t.get("duration") or 0.0) * 1000)),
     }
-    row["air"] = {k: "ok" for k in row}  # operational metadata only — no PII to redact
+    row["air"] = classify_air(row, allowlist or [])
     return row
 
 
-def read_traces(council_root: str, limit: int = 40) -> dict:
+def read_traces(council_root: str, limit: int = 40, allowlist: list[str] | None = None) -> dict:
     """Fold the existing Langfuse LLM-observability plane into a recent-traces list (WS#2).
     Honest-dark when Langfuse is unreachable. Reuses shared.langfuse_client — never
     re-instruments LLM calls."""
@@ -4167,7 +4171,7 @@ def read_traces(council_root: str, limit: int = 40) -> dict:
         if not is_available():
             return {"dark": True, "error": "langfuse unavailable", "traces": []}
         resp = langfuse_get("/traces", {"limit": limit, "orderBy": "timestamp.desc"})
-        traces = [to_trace_row(t, []) for t in (resp.get("data") or [])[:limit]]
+        traces = [to_trace_row(t, allowlist) for t in (resp.get("data") or [])[:limit]]
         return {"dark": False, "traces": traces}
     except Exception as e:  # honest-dark
         return {"dark": True, "error": str(e), "traces": []}
@@ -4218,7 +4222,7 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
 
     @app.get("/read/traces")
     def traces(limit: int = 40) -> dict:
-        return read_traces(council_root, limit)
+        return read_traces(council_root, limit, allowlist)
 
     @app.get("/read/tasks")
     def read_tasks() -> dict:
@@ -4306,11 +4310,16 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
                     "turns": [],
                     "oldest_ts": "",
                 }
+            # never-mint / never-false-green: these are hand-authored replay FIXTURES, not a
+            # live CapabilityIO feed. They ship dark:true + fixture_only so no consumer can
+            # label them "live — streaming"; the cockpit's own demo-fixture path renders the
+            # honest "demo fixture — live turn feed dark" label instead.
             page = _page_before(fixtures, before, limit)
             turns = [to_turn(row, allowlist) for row in page]
             return {
-                "dark": False,
-                "error": "",
+                "dark": True,
+                "fixture_only": True,
+                "error": f"fixture-only turn replay for {role} — no live CapabilityIO producer",
                 "turns": turns,
                 "oldest_ts": turns[0]["ts"] if turns else "",
             }
