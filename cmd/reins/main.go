@@ -189,6 +189,13 @@ func sessionsTick(url string) tea.Cmd {
 func turnsTick(role string) tea.Cmd { // chat-pane live feed — polls the targeted lane's turn receipts
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTurnsOnce(role) })
 }
+func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — is this port actually reins?
+	m := api.FetchMeta(url)
+	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable}
+}
+func metaTick(url string) tea.Cmd { // identity is near-static; a slow re-check catches a mid-session port swap
+	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchMetaOnce(url) })
+}
 func tracesTick(url string) tea.Cmd { // LLM-spend obs — a cadence between sessions(4s) and intake(8s)
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTracesOnce(url) })
 }
@@ -241,6 +248,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchTurnsOnce(r.m.TurnRole) },
 		func() tea.Msg { return fetchVaultOnce(r.url) },
 		func() tea.Msg { return fetchObserveOnce(r.url) },
+		func() tea.Msg { return fetchMetaOnce(r.url) },
 		func() tea.Msg {
 			role, ts, id, ok := r.m.FocusedTurnRef()
 			if !ok {
@@ -248,7 +256,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), turnBlocksTickFocused(r), beatTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), turnBlocksTickFocused(r), beatTick(),
 	)
 }
 
@@ -278,6 +286,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, vaultTick(r.url) // re-arm vault-metadata polling
 	case model.ObserveMsg:
 		return r, observeTick(r.url) // re-arm whole-system polling
+	case model.MetaMsg:
+		return r, metaTick(r.url) // re-arm the serving-identity handshake
 	case model.TurnBlocksMsg:
 		return r, turnBlocksTickFocused(r) // re-arm the focused-turn detail-block fetch
 	case model.GatesMsg:

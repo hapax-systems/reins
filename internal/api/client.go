@@ -29,6 +29,42 @@ func checkOK(resp *http.Response, endpoint string) error {
 	return fmt.Errorf("reins: READ api %s returned %s", endpoint, resp.Status)
 }
 
+// ServingMeta is the /read/meta identity handshake (U1). A port is only trusted as reins
+// when it answers app=="reins"; anything else on the configured port is a FOREIGN SERVER
+// (the 8799-squatter class) and must render as such, never be silently trusted.
+type ServingMeta struct {
+	App        string `json:"app"`
+	ServingSHA string `json:"serving_sha"`
+	APITreeSHA string `json:"api_tree_sha"`
+	Router     string `json:"router"`
+	// Foreign is set by FetchMeta (not the wire) when the port answers without the reins
+	// identity — the cockpit renders PORT: FOREIGN SERVER.
+	Foreign   bool   `json:"-"`
+	Reachable bool   `json:"-"`
+	Detail    string `json:"-"`
+}
+
+// FetchMeta GETs the serving-identity handshake. A reachable port that is NOT reins comes
+// back Foreign=true; an unreachable port comes back Reachable=false (honest dark, not foreign).
+func FetchMeta(apiURL string) ServingMeta {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/meta")
+	if err != nil {
+		return ServingMeta{Reachable: false, Detail: "unreachable"}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// a port that answers HTTP but has no /read/meta is a foreign server.
+		return ServingMeta{Reachable: true, Foreign: true, Detail: resp.Status}
+	}
+	var m ServingMeta
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil || m.App != "reins" {
+		return ServingMeta{Reachable: true, Foreign: true, Detail: "not a reins server"}
+	}
+	m.Reachable = true
+	return m
+}
+
 // FetchEvents GETs the READ endpoint. Returns (events, dark, err).
 func FetchEvents(url string) ([]grammar.Event, bool, error) {
 	c := newReadHTTPClient()

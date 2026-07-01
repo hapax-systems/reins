@@ -232,6 +232,11 @@ func (m Model) viewTitle(w int) string {
 	left := grammar.C("brt", m.Title) + grammar.C("mut", " │ win ")
 	mid := strings.Join(tabs, grammar.C("mut", " · "))
 	right := grammar.C("yel", "@hapax")
+	if m.PortForeign {
+		// A3.1d: the configured port answers but is NOT reins — a rendered state, never
+		// silent trust. Loud, on the title bar, until identity resolves.
+		right = grammar.C("red", "PORT: FOREIGN SERVER") + grammar.C("mut", " · ") + right
+	}
 	maxMid := w - ansi.StringWidth(left) - ansi.StringWidth(right) - 3
 	if maxMid < 0 {
 		maxMid = 0

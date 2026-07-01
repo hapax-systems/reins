@@ -428,6 +428,8 @@ type Model struct {
 	TurnRole            string // the session role whose turns the chat-pane streams (set on entry from the focused lane)
 	TurnsDark           bool   // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
+	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
+	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -2477,6 +2479,16 @@ type TurnsMsg struct {
 	Error string
 }
 
+// MetaMsg carries the /read/meta serving-identity handshake (U1). Foreign=true means the
+// configured port answered but is not reins; Reachable=false is honest dark (unreachable),
+// which does NOT set the foreign flag.
+type MetaMsg struct {
+	App        string
+	ServingSHA string
+	Foreign    bool
+	Reachable  bool
+}
+
 // TurnBlocksMsg carries the per-turn Block stream for ONE turn (keyed by its full TurnID = ts|role|kind,
 // so two turns sharing ts+role with different kind never mis-assign). Honest-empty until capture-output.
 type TurnBlocksMsg struct {
@@ -2514,6 +2526,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TurnsMsg:
 		m = m.FoldTurns(v.Turns, v.Dark)
 		m.LastFold = "turns"
+		return m, nil
+	case MetaMsg:
+		// only a REACHABLE non-reins port is FOREIGN; an unreachable port stays honest-dark
+		// (the read surfaces already render their own dark state) and never trips the flag.
+		m.PortForeign = v.Reachable && v.Foreign
+		m.ServingSHA = v.ServingSHA
+		m.LastFold = "meta"
 		return m, nil
 	case TurnBlocksMsg:
 		// store the focused turn's Block stream under its full TurnID; empty/dark leaves the detail
