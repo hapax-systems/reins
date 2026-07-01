@@ -85,7 +85,7 @@ def test_import_graph_guard_no_mint_surface():
         "hapax_methodology_dispatch", "escape_grant_mint", "cc_claim",
     )
     api_dir = pathlib.Path(__file__).parent
-    for mod in ("reins_serve.py", "reins_command.py"):
+    for mod in ("reins_serve.py", "reins_command.py", "reins_ledger.py"):
         tree = ast.parse((api_dir / mod).read_text())
         imported: list[str] = []
         for node in ast.walk(tree):
@@ -100,3 +100,12 @@ def test_import_graph_guard_no_mint_surface():
                 assert token not in low, (
                     f"{mod} imports forbidden authority surface: {name}"
                 )
+
+
+def test_read_commands_mounted_and_absent_enforcement():
+    app = build_serve_app("", [])
+    meta = _endpoint(app, "/read/commands")
+    proj = meta()  # empty ledger -> honest empty, enforcement absent (never dark)
+    assert proj["dark"] is False
+    assert proj["enforcement"] == "absent"
+    assert isinstance(proj["commands"], list)

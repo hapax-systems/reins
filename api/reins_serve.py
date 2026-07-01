@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import reins_command
+import reins_ledger
 import reins_read
 
 # The day-1 verb table (design pack §Design 3): every verb present and typed, only
@@ -162,6 +163,12 @@ def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict |
         _mount_command_router(app)
     except Exception as e:  # degrade to read-only, disclosed — never dark
         router_state = f"degraded:{e}"
+
+    @app.get("/read/commands")
+    def read_commands(limit: int = 80) -> dict:
+        # the witnessed-frontdoor projection (U3): demand+verdict datoms, honest witness state,
+        # `absent` enforcement (the dispatch-gate does not exist until U13/CP-E). AIR default-deny.
+        return reins_ledger.read_commands(None, allowlist, limit)
 
     sha = serving_sha()
     tree = api_tree_sha()
