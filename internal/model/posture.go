@@ -29,6 +29,8 @@ type PostureSnapshot struct {
 
 	CoordChatLog []CoordChatMessage `json:"coordchat_log"` // the operator's local chat (datom-shaped; ChatPart carries AIRProv)
 
+	Deck []string `json:"deck"` // E8.3 non-evicting operator-readout history — its "no-loss" property must survive the swap
+
 	IntentTarget  string `json:"intent_target"`  // a swap intent staged during the swap survives it (A1.8)
 	IntentSubject string `json:"intent_subject"`
 }
@@ -57,6 +59,7 @@ func (m Model) SnapshotPosture() PostureSnapshot {
 		PageWindowID:  pageToWindowID(m.Page),
 		WindowSeen:    windowSeenByID(m.WindowSeen),
 		CoordChatLog:  m.CoordChatLog,
+		Deck:          m.Deck,
 		IntentTarget:  m.IntentTarget,
 		IntentSubject: m.IntentSubject,
 	}
@@ -93,6 +96,7 @@ func (m Model) RestorePosture(snap PostureSnapshot) Model {
 		m.WindowSeen = windowSeenByPage(snap.WindowSeen)
 	}
 	m.CoordChatLog = snap.CoordChatLog
+	m.Deck = snap.Deck
 	m.TurnRole = snap.Anchors.TurnRole
 	m.IntentTarget = snap.IntentTarget
 	m.IntentSubject = snap.IntentSubject
@@ -110,14 +114,12 @@ func (m Model) ApplyPendingAnchors() Model {
 		return m
 	}
 	a := m.pending.anchors
-	resolvedAny := false
 
 	if a.FocusedTaskID != "" && !m.TasksDark && len(m.visibleTasks()) > 0 {
 		vt := m.visibleTasks()
 		for i, t := range vt {
 			if t.TaskID == a.FocusedTaskID {
 				m.Focus = i
-				resolvedAny = true
 				break
 			}
 		}
@@ -139,9 +141,20 @@ func (m Model) ApplyPendingAnchors() Model {
 		a.SelMemberIDs = nil
 	}
 
-	// once the (only currently-restorable) task anchors resolve, the pending set is spent;
-	// session/turn anchors are already applied as page state (TurnRole) at restore time.
-	if resolvedAny || a.FocusedTaskID == "" {
+	// the session-focus anchor re-resolves against a live :sessions fold (separate page, separate
+	// fold — so it clears independently of the task anchor).
+	if a.FocusedSessionRole != "" && !m.SessionsDark && len(m.Sessions) > 0 {
+		for i, s := range m.Sessions {
+			if s.Role == a.FocusedSessionRole {
+				m.SFocus = i
+				break
+			}
+		}
+		a.FocusedSessionRole = "" // consumed (resolved or honestly absent — SFocus stays valid either way)
+	}
+
+	// the pending set is spent once every currently-restorable anchor has resolved-or-dropped.
+	if a.FocusedTaskID == "" && a.FocusedSessionRole == "" {
 		m.pending = nil
 	} else {
 		m.pending = &pendingReanchor{anchors: a}

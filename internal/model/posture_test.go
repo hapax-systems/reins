@@ -133,6 +133,33 @@ func TestPostureSnapshotCarriesNoReadModelFacts(t *testing.T) {
 	walk(reflect.TypeOf(PostureSnapshot{}), "PostureSnapshot")
 }
 
+// Followup fixes (U2 review): the Deck's no-loss history survives the swap, and a focused session
+// re-anchors by role on the first live :sessions fold.
+func TestDeckAndSessionFocusSurviveRestart(t *testing.T) {
+	orig := Model{
+		Sessions: []grammar.Session{{Role: "alpha"}, {Role: "beta"}, {Role: "gamma"}},
+		SFocus:   2, // gamma
+		Deck:     []string{"line one", "line two"},
+	}
+	snap := orig.SnapshotPosture()
+	if snap.Anchors.FocusedSessionRole != "gamma" {
+		t.Fatalf("session role not captured: %q", snap.Anchors.FocusedSessionRole)
+	}
+	if len(snap.Deck) != 2 {
+		t.Fatalf("deck not captured no-loss: %v", snap.Deck)
+	}
+
+	m := Model{}.RestorePosture(snap)
+	if len(m.Deck) != 2 || m.Deck[0] != "line one" {
+		t.Fatalf("deck not restored no-loss: %v", m.Deck)
+	}
+	// sessions arrive REORDERED on the first live fold — gamma must re-home by role, not index.
+	m = m.FoldSessions([]grammar.Session{{Role: "gamma"}, {Role: "alpha"}}, false)
+	if s, _ := m.FocusedSession(); s.Role != "gamma" {
+		t.Fatalf("session focus did not reanchor by role: %q (SFocus=%d)", s.Role, m.SFocus)
+	}
+}
+
 // A1.4 — forward-tolerant: a snapshot with a non-matching schema major is IGNORED, never
 // mis-applied (an old binary restoring a newer snapshot must not corrupt posture).
 func TestForwardToleranceIgnoresUnmatchedMajor(t *testing.T) {

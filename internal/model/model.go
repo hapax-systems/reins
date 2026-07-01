@@ -1766,6 +1766,8 @@ func (m Model) FoldSessions(ss []grammar.Session, dark bool) Model {
 		m.SFocus = 0
 	}
 	m.SessionsDark = dark
+	// U2: re-resolve a restored session-focus anchor by role on the first live :sessions fold.
+	m = m.ApplyPendingAnchors()
 	return m
 }
 
