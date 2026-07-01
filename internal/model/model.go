@@ -3373,12 +3373,27 @@ func (m Model) sessionResumeStatus(s grammar.Session) string {
 	return grammar.RenderCommandEnvelope(env, m.AIR)
 }
 
-// taskWindow: the visible row window (offset, count) — derived through the SAME helpers the
-// render path uses (frameMidH + taskRowsVisible), so a hint label always maps to the exact
-// absolute row index tasksListBody drew. A second hand-derived copy of the frame math is how
-// the scrolled hint-teleport off-by-one happened (dossier F5) — one source of truth now.
+// taskPaneBodyH is the EXACT body height tasksListBody receives through the real render path:
+// frameMidH for the frame, MINUS the only-split relation header that layout.render consumes
+// (layout.go: `if sp.Connector.Relation != "" && h > 1 { ...; ch = h - 1 }`) whenever the tasks
+// page composes through composePage with a non-empty emergent relation. TasksDark falls through
+// to the legacy single-pane body (no split, no header). Any change to the tasks page's frame
+// consumption MUST land here and in the render path together — the F5 off-by-one was exactly a
+// second hand-derived copy of this math drifting from the renderer.
+func (m Model) taskPaneBodyH() int {
+	h := frameMidH(m.Height)
+	if !m.TasksDark && h > 1 && m.tasksEmergentRelation() != "" {
+		h-- // the connector's relation header row
+	}
+	return h
+}
+
+// taskWindow: the visible row window (offset, count) — derived from taskPaneBodyH, the render
+// path's exact pane height, so a hint label always maps to the absolute row index the renderer
+// drew (dossier F5: whois/yank/:intent mistargeted one row above the label whenever the focused
+// task shared a facet — the emergent-relation header row was never subtracted here).
 func (m Model) taskWindow() (off, visible int) {
-	visible = taskRowsVisible(frameMidH(m.Height))
+	visible = taskRowsVisible(m.taskPaneBodyH())
 	return m.scrollOffset(visible), visible
 }
 

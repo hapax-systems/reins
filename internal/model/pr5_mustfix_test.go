@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -31,31 +32,64 @@ func TestCoordinatorLensBreadcrumbRedactsStageOnAir(t *testing.T) {
 	}
 }
 
-// Dossier F5 — the hint-teleport window (taskWindow) must be derived through the SAME math the
-// renderer uses, at every frame height: the rendered row count equals taskWindow().visible and the
-// first rendered row is vt[off]. The old hand-derived copy (h<12 -> 40) mistargeted whois/yank/
-// :intent on scrolled small frames.
-func TestHintWindowMatchesRenderedTaskWindow(t *testing.T) {
-	for _, h := range []int{8, 9, 10, 11, 12, 20, 40} {
-		m := Model{Width: 120, Height: h, Mode: ModeHint}
+// Dossier F5 — the hint-teleport window (taskWindow) must match the row window the REAL render
+// path draws: bodyFor -> composePage -> layout.Render, which consumes ONE relation-header row
+// whenever the tasks page's emergent relation is non-empty (the normal fleet case — tasks share
+// owner facets). The prior fix (and its direct-call test) bypassed layout.Render and validated a
+// height the renderer never passes — a false pass over the live off-by-one. This test drives the
+// real path and asserts the first rendered task row is exactly vt[off].
+func TestHintWindowMatchesRealRenderPath(t *testing.T) {
+	rowRe := regexp.MustCompile(`task\d{2}`)
+	for _, h := range []int{11, 12, 16, 20, 40} {
+		m := Model{Width: 160, Height: h, Mode: ModeHint, Page: PageTasks}
 		for i := 0; i < 30; i++ {
-			m.Tasks = append(m.Tasks, grammar.Task{TaskID: fmt.Sprintf("task%02d", i)})
+			m.Tasks = append(m.Tasks, grammar.Task{
+				TaskID: fmt.Sprintf("task%02d", i), Owner: "sharedowner", Stage: "S6",
+			})
 		}
 		m.Focus = 25 // deep in the list — the window must scroll
-		off, visible := m.taskWindow()
-		body := ansi.Strip(m.tasksListBody(120, frameMidH(h)))
-		lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
-		rows := len(lines) - 2 // context line + header
-		want := visible
-		if rem := len(m.Tasks) - off; rem < want {
-			want = rem // the window may outsize a short list — the renderer stops at the last task
+		if m.tasksEmergentRelation() == "" {
+			t.Fatal("test setup: emergent relation empty — the connector-header case is not exercised")
 		}
-		if rows != want {
-			t.Fatalf("h=%d: renderer drew %d rows but taskWindow window holds %d — hint labels mistarget", h, rows, want)
+		off, _ := m.taskWindow()
+		frame := ansi.Strip(m.bodyFor(159, frameMidH(h)))
+		var first string
+		for _, ln := range strings.Split(frame, "\n") {
+			// a task ROW carries its id left of the stage column (hint label + status glyphs
+			// push it to ~col 13); the context line mentions ids mid-line ("focus: taskNN",
+			// ~col 40+) and must not match.
+			if loc := rowRe.FindStringIndex(ln); loc != nil && loc[0] < 20 {
+				first = ln
+				break
+			}
 		}
-		if !strings.Contains(lines[2], fmt.Sprintf("task%02d", off)) {
-			t.Fatalf("h=%d: first rendered row is not vt[off=%d]:\n%q", h, off, lines[2])
+		if first == "" {
+			t.Fatalf("h=%d: no task row rendered through the real path:\n%s", h, frame)
 		}
+		if !strings.Contains(first, fmt.Sprintf("task%02d", off)) {
+			t.Fatalf("h=%d: first REAL-rendered row is not vt[off=%d] — hint labels mistarget:\nrow: %q", h, off, first)
+		}
+	}
+}
+
+// taskPaneBodyH mirrors layout.render's header consumption: minus one when the relation header
+// renders, untouched when the frame is too short for a header or the page is dark.
+func TestTaskPaneBodyHMirrorsConnectorHeader(t *testing.T) {
+	m := Model{Width: 160, Height: 20, Page: PageTasks}
+	for i := 0; i < 3; i++ {
+		m.Tasks = append(m.Tasks, grammar.Task{TaskID: fmt.Sprintf("task%02d", i), Owner: "sharedowner"})
+	}
+	if got, want := m.taskPaneBodyH(), frameMidH(20)-1; got != want {
+		t.Fatalf("relation non-empty: taskPaneBodyH=%d want %d (header row not subtracted)", got, want)
+	}
+	dark := m
+	dark.TasksDark = true
+	if got, want := dark.taskPaneBodyH(), frameMidH(20); got != want {
+		t.Fatalf("dark page renders the legacy single pane: taskPaneBodyH=%d want %d", got, want)
+	}
+	lone := Model{Width: 160, Height: 20, Page: PageTasks, Tasks: []grammar.Task{{TaskID: "solo"}}}
+	if got, want := lone.taskPaneBodyH(), frameMidH(20); got != want {
+		t.Fatalf("no emergent relation: taskPaneBodyH=%d want %d", got, want)
 	}
 }
 
