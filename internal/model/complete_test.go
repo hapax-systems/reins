@@ -172,6 +172,28 @@ func TestCommandRegistryCandidatesExposeGroupedMetadataAndAliases(t *testing.T) 
 	}
 }
 
+func TestCommandFuzzySubsequenceFallbackSurfacesVerb(t *testing.T) {
+	m := New("REINS")
+	m.Mode = ModeCommand
+	m.Input = "dsp"
+
+	cands := m.completionTree()
+	if len(cands) == 0 || cands[0].Label != "dispatch" || cands[0].Value != "dispatch" {
+		t.Fatalf("subsequence verb completion should surface dispatch for 'dsp', got %+v", cands)
+	}
+}
+
+func TestCommandArgFuzzySubsequenceFallbackSurfacesToken(t *testing.T) {
+	m := New("REINS")
+	m.Mode = ModeCommand
+	m.Input = "intent dsp"
+
+	cands := m.completionTree()
+	if len(cands) == 0 || cands[0].Label != "dispatch" || cands[0].Value != "intent dispatch" {
+		t.Fatalf("subsequence arg completion should surface intent dispatch for 'intent dsp', got %+v", cands)
+	}
+}
+
 // the filter surface uses the SAME engine — candidates are the live task ids.
 func TestFilterCandidates(t *testing.T) {
 	m := New("REINS").FoldTasks([]grammar.Task{

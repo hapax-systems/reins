@@ -65,8 +65,11 @@ func (m Model) commandCandidates() []Candidate {
 				if !trailingSpace && len(fields) >= 2 {
 					argPrefix = fields[len(fields)-1]
 				}
-				for _, a := range vd.args {
-					if strings.HasPrefix(a.Label, argPrefix) {
+				for rank := 0; rank <= maxTokenCompletionRank; rank++ {
+					for _, a := range vd.args {
+						if tokenCompletionRank(a.Label, argPrefix) != rank {
+							continue
+						}
 						a.Value = vd.name + " " + a.Label // accept RUNS the full command
 						out = append(out, a)
 					}
@@ -80,24 +83,86 @@ func (m Model) commandCandidates() []Candidate {
 		return out
 	}
 
-	// VERB level: prefix-match the verb table.
+	// VERB level: prefix-match the verb table first, then fall back to fuzzy subsequences.
 	prefix := ""
 	if len(fields) == 1 && !trailingSpace {
 		prefix = fields[0]
 	}
-	for _, v := range verbs {
-		if !v.matchesPrefix(prefix) {
-			continue
+	for rank := 0; rank <= maxVerbCompletionRank; rank++ {
+		for _, v := range verbs {
+			if verbCompletionRank(v, prefix) != rank {
+				continue
+			}
+			c := Candidate{Label: v.name, Detail: v.detail()}
+			if len(v.args) > 0 {
+				c.Sub = v.args // signals "descend on accept"
+			} else {
+				c.Value = v.name // leaf: accept RUNS it
+			}
+			out = append(out, c)
 		}
-		c := Candidate{Label: v.name, Detail: v.detail()}
-		if len(v.args) > 0 {
-			c.Sub = v.args // signals "descend on accept"
-		} else {
-			c.Value = v.name // leaf: accept RUNS it
-		}
-		out = append(out, c)
 	}
 	return out
+}
+
+const (
+	tokenCompletionNoMatch = -1
+	maxTokenCompletionRank = 1
+
+	verbCompletionNoMatch = -1
+	maxVerbCompletionRank = 3
+)
+
+func tokenCompletionRank(label, q string) int {
+	switch {
+	case q == "", strings.HasPrefix(label, q):
+		return 0
+	case fuzzySubsequence(label, q):
+		return 1
+	default:
+		return tokenCompletionNoMatch
+	}
+}
+
+func verbCompletionRank(v verbDef, q string) int {
+	if q == "" {
+		return 0
+	}
+	if strings.HasPrefix(v.name, q) {
+		return 0
+	}
+	for _, a := range v.aliases {
+		if strings.HasPrefix(a, q) {
+			return 1
+		}
+	}
+	if fuzzySubsequence(v.name, q) {
+		return 2
+	}
+	for _, a := range v.aliases {
+		if fuzzySubsequence(a, q) {
+			return 3
+		}
+	}
+	return verbCompletionNoMatch
+}
+
+func fuzzySubsequence(s, q string) bool {
+	if q == "" {
+		return true
+	}
+	qr := []rune(q)
+	i := 0
+	for _, r := range s {
+		if r != qr[i] {
+			continue
+		}
+		i++
+		if i == len(qr) {
+			return true
+		}
+	}
+	return false
 }
 
 func pasteCandidateAllowed(input string) bool {
