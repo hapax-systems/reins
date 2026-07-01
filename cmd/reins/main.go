@@ -196,6 +196,24 @@ func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — i
 func metaTick(url string) tea.Cmd { // identity is near-static; a slow re-check catches a mid-session port swap
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchMetaOnce(url) })
 }
+
+// hasArg reports whether a bare flag is present anywhere in os.Args (order-independent).
+func hasArg(flag string) bool {
+	for _, a := range os.Args[1:] {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// posturePersistMsg fires on a slow cadence; root.Update writes the current posture so a hot-plug
+// restart (or a kill) loses at most one interval of posture, never the whole session.
+type posturePersistMsg struct{}
+
+func posturePersistTick() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return posturePersistMsg{} })
+}
 func tracesTick(url string) tea.Cmd { // LLM-spend obs — a cadence between sessions(4s) and intake(8s)
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTracesOnce(url) })
 }
@@ -256,7 +274,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), turnBlocksTickFocused(r), beatTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
 	)
 }
 
@@ -288,6 +306,9 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, observeTick(r.url) // re-arm whole-system polling
 	case model.MetaMsg:
 		return r, metaTick(r.url) // re-arm the serving-identity handshake
+	case posturePersistMsg:
+		_ = model.WritePosture("", r.m.SnapshotPosture()) // best-effort externalize; re-arm the cadence
+		return r, posturePersistTick()
 	case model.TurnBlocksMsg:
 		return r, turnBlocksTickFocused(r) // re-arm the focused-turn detail-block fetch
 	case model.GatesMsg:
@@ -839,6 +860,14 @@ func main() {
 	}
 	launch := model.New("REINS")
 	launch.Page = model.PageCoordinator // land on the Yard Coordinator (the new framework gestalt), not the legacy :events
+	// U2: --resume restores externalized posture (page, focus/selection identities, chat log) so a
+	// hot-plug restart costs the operator no state. Identity anchors re-resolve on the first live
+	// fold (never index-restored); a missing posture file is a legal cold boot.
+	if hasArg("--resume") {
+		if snap, ok, err := model.ReadPosture(""); err == nil && ok {
+			launch = launch.RestorePosture(snap)
+		}
+	}
 	r := root{m: launch, url: cfg.APIURL}
 	if _, err := tea.NewProgram(r, tea.WithAltScreen()).Run(); err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")

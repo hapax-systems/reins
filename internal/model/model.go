@@ -430,6 +430,7 @@ type Model struct {
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
+	pending             *pendingReanchor // U2: identity anchors from --resume awaiting the first non-dark fold (unexported: never serialized)
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
@@ -1747,6 +1748,10 @@ func (m Model) FoldTasks(ts []grammar.Task, dark bool) Model {
 	if _, ok := m.FocusedTask(); !ok {
 		m.Sel.Rank, m.Sel.Field = RankRow, ""
 	}
+	// U2: re-resolve --resume identity anchors on the first live fold. Placed AFTER the clamp/
+	// reset above so a restored focus survives the very fold that would otherwise destroy an
+	// index-carried cursor (the A1.1 confirmed-bug fix). A dark fold leaves pending intact.
+	m = m.ApplyPendingAnchors()
 	return m
 }
 
