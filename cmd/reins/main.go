@@ -306,8 +306,20 @@ func beatTick() tea.Cmd {
 }
 
 type root struct {
-	m   model.Model
-	url string
+	m           model.Model
+	url         string
+	dispatchSeq int64 // monotonic; salts the idempotency key for LAST-WINS inflection verbs (focus/breakglass)
+}
+
+// dispatchSlot picks the idempotency-key slot for a dispatched verb. A GOVERNED verb (close/arm/…) uses the
+// coarse 30s intent window so an accidental double-confirm dedups. An INFLECTION verb (focus/breakglass) is
+// LAST-WINS — each deliberate assertion is a NEW witnessed fact, so it keys per-dispatch (negative, never
+// colliding with a window bucket); else focus(A)→focus(B)→focus(A) within 30s would dedup the second A away.
+func dispatchSlot(mode string, seq, nowUnix int64) int64 {
+	if mode == "inflection" {
+		return -seq
+	}
+	return nowUnix / 30
 }
 
 func (r root) Init() tea.Cmd {
@@ -360,8 +372,10 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// url). The intent-window bucket lives here (the effect layer), keeping Exec pure/deterministic.
 	if pc := r.m.PendingCommand; pc != nil {
 		r.m.PendingCommand = nil
-		verb, target, window := pc.Verb, pc.Target, time.Now().Unix()/30
-		return r, tea.Batch(cmd, func() tea.Msg { return postCommandOnce(r.url, verb, target, window) })
+		r.dispatchSeq++
+		verb, target := pc.Verb, pc.Target
+		slot := dispatchSlot(r.m.VerbModes[verb], r.dispatchSeq, time.Now().Unix())
+		return r, tea.Batch(cmd, func() tea.Msg { return postCommandOnce(r.url, verb, target, slot) })
 	}
 	switch msg.(type) {
 	case model.EventsMsg:

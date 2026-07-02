@@ -109,3 +109,19 @@ func TestTickCmdProducesTracesMsg(t *testing.T) {
 		t.Fatal("unreachable traces api must fold honest-dark, not empty-success")
 	}
 }
+
+// dispatchSlot: inflection verbs key per-dispatch (last-wins); governed verbs share the 30s window.
+func TestDispatchSlotInflectionVsGoverned(t *testing.T) {
+	// two focus dispatches in the SAME 30s window get DISTINCT slots (no false dedup of A->B->A refocus)
+	if dispatchSlot("inflection", 1, 1000) == dispatchSlot("inflection", 2, 1000) {
+		t.Fatal("inflection dispatches must not share a slot (the A->B->A refocus-dedup bug)")
+	}
+	// a governed verb in the same window SHARES the slot (an accidental double-confirm dedups)
+	if dispatchSlot("governed", 1, 1000) != dispatchSlot("governed", 2, 1000) {
+		t.Fatal("governed verbs in one 30s window must share a slot (dedup double-confirm)")
+	}
+	// inflection slots are negative so they never collide with a positive window bucket
+	if dispatchSlot("inflection", 5, 999999) >= 0 {
+		t.Fatal("inflection slot must be negative (never collide with a window bucket)")
+	}
+}
