@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,11 +38,62 @@ type ServingMeta struct {
 	ServingSHA string `json:"serving_sha"`
 	APITreeSHA string `json:"api_tree_sha"`
 	Router     string `json:"router"`
+	// Verbs is the router's per-verb wired-state ({verb: {wired: bool}}) — the cockpit's apply seam
+	// only offers SEND for a wired verb; an unwired verb renders preview-only (A3.12a: one surface).
+	Verbs map[string]struct {
+		Wired bool `json:"wired"`
+	} `json:"verbs"`
 	// Foreign is set by FetchMeta (not the wire) when the port answers without the reins
 	// identity — the cockpit renders PORT: FOREIGN SERVER.
 	Foreign   bool   `json:"-"`
 	Reachable bool   `json:"-"`
 	Detail    string `json:"-"`
+}
+
+// WiredVerbs flattens Verbs to a {verb: wired} map for the model.
+func (m ServingMeta) WiredVerbs() map[string]bool {
+	out := map[string]bool{}
+	for v, s := range m.Verbs {
+		out[v] = s.Wired
+	}
+	return out
+}
+
+// CommandResult is the router's verdict for a POST /command/{verb} (the cockpit apply seam).
+type CommandResult struct {
+	Status    string `json:"status"`
+	HTTP      int    `json:"http"`
+	EventID   string `json:"event_id"` // the witnessed ledger event id (demand+verdict)
+	Reason    string `json:"reason"`
+	Duplicate bool   `json:"duplicate"`
+	Reachable bool   `json:"-"`
+	Err       string `json:"-"`
+}
+
+// PostCommand invokes a governed verb through the witnessed rail: POST /command/{verb} with a
+// verify-already-minted authority packet (reins mints nothing — the operator's loopback presence IS the
+// attestation, A3.3 RULING-REINS-OPERATOR-ATTESTATION). Returns the router verdict + the witnessed
+// event_id. A transport failure is disclosed (Reachable=false), never a fabricated success.
+func PostCommand(apiURL, verb, target string, authorityPacket map[string]any, preflightReceipt map[string]any, idempotencyKey string) CommandResult {
+	body, _ := json.Marshal(map[string]any{
+		"target": target, "authority_packet": authorityPacket,
+		"preflight_receipt": preflightReceipt, "idempotency_key": idempotencyKey,
+	})
+	c := newReadHTTPClient()
+	resp, err := c.Post(apiURL+"/command/"+verb, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return CommandResult{Reachable: false, Err: err.Error(), Status: "unreachable"}
+	}
+	defer resp.Body.Close()
+	var r CommandResult
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return CommandResult{Reachable: true, HTTP: resp.StatusCode, Status: "undecodable", Err: err.Error()}
+	}
+	r.Reachable = true
+	if r.HTTP == 0 {
+		r.HTTP = resp.StatusCode
+	}
+	return r
 }
 
 // FetchMeta GETs the serving-identity handshake. A reachable port that is NOT reins comes

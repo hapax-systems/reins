@@ -194,7 +194,29 @@ func turnsTick(role string) tea.Cmd { // chat-pane live feed — polls the targe
 }
 func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — is this port actually reins?
 	m := api.FetchMeta(url)
-	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable}
+	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable, Verbs: m.WiredVerbs()}
+}
+
+// postCommandOnce is the apply-seam effect: POST a governed verb through the witnessed rail. The
+// idempotency key is f(verb, target, intent-window) — a coarse 30s bucket so an accidental double-confirm
+// dedups (the ledger dedups on terminal success) while a deliberate later re-invoke is a fresh intent.
+// Authority is operator_attestation: the API is loopback-bound, so a reins-cockpit POST IS operator
+// presence (A3.3 RULING-REINS-OPERATOR-ATTESTATION) — reins mints nothing.
+func postCommandOnce(url, verb, target string, window int64) tea.Msg {
+	key := fmt.Sprintf("%s:%s:%d", verb, target, window)
+	packet := map[string]any{"kind": "operator_attestation", "ruling": "RULING-REINS-OPERATOR-ATTESTATION-20260701"}
+	r := api.PostCommand(url, verb, target, packet, map[string]any{}, key)
+	return model.CommandVerdictMsg{
+		Verb: verb, Status: r.Status, HTTP: r.HTTP, EventID: r.EventID,
+		Reason: firstNonEmpty(r.Reason, r.Err), Reachable: r.Reachable,
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }
 func metaTick(url string) tea.Cmd { // identity is near-static; a slow re-check catches a mid-session port swap
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchMetaOnce(url) })
@@ -321,6 +343,13 @@ func confirmProbationTick() tea.Cmd {
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	nm, cmd := r.m.Update(msg)
 	r.m = nm.(model.Model)
+	// apply seam: Exec staged a WIRED governed verb — issue the witnessed POST (the model holds no API
+	// url). The intent-window bucket lives here (the effect layer), keeping Exec pure/deterministic.
+	if pc := r.m.PendingCommand; pc != nil {
+		r.m.PendingCommand = nil
+		verb, target, window := pc.Verb, pc.Target, time.Now().Unix()/30
+		return r, tea.Batch(cmd, func() tea.Msg { return postCommandOnce(r.url, verb, target, window) })
+	}
 	switch msg.(type) {
 	case model.EventsMsg:
 		return r, eventsTick(r.url) // re-arm the events poll/re-fold loop

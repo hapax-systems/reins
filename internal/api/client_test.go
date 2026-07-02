@@ -46,6 +46,40 @@ func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
 	}
 }
 
+func TestPostCommandParsesVerdictAndWiredSet(t *testing.T) {
+	// the apply seam: PostCommand posts to /command/{verb} and returns the router verdict + witnessed
+	// event_id; FetchMeta exposes the wired-set. A refusal is disclosed, never a fabricated success.
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/read/meta":
+			_, _ = w.Write([]byte(`{"app":"reins","serving_sha":"s","api_tree_sha":"t","router":"mounted","verbs":{"resume":{"wired":true},"dispatch":{"wired":false}}}`))
+		case "/command/resume":
+			_, _ = w.Write([]byte(`{"status":"ok","http":200,"event_id":"ev-witnessed-123","reason":""}`))
+		case "/command/dispatch":
+			w.WriteHeader(501)
+			_, _ = w.Write([]byte(`{"status":"not-wired","http":501,"event_id":"ev-ref-456","reason":"no ungated path"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+
+	meta := FetchMeta(apiURL)
+	wired := meta.WiredVerbs()
+	if !wired["resume"] || wired["dispatch"] {
+		t.Fatalf("wired-set wrong: %v", wired)
+	}
+
+	ok := PostCommand(apiURL, "resume", "lane-a", map[string]any{"kind": "operator_attestation"}, map[string]any{}, "resume:lane-a:1")
+	if !ok.Reachable || ok.Status != "ok" || ok.EventID != "ev-witnessed-123" {
+		t.Fatalf("resume verdict wrong: %+v", ok)
+	}
+	ref := PostCommand(apiURL, "dispatch", "lane-b", map[string]any{}, map[string]any{}, "dispatch:lane-b:1")
+	if ref.Status != "not-wired" || ref.HTTP != 501 || ref.EventID != "ev-ref-456" {
+		t.Fatalf("dispatch refusal must be disclosed, got %+v", ref)
+	}
+}
+
 func TestFetchRouteDecodesMeasuredVsAbsent(t *testing.T) {
 	// A candidate's dispatch_reqvec is measured ONLY when a COMPLETE 8-dim object decodes; a partial
 	// object, the "absent" string, or a missing key must yield ReqvecMeasured=false (render says ABSENT,

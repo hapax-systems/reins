@@ -431,6 +431,9 @@ type Model struct {
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
+	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
+	PendingCommand      *CommandRequest     // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
+	LastVerdict         string              // apply-seam: the last witnessed command verdict (rendered)
 	Commands            []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
 	CommandsEnforcement string            // U3b: the enforcement cell — armed|breakglass|absent|dark (absent until CP-E)
 	CommandsDark        bool
@@ -2049,6 +2052,13 @@ func (m Model) Exec(line string) Model {
 	if verb == "on" {
 		return m.execOn(args)
 	}
+	// governed mutation verbs (arm/rework/refute/close/resume) are NOT in the completion table — they
+	// route through the object-verb menu (TaskVerbs) into the apply seam here. A WIRED verb stages a
+	// witnessed POST (main.go issues it); an unwired verb renders the never-mint preview (A3.12a: one
+	// surface, the starved rendering of the same VerbSpec).
+	if _, gov := governedVerbSpecs[verb]; gov {
+		return m.execGovernedVerb(verb, args)
+	}
 	vd, ok := lookupVerb(verb)
 	if !ok {
 		m.Status = "unknown command: " + verb
@@ -2531,6 +2541,51 @@ type MetaMsg struct {
 	ServingSHA string
 	Foreign    bool
 	Reachable  bool
+	Verbs      map[string]bool // the router's per-verb wired-state (apply seam)
+}
+
+// CommandRequest is a governed verb the cockpit will POST through the witnessed rail (apply seam).
+// Exec sets Model.PendingCommand to one of these for a WIRED governed verb; main.go issues the POST Cmd
+// (the model has no API url). Authority is operator_attestation (loopback presence) — reins mints nothing.
+type CommandRequest struct {
+	Verb           string
+	Target         string
+	IdempotencyKey string
+}
+
+// CommandVerdictMsg carries the router's verdict for a posted command back into Update (apply seam).
+type CommandVerdictMsg struct {
+	Verb      string
+	Status    string
+	HTTP      int
+	EventID   string
+	Reason    string
+	Reachable bool
+}
+
+// FoldCommandVerdict renders the witnessed verdict of an applied command — honest across ok / refused /
+// unreachable, never a fabricated success. A witnessed event_id is shown (the demand+verdict is durable).
+func (m Model) FoldCommandVerdict(v CommandVerdictMsg) Model {
+	switch {
+	case !v.Reachable:
+		m.LastVerdict = v.Verb + ": UNREACHABLE — " + v.Reason + " (nothing applied)"
+	case v.Status == "ok":
+		wit := v.EventID
+		if len(wit) > 12 {
+			wit = wit[:12]
+		}
+		m.LastVerdict = v.Verb + ": ✓ applied + witnessed (" + wit + ")"
+	case v.Status == "idempotent-replay":
+		m.LastVerdict = v.Verb + ": ✓ already applied (idempotent replay — not re-run)"
+	default: // not-wired / stage-rejected / authority-rejected / preflight-failed / ...
+		r := v.Reason
+		if r == "" {
+			r = v.Status
+		}
+		m.LastVerdict = v.Verb + ": ✖ " + v.Status + " — " + r + " (witnessed, nothing applied)"
+	}
+	m.Status = m.LastVerdict
+	return m
 }
 
 // CommandsMsg carries the witnessed command-ledger projection (/read/commands) into Update (U3b).
@@ -2596,7 +2651,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (the read surfaces already render their own dark state) and never trips the flag.
 		m.PortForeign = v.Reachable && v.Foreign
 		m.ServingSHA = v.ServingSHA
+		if v.Verbs != nil {
+			m.WiredVerbs = v.Verbs // the apply seam consults this to offer SEND only for wired verbs
+		}
 		m.LastFold = "meta"
+		return m, nil
+	case CommandVerdictMsg:
+		m = m.FoldCommandVerdict(v)
+		m.LastFold = "command-verdict"
 		return m, nil
 	case CommandsMsg:
 		m = m.FoldCommands(v.Commands, v.Enforcement, v.Dark)
@@ -3672,6 +3734,35 @@ var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receip
 	"refute": {"review.fail(target)", "governed COMMAND route", "target + open review thread", "review receipt → spine", "review recorded as fail"},
 	"close":  {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
 	"resume": {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
+}
+
+// execGovernedVerb is the cockpit APPLY SEAM. A WIRED governed verb (per the router's live wired-set
+// from /read/meta.verbs) stages a witnessed POST /command/{verb} — set as PendingCommand, which main.go
+// turns into the actual HTTP Cmd (the model holds no API url) with an operator_attestation authority
+// packet (reins mints nothing; the loopback bind IS the attestation, A3.3). An UNWIRED verb renders the
+// never-mint preview — the same VerbSpec, starved (A3.12a: no second command surface). The target is the
+// focused task's id (the verb menu operates on the focused object).
+func (m Model) execGovernedVerb(verb string, args []string) Model {
+	target := arg0(args)
+	if target == "" {
+		if t, ok := m.FocusedTask(); ok {
+			target = t.TaskID
+		}
+	}
+	if strings.TrimSpace(target) == "" {
+		m.Status = verb + ": no target (focus a task first)"
+		return m
+	}
+	if !m.WiredVerbs[verb] {
+		// not wired -> preview only; render the starved VerbSpec (never invoked).
+		m.Status = m.governedVerbPreview(verb)
+		return m
+	}
+	// wired -> stage the witnessed apply; main.go POSTs it + folds CommandVerdictMsg. IdempotencyKey is
+	// filled by main.go (it owns the intent-window clock; Exec stays pure/deterministic for tests).
+	m.PendingCommand = &CommandRequest{Verb: verb, Target: target}
+	m.Status = verb + " → applying (witnessed)…"
+	return m
 }
 
 // governedVerbEnvelope builds the never-mint preview envelope for a door/dock verb against a target.
