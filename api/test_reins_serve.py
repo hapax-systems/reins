@@ -48,9 +48,11 @@ def test_read_meta_identity_handshake():
     assert meta["router"] == "mounted"
     assert set(meta["verbs"]) == set(VERB_TABLE)
     wired = sorted(v for v, s in meta["verbs"].items() if s["wired"])
-    # resume preview (read-only) + governed generation staging (U6b) + focus (operator-attested frontdoor
-    # inflection — reins-local, not spine dispatch; convergence rung 2).
-    assert wired == ["focus", "resume", "stage"]
+    # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor
+    # inflections (reins-local, NOT spine dispatch): focus (prioritization) + breakglass (sanctioned exit).
+    assert wired == ["breakglass", "focus", "resume", "stage"]
+    # every wired verb projects its mode so the cockpit renders preview honestly (never-false-green)
+    assert all("mode" in s for s in meta["verbs"].values())
 
 
 def test_unwired_verb_refuses_typed_501():
@@ -106,6 +108,23 @@ def test_focus_inflection_wired_witnessed_no_spine_write():
     assert "RECORDED for the spine to consume" in body      # honest: consumer pending (not present-tense)
     assert '"event_seq":null' in body.replace(" ", "")      # NO spine write — reins-local
     assert '"event_id":' in body                            # witnessed on the durable ledger
+
+
+def test_breakglass_wired_witnessed_needs_reason():
+    # the sanctioned frontdoor exit: witnessed, operator-attested, NO spine write; a bare breakglass (no
+    # reason) is refused (the exit must be justified).
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    att = {"kind": "operator_attestation", "ruling": "RULING-REINS-OPERATOR-ATTESTATION-20260701"}
+    ok = cmd("breakglass", reins_command.CommandRequest(
+        target="merge PR #42 by hand — CI wedged", authority_packet=att, preflight_receipt={}, idempotency_key="bg1"))
+    assert ok.status_code == 200
+    body = ok.body.decode()
+    assert "BREAKGLASS" in body and "sanctioned outside-frontdoor" in body
+    assert '"event_seq":null' in body.replace(" ", "")  # no spine write — reins-local witness
+    bad = cmd("breakglass", reins_command.CommandRequest(
+        target="", authority_packet=att, preflight_receipt={}, idempotency_key="bg2"))
+    assert bad.status_code != 200  # a bare breakglass (no reason) is refused + witnessed
 
 
 def test_focus_rejects_non_attestation_packet():

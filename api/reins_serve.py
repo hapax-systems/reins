@@ -49,7 +49,7 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     "deny": {"wired": False},
     "handoff": {"wired": False},
     "focus": {"wired": True, "mode": "inflection"},  # operator-attested frontdoor primitive (reins-local, not spine dispatch)
-    "breakglass": {"wired": False},
+    "breakglass": {"wired": True, "mode": "inflection"},  # operator-attested sanctioned-exit witness (reins-local)
     "resume": {"wired": True, "mode": "preview"},  # read-only preview wedge (no spine write)
     # governed generation staging (U6b-stage): verifies a target generation against the store's
     # byte-binding + witnesses the attempt; it does NOT flip the current pointer (staging != swapping —
@@ -202,6 +202,36 @@ def _is_operator_attestation(packet: Any) -> bool:
     )
 
 
+def _breakglass_closures():
+    """The operator-attested `breakglass` verb — the ONE sanctioned exit from the frontdoor ("outside-Reins
+    dispatch → breakglass-only"). It WITNESSES that the operator is deliberately engaging the n-DLC outside
+    reins, with a reason; it does NOT itself dispatch or grant anything (that is the spine's escape-control
+    tree). The witnessed record is the value: it builds the empirical ledger of what-is-done-outside-reins,
+    which feeds the sole-frontdoor cutover. authority = operator_attestation; reins mints nothing; no spine
+    write. verify: attestation + a non-empty reason (the exit must be justified, never a bare breakglass)."""
+
+    def verify(packet: Any, target: str) -> bool:
+        return _is_operator_attestation(packet) and bool(str(target).strip())
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"breakglass-{env.idempotency_key}",
+            event_seq=None,  # no spine write — the ledger witness IS the sanctioned-exit record
+            fold_delta=(
+                f"operator BREAKGLASS — sanctioned outside-frontdoor engagement: {env.target} "
+                "(witnessed; the frontdoor records the exit + reason; reins dispatches nothing)"
+            ),
+            spooled=False,
+        )
+
+    return verify, preflight, transport
+
+
 def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
     """The verb-table router. Raises on construction failure — the caller degrades
     to read-only and discloses (never a half-mounted write surface).
@@ -217,6 +247,7 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
         "resume": _resume_preview_closures(),
         "stage": _stage_closures(),
         "focus": _focus_closures(),
+        "breakglass": _breakglass_closures(),
     }
 
     @app.post("/command/{verb}")

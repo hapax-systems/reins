@@ -3962,6 +3962,7 @@ var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receip
 	"close":  {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
 	"resume": {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
 	"focus":  {"sdlc.focus_inflection(target)", "operator_attestation (loopback) — reins-local frontdoor primitive", "target + operator attention", "witnessed focus-inflection → ledger (route + spine consume)", "focus witnessed; the operator's prioritization is durable"},
+	"breakglass": {"sdlc.breakglass(reason)", "operator_attestation (loopback) — the sanctioned frontdoor exit", "reason for outside-reins engagement", "witnessed sanctioned-exit → ledger", "breakglass witnessed; outside-reins engagement is on the record"},
 }
 
 // execGovernedVerb is the cockpit APPLY SEAM. A WIRED governed verb (per the router's live wired-set
@@ -3973,6 +3974,12 @@ var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receip
 func (m Model) execGovernedVerb(verb string, args []string) Model {
 	target := arg0(args)
 	if target == "" {
+		// breakglass is a frontdoor-level EXIT, not a task operation — it must carry an explicit reason,
+		// never silently inherit the focused task (a bare breakglass is not a justified exit).
+		if verb == "breakglass" {
+			m.Status = "breakglass: needs a reason — :breakglass <why you are leaving reins>"
+			return m
+		}
 		if t, ok := m.FocusedTask(); ok {
 			target = t.TaskID
 		}

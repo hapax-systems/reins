@@ -21,6 +21,26 @@ func TestExecWiredGovernedVerbStagesPost(t *testing.T) {
 	}
 }
 
+// breakglass is a frontdoor-level EXIT: it needs an explicit reason (never the focused task), and with a
+// reason it stages the witnessed apply-seam POST.
+func TestBreakglassNeedsReason(t *testing.T) {
+	m := New("REINS")
+	m.WiredVerbs = map[string]bool{"breakglass": true}
+	// no reason -> refused, nothing staged (must not inherit a focused task as the "reason")
+	noReason := m.execGovernedVerb("breakglass", nil)
+	if noReason.PendingCommand != nil {
+		t.Fatal("bare breakglass must not dispatch (needs a reason)")
+	}
+	if !strings.Contains(noReason.Status, "reason") {
+		t.Fatalf("bare breakglass must ask for a reason, got %q", noReason.Status)
+	}
+	// with a reason -> staged
+	withReason := m.execGovernedVerb("breakglass", []string{"merge-pr-by-hand"})
+	if withReason.PendingCommand == nil || withReason.PendingCommand.Verb != "breakglass" || withReason.PendingCommand.Target != "merge-pr-by-hand" {
+		t.Fatalf("breakglass with a reason must stage the witnessed POST, got %+v", withReason.PendingCommand)
+	}
+}
+
 // An UNWIRED governed verb renders the never-mint PREVIEW and stages NOTHING (no fabricated apply,
 // A3.12a: one surface, the starved VerbSpec).
 func TestExecUnwiredGovernedVerbPreviewsOnly(t *testing.T) {
