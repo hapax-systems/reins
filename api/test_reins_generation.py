@@ -29,6 +29,22 @@ def _stage(root, sha, binary=b"BIN", api_files=None):
         json.dump(manifest, f)
 
 
+def test_framed_matches_cross_language_parity_constant():
+    # bind THIS copy of _framed to the shared constant (the Go + reins_serve copies are pinned to the
+    # same value). A drift here (e.g. a 4-byte prefix) would silently refuse every Go-staged generation;
+    # this assert makes that drift a test failure, not a silent parity break.
+    import hashlib
+
+    import reins_generation as rg
+
+    tree = {"reins_read.py": b"READ-BODY", "reins_serve.py": b"SERVE-BODY"}
+    h = hashlib.sha256()
+    for name in sorted(tree):
+        rg._framed(h, name.encode())
+        rg._framed(h, tree[name])
+    assert h.hexdigest() == "1cc45033fa146f2fbbef2a1bdb0d9e0f651e5a9949d63a6ea0bb1d77ebd9e540"
+
+
 def test_verify_generation_ok(tmp_path):
     import reins_generation as rg
 

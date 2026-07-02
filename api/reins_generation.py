@@ -35,12 +35,14 @@ def _gen_dir(root: str, sha: str) -> str:
 
 
 def _api_tree_hash(api_dir: str) -> str:
-    """Full framed digest over {top-level *.py} (non-recursive; __pycache__/.pyc/lockfiles ignored)."""
+    """Full framed digest over {top-level *.py} (non-recursive; __pycache__/.pyc/lockfiles ignored).
+    Skips DIRECTORIES (mirrors Go readAPITree's e.IsDir() skip) so a `*.py`-named subdir cannot raise."""
     h = hashlib.sha256()
     for name in sorted(os.listdir(api_dir)):
-        if not name.endswith(".py"):
+        full = os.path.join(api_dir, name)
+        if not name.endswith(".py") or os.path.isdir(full):
             continue
-        with open(os.path.join(api_dir, name), "rb") as f:
+        with open(full, "rb") as f:
             _framed(h, name.encode())
             _framed(h, f.read())
     return h.hexdigest()
@@ -74,6 +76,11 @@ def verify_generation(sha: str, root: str | None = None) -> tuple[bool, str]:
     api_dir = os.path.join(d, "api")
     if not os.path.isdir(api_dir):
         return False, f"generation {sha} api tree missing"
-    if _api_tree_hash(api_dir) != m.get("api_tree_sha256"):
+    try:
+        tree_hash = _api_tree_hash(api_dir)
+    except OSError as e:
+        # any read error recomputing the tree is a typed refusal, never an uncaught 500.
+        return False, f"generation {sha} api tree unreadable: {e}"
+    if tree_hash != m.get("api_tree_sha256"):
         return False, f"generation {sha} api-tree hash mismatch"
     return True, "verified"

@@ -173,6 +173,21 @@ def test_router_durable_idempotency_replay_is_duplicate():
     assert len(proj["commands"]) == 1
 
 
+def test_wired_verb_without_transport_is_honest_501(monkeypatch):
+    # a verb wired in the table but with NO bound transport must refuse with a witnessed 501 no-transport
+    # — never a blind pass to a write surface. (Defensive branch; unreachable while every wired verb has
+    # a closure, but the guarantee must hold.)
+    monkeypatch.setitem(reins_serve.VERB_TABLE, "phantom", {"wired": True})
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    resp = cmd("phantom", reins_command.CommandRequest(
+        target="t", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="ph1"))
+    assert resp.status_code == 501 and "no-transport" in resp.body.decode()
+    proj = _endpoint(app, "/read/commands")()
+    row = next(c for c in proj["commands"] if c["verb"] == "phantom")
+    assert row["status"] == "no-transport"  # the refusal is witnessed
+
+
 def test_stage_verified_generation_is_witnessed_ok(tmp_path, monkeypatch):
     # U6b-stage: POST /command/stage with a VERIFIED target generation -> 200 ok + a stage receipt,
     # witnessed in the ledger (demand+verdict). NO current pointer is flipped (staging != swapping).
