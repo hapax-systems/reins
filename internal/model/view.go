@@ -1300,8 +1300,48 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	// fanout; those are DERIVED by the routing/admission calculation (the throughput-governed doctrine).
 	b.WriteString(" " + grammar.C("brt", "CHAT") + grammar.C("mut", " · steer direction — not speed/provider") + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
+
+	// FOOTER first (bottom-anchored): the prompt/hint/send-gate must NEVER be pushed off-screen by a long
+	// turn list — that starved the operator's input line on the handheld. Build it, then window turns to fit.
+	var footer []string
+	if m.Mode == ModeSendGate {
+		// the egress preview is AIR-safe by construction (RenderInjectionComposer redacts text bodies +
+		// paths on air; secrets surface off-air only). The send is a stub — explicit confirm/dump only.
+		for _, ln := range strings.Split(grammar.RenderInjectionComposer(m.composeParts(), m.AIR), "\n") {
+			footer = append(footer, clipRunes(ln, w))
+		}
+		footer = append(footer, clipRunes(grammar.C("yel", " [enter/y] confirm send (stub) · [d] dump/kill · [esc] back to compose"), maxVisible(8, w)))
+	} else {
+		prompt := " › "
+		if m.Mode == ModeCoordChat {
+			prompt += m.coordChatInputDisplay() + "▌"
+		} else {
+			prompt += grammar.C("mut", "[c] steer: prioritize · hold · scope · accept/reject · /verb dispatches (send gated)")
+		}
+		footer = append(footer, clipRunes(grammar.C("pri", prompt), maxVisible(8, w)))
+		if m.Mode == ModeCoordChat && strings.HasPrefix(strings.TrimSpace(m.CoordChatInput), "/") {
+			footer = append(footer, clipRunes(grammar.C("mut", " "+m.dispatchHint()), maxVisible(8, w)))
+		}
+	}
+
+	// window turns to the tail that fits: h − header(2) − footer; reserve 1 line for the elision disclosure
+	// when truncating (never a silent drop — the "… N earlier" is a required vertical disclosure).
+	turns := m.coordinatorChatTurns()
+	budget := h - 2 - len(footer)
+	if budget < 1 {
+		budget = 1
+	}
+	if len(turns) > budget {
+		shown := budget - 1
+		if shown < 0 {
+			shown = 0
+		}
+		hidden := len(turns) - shown
+		turns = turns[len(turns)-shown:]
+		b.WriteString(clipRunes(grammar.C("mut", fmt.Sprintf(" … %d earlier turns hidden", hidden)), w) + "\n")
+	}
 	marks := map[string]string{"operator": "›", "hapax": "‹", "lens": "·"}
-	for _, t := range m.coordinatorChatTurns() {
+	for _, t := range turns {
 		mark := marks[t.Role]
 		if mark == "" {
 			mark = "·"
@@ -1312,26 +1352,8 @@ func (m Model) coordinatorChatPane(w, h int) string {
 		line := grammar.C(roleTok, fmt.Sprintf(" %s %-8s ", mark, roleText)) + grammar.C("pri", sum)
 		b.WriteString(clipRunes(line, w) + "\n")
 	}
-	if m.Mode == ModeSendGate {
-		// the egress preview is AIR-safe by construction (RenderInjectionComposer redacts text bodies +
-		// paths on air; secrets surface off-air only). The send is a stub — explicit confirm/dump only.
-		for _, ln := range strings.Split(grammar.RenderInjectionComposer(m.composeParts(), m.AIR), "\n") {
-			b.WriteString(clipRunes(ln, w) + "\n")
-		}
-		b.WriteString(clipRunes(grammar.C("yel", " [enter/y] confirm send (stub) · [d] dump/kill · [esc] back to compose"), maxVisible(8, w)))
-		return strings.TrimRight(b.String(), "\n")
-	}
-	prompt := " › "
-	if m.Mode == ModeCoordChat {
-		prompt += m.coordChatInputDisplay() + "▌"
-	} else {
-		prompt += grammar.C("mut", "[c] steer: prioritize · hold · scope · accept/reject · /verb dispatches (send gated)")
-	}
-	b.WriteString(clipRunes(grammar.C("pri", prompt), maxVisible(8, w)) + "\n")
-	// dispatch discoverability: composing a "/"-directive → show the verbs the chat can dispatch NOW through
-	// the witnessed apply seam (honest: only the WIRED verbs apply; others render the never-mint preview).
-	if m.Mode == ModeCoordChat && strings.HasPrefix(strings.TrimSpace(m.CoordChatInput), "/") {
-		b.WriteString(clipRunes(grammar.C("mut", " "+m.dispatchHint()), maxVisible(8, w)) + "\n")
+	for _, ln := range footer {
+		b.WriteString(ln + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

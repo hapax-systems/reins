@@ -3982,8 +3982,9 @@ func (m Model) execGovernedVerb(verb string, args []string) Model {
 		return m
 	}
 	if !m.WiredVerbs[verb] {
-		// not wired -> preview only; render the starved VerbSpec (never invoked).
-		m.Status = m.governedVerbPreview(verb)
+		// not wired -> preview only; render the starved VerbSpec against the RESOLVED target (not the
+		// focused task — "/close cc-x" must preview against cc-x even when cc-y is focused).
+		m.Status = m.governedVerbPreviewFor(verb, target)
 		return m
 	}
 	// wired -> stage the witnessed apply; main.go POSTs it + folds CommandVerdictMsg. IdempotencyKey is
@@ -4007,6 +4008,19 @@ func (m Model) governedVerbEnvelope(verb, target string) grammar.CommandEnvelope
 		Verb: verb, Target: target, Payload: s.payload, Authority: s.authority,
 		Preflight: s.preflight, Receipt: s.receipt, UIDelta: s.uiDelta, Wired: false,
 	}
+}
+
+// governedVerbPreviewFor renders the governed envelope against an EXPLICIT resolved target (AIR-aware: the
+// target id is a sensitive object id — sealed on air, shown off air). Used by the chat "/"-dispatch preview
+// where the target comes from the directive, not the focused row.
+func (m Model) governedVerbPreviewFor(verb, target string) string {
+	shown := target
+	if m.AIR && strings.TrimSpace(target) != "" {
+		shown = "▒▒▒"
+	}
+	env := m.governedVerbEnvelope(verb, shown)
+	env.TargetAirOK = true
+	return grammar.RenderCommandEnvelope(env, m.AIR)
 }
 
 // governedVerbPreview renders the verb's governed envelope against the focused task (AIR-aware: the
