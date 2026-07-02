@@ -58,6 +58,23 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
 }
 
 
+def serving_version() -> str:
+    """The ONE semver source. REINS_VERSION env (a deployed generation can stamp it at stage time, like
+    REINS_SERVING_SHA) wins; else the repo VERSION file (api/../VERSION — present on a source/kit install);
+    else an honest "dev". Rides /read/meta so the cockpit detects a binary/API SKEW (the two halves ship as
+    one versioned pair). "dev" never trips a false GEN-SKEW — the cockpit excludes it."""
+    env = os.environ.get("REINS_VERSION", "").strip()
+    if env:
+        return env
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "VERSION"), encoding="utf-8") as f:
+            v = f.read().strip()
+        return v or "dev"
+    except Exception:
+        return "dev"
+
+
 def serving_sha() -> str:
     """The generation identity: REINS_SERVING_SHA when deployed from a generation
     store (U6), else the live git sha, else an HONEST "unknown" — never fabricated."""
@@ -365,12 +382,14 @@ def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict |
 
     sha = serving_sha()
     tree = api_tree_sha()
+    ver = serving_version()
 
     @app.get("/read/meta")
     def read_meta() -> dict:
         return {
             "dark": False,
             "app": "reins",
+            "version": ver,  # the ONE semver — the cockpit compares its compiled version to detect skew
             "serving_sha": sha,
             "api_tree_sha": tree,
             "router": router_state,

@@ -203,7 +203,7 @@ func turnsTick(role string) tea.Cmd { // chat-pane live feed — polls the targe
 }
 func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — is this port actually reins?
 	m := api.FetchMeta(url)
-	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable, Verbs: m.WiredVerbs(), Modes: m.VerbModes()}
+	return model.MetaMsg{App: m.App, Version: m.Version, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable, Verbs: m.WiredVerbs(), Modes: m.VerbModes()}
 }
 
 // postCommandOnce is the apply-seam effect: POST a governed verb through the witnessed rail. The
@@ -575,7 +575,16 @@ func updateProbeModel(m model.Model, msg tea.Msg) model.Model {
 	return m
 }
 
+// version is the ONE semver source (the repo VERSION file), injected at build time via the Makefile
+// ldflag (-X main.version). "dev" for a bare `go run`. It rides /read/meta so a binary/API mismatch
+// renders GEN-SKEW in the cockpit (the two halves must ship as one versioned pair).
+var version = "dev"
+
 func main() {
+	if hasArg("--version") {
+		fmt.Println("reins " + version)
+		return
+	}
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
@@ -997,6 +1006,7 @@ func main() {
 	}
 	launch := model.New("REINS")
 	launch.Page = model.PageCoordinator // land on the Yard Coordinator (the new framework gestalt), not the legacy :events
+	launch.CockpitVersion = version     // for GEN-SKEW: compared to the API's /read/meta version
 	// U2: --resume restores externalized posture (page, focus/selection identities, chat log) so a
 	// hot-plug restart costs the operator no state. Identity anchors re-resolve on the first live
 	// fold (never index-restored); a missing posture file is a legal cold boot.

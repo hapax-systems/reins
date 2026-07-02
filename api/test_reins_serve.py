@@ -46,6 +46,7 @@ def test_read_meta_identity_handshake():
     assert meta["serving_sha"]  # git sha or the honest "unknown" — never absent
     assert meta["api_tree_sha"]
     assert meta["router"] == "mounted"
+    assert "version" in meta  # the ONE semver source rides /read/meta (GEN-SKEW detection)
     assert set(meta["verbs"]) == set(VERB_TABLE)
     wired = sorted(v for v, s in meta["verbs"].items() if s["wired"])
     # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor

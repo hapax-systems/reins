@@ -10,6 +10,9 @@ PY ?= python3   # python for the READ API; needs fastapi+uvicorn + the substrate
 .PHONY: up run api build install test smoke drive avsdlc fmt tidy help
 
 PREFIX ?= $(HOME)/.local
+# the ONE semver source (repo VERSION file), stamped into the Go binary (-X main.version) and read by the
+# Python /read/meta (serving_version). $(strip) drops the trailing newline so the ldflag is clean.
+VERSION := $(strip $(shell cat $(dir $(lastword $(MAKEFILE_LIST)))VERSION 2>/dev/null || echo dev))
 
 help: ## list targets
 	@grep -E '^[a-z]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | sort
@@ -28,8 +31,8 @@ run: ## the cockpit only (assumes the READ API is already up)
 api: ## the READ API only (foreground; port from config.toml)
 	$(PY) api/reins_read.py
 
-build: ## build the cockpit binary -> bin/reins
-	go build -o bin/reins ./cmd/reins
+build: ## build the cockpit binary -> bin/reins (VERSION-stamped)
+	go build -ldflags "-X main.version=$(VERSION)" -o bin/reins ./cmd/reins
 
 install: build ## install the cockpit -> $(PREFIX)/bin/reins (on PATH)
 	@mkdir -p $(PREFIX)/bin
@@ -47,6 +50,12 @@ smoke: ## headless NAV smoke — visits every page, no panic, on-air redaction
 
 drive: ## drive a nav sequence headless + print the frame (SPEC=":coordinator; j; v"  [SIZE=170x46] [FLAGS=--air])
 	go run ./cmd/reins --drive "$(SPEC)" size:$(or $(SIZE),170x46) $(FLAGS)
+
+demo: ## run the seed-backed FIXTURE cockpit (no estate, no API, no spine — a stranger's first look)
+	go run -ldflags "-X main.version=$(VERSION)" ./cmd/reins --demo
+
+kit: ## install reins from source (cockpit + config) — the one-command install path (PREFIX=~/.local)
+	sh scripts/install.sh
 
 avsdlc: ## render + AVSDLC-confirm every pane with an intent (visual regression; --live optional via FLAGS=--live)
 	bash scripts/reins-avsdlc-suite.sh $(FLAGS)

@@ -245,6 +245,11 @@ func (m Model) viewTitle(w int) string {
 		// silent trust. Loud, on the title bar, until identity resolves.
 		right = grammar.C("red", "PORT: FOREIGN SERVER") + grammar.C("mut", " · ") + right
 	}
+	if m.versionSkew() {
+		// the cockpit binary and the API answered with DIFFERENT semvers — the two halves shipped out of
+		// sync (a partial install/deploy). Loud, on the title bar, distinct from PORT: FOREIGN.
+		right = grammar.C("red", "GEN-SKEW "+m.CockpitVersion+"↔"+m.APIVersion) + grammar.C("mut", " · ") + right
+	}
 	maxMid := w - ansi.StringWidth(left) - ansi.StringWidth(right) - 3
 	if maxMid < 0 {
 		maxMid = 0
@@ -1326,6 +1331,13 @@ func (m Model) witnessDispatchTurns() (rows []grammar.Command, hidden int, dark 
 		all = all[len(all)-chatWitnessTail:]
 	}
 	return all, hidden, false
+}
+
+// versionSkew reports a binary↔API semver mismatch: both versions KNOWN (reachable + non-"dev") and
+// different. "dev" (a bare source run) never trips it; a foreign/dark port has no API version so it can't.
+func (m Model) versionSkew() bool {
+	c, a := strings.TrimSpace(m.CockpitVersion), strings.TrimSpace(m.APIVersion)
+	return c != "" && a != "" && c != "dev" && a != "dev" && c != a
 }
 
 func (m Model) coordinatorChatPane(w, h int) string {

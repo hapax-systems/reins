@@ -35,6 +35,7 @@ func checkOK(resp *http.Response, endpoint string) error {
 // (the 8799-squatter class) and must render as such, never be silently trusted.
 type ServingMeta struct {
 	App        string `json:"app"`
+	Version    string `json:"version"` // the ONE semver — the cockpit compares its compiled version → GEN-SKEW
 	ServingSHA string `json:"serving_sha"`
 	APITreeSHA string `json:"api_tree_sha"`
 	Router     string `json:"router"`

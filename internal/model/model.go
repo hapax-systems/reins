@@ -483,6 +483,8 @@ type Model struct {
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	Demo                bool   // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
+	CockpitVersion      string // the binary's compiled semver (main.version); compared to APIVersion → GEN-SKEW
+	APIVersion          string // the API's /read/meta version; a mismatch means the two halves shipped out of sync
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
 	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
 	VerbModes           map[string]string   // apply-seam: per-verb mode (preview verbs must not read as applied)
@@ -2618,6 +2620,7 @@ type TurnsMsg struct {
 // which does NOT set the foreign flag.
 type MetaMsg struct {
 	App        string
+	Version    string // the API's /read/meta version — compared to the cockpit's compiled version (GEN-SKEW)
 	ServingSHA string
 	Foreign    bool
 	Reachable  bool
@@ -2739,6 +2742,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (the read surfaces already render their own dark state) and never trips the flag.
 		m.PortForeign = v.Reachable && v.Foreign
 		m.ServingSHA = v.ServingSHA
+		if v.Reachable {
+			m.APIVersion = v.Version // GEN-SKEW is derived in the view (cockpit vs API version)
+		}
 		if v.Verbs != nil {
 			m.WiredVerbs = v.Verbs // the apply seam consults this to offer SEND only for wired verbs
 		}
