@@ -301,8 +301,21 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(), confirmProbationTick(),
 	)
+}
+
+type probationConfirmMsg struct{}
+
+// confirmProbationTick writes the reins-run probation confirm-file after the cockpit has stayed up
+// healthy for the probation-signal window (U6b-deploy). Its ABSENCE within probation is what the
+// supervisor reads as a failed swap (nonzero exit before this write) -> quarantine + rollback. A no-op
+// when REINS_CONFIRM_PATH is unset (a bare/un-supervised run). "Stayed up N seconds" is the health signal.
+func confirmProbationTick() tea.Cmd {
+	if strings.TrimSpace(os.Getenv("REINS_CONFIRM_PATH")) == "" {
+		return nil
+	}
+	return tea.Tick(6*time.Second, func(time.Time) tea.Msg { return probationConfirmMsg{} })
 }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -340,6 +353,13 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case posturePersistMsg:
 		_ = model.WritePosture("", r.m.SnapshotPosture()) // best-effort externalize; re-arm the cadence
 		return r, posturePersistTick()
+	case probationConfirmMsg:
+		// stayed up healthy through the probation window -> confirm to the reins-run supervisor (its
+		// absence within probation is what triggers a rollback). Best-effort; a bare run has no path.
+		if p := strings.TrimSpace(os.Getenv("REINS_CONFIRM_PATH")); p != "" {
+			_ = os.WriteFile(p, []byte("ok\n"), 0o644)
+		}
+		return r, nil
 	case model.TurnBlocksMsg:
 		return r, turnBlocksTickFocused(r) // re-arm the focused-turn detail-block fetch
 	case model.GatesMsg:
