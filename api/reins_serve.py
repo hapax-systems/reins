@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 import reins_command
 import reins_ledger
 import reins_read
+import reins_route
 
 # The day-1 verb table (design pack §Design 3): every verb present and typed, only
 # the read-only resume preview is wired. Wiring a verb here without its governed
@@ -199,6 +200,18 @@ def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict |
         # the witnessed-frontdoor projection (U3): demand+verdict datoms, honest witness state,
         # `absent` enforcement (the dispatch-gate does not exist until U13/CP-E). AIR default-deny.
         return reins_ledger.read_commands(None, allowlist, limit)
+
+    @app.get("/route/posture")
+    def route_posture() -> dict:
+        # ROUTE projection (U4): NO SPINE DECISION ON FILE — reins mints no routing decision; honest
+        # keyspace coverage + source states + the reqvec 0..5 producer contract.
+        return reins_route.read_route_posture(None)
+
+    @app.get("/route/candidates")
+    def route_candidates() -> dict:
+        # measured DEMAND evidence per routing_class (raw reqvec, no scalar); task_reqvec absent;
+        # candidate ranking is a spine decision (dark).
+        return reins_route.read_route_candidates(None)
 
     sha = serving_sha()
     tree = api_tree_sha()

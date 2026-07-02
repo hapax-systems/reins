@@ -94,7 +94,7 @@ def test_import_graph_guard_no_mint_surface():
         "hapax_methodology_dispatch", "escape_grant_mint", "cc_claim",
     )
     api_dir = pathlib.Path(__file__).parent
-    for mod in ("reins_serve.py", "reins_command.py", "reins_ledger.py"):
+    for mod in ("reins_serve.py", "reins_command.py", "reins_ledger.py", "reins_route.py"):
         tree = ast.parse((api_dir / mod).read_text())
         imported: list[str] = []
         for node in ast.walk(tree):
