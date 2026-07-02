@@ -406,6 +406,10 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, metaTick(r.url) // re-arm the serving-identity handshake
 	case model.CommandsMsg:
 		return r, commandsTick(r.url) // re-arm the witnessed command-ledger poll
+	case model.CommandVerdictMsg:
+		// a dispatch just resolved — refetch the ledger NOW so its witness row lands in the Yard Crow chat
+		// within a frame (the demand→verdict loop closes in-surface), not on the next 5s commands poll.
+		return r, func() tea.Msg { return fetchCommandsOnce(r.url) }
 	case model.RouteMsg:
 		return r, routeTick(r.url) // re-arm the ROUTE projection poll
 	case posturePersistMsg:

@@ -127,6 +127,29 @@ func RenderCommandRow(c Command, on bool) string {
 		C("mut", " · witness ") + C("mut", witness) + C("2nd", ref)
 }
 
+// RenderCommandRowPreview renders a PREVIEW-mode command's witnessed row honestly: a preview verb's ok
+// wrote NOTHING, so its glyph is ◌ and its status reads "previewed (no write)" — never ✓/applied. The
+// caller (which knows verb modes — the row itself carries no mode) selects this over RenderCommandRow when
+// c.Status=="ok" and the verb is preview-mode, so a witnessed /resume never reads as applied (never-false-
+// green) on the :commands page OR the on-air Yard Crow chat. Same layout as RenderCommandRow otherwise.
+func RenderCommandRowPreview(c Command, on bool) string {
+	verb := Redact(c.AIR, "verb", c.Verb, on)
+	target := Redact(c.AIR, "target", c.Target, on)
+	witness := c.Witness
+	if witness == "" {
+		witness = "pending"
+	}
+	ref := ""
+	if t := strings.TrimSpace(c.TaskID); t != "" {
+		ref = " · " + Redact(c.AIR, "task_id", t, on)
+	} else if r := strings.TrimSpace(c.SessionRole); r != "" {
+		ref = " · " + Redact(c.AIR, "session_role", r, on)
+	}
+	return C("mut", "◌") + " " + C("pri", fmt.Sprintf("%-9s", verb)) +
+		C("2nd", " "+target) + C("mut", " · ") + C("brt", "previewed (no write)") +
+		C("mut", " · witness ") + C("mut", witness) + C("2nd", ref)
+}
+
 // Glyph: the closed, learned alphabet — the cell carries the kind by semantic class
 // (▸ in-progress · ✓ success · ✖ failure · ⇡ advance · ⚑ flag · ◆ task · ↟ PR), monochrome-safe.
 var glyphs = map[string]string{

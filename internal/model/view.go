@@ -1294,6 +1294,34 @@ func (m Model) coordinatorRelationBanner(w int) string {
 // conversation renders turn-shaped (the session pane's grammar, integrated); an input affordance sits
 // at the foot. Live agent dispatch is gated on CapabilityIO (#4296), so SEND is a governed stub — the
 // pane is render + transclude + input integrated, AIR-safe (free-text turn summaries redact on air).
+// renderWitnessRow renders one witnessed command row, preview-aware: a preview-mode verb's ok wrote
+// nothing, so it demotes to "◌ previewed (no write)" — never "✓ applied" (never-false-green). The row
+// itself carries no mode, so the model supplies it from VerbModes. Used by BOTH the :commands page and the
+// Yard Crow chat witness tail, so both surfaces are honest.
+func (m Model) renderWitnessRow(c grammar.Command) string {
+	if c.Status == "ok" && m.VerbModes[c.Verb] == "preview" {
+		return grammar.RenderCommandRowPreview(c, m.AIR)
+	}
+	return grammar.RenderCommandRow(c, m.AIR)
+}
+
+const chatWitnessTail = 4 // recent witnessed governed-dispatch rows shown in the chat (most-recent last)
+
+// witnessDispatchTurns is the bounded recent tail of the witnessed command ledger (m.Commands) rendered as
+// the chat's own dispatch consequence — the demand→verdict loop CLOSING in the surface it was issued from.
+// Returns (rows, hiddenCount, dark). Pure read-only projection of already-folded state; nil when dark/empty.
+func (m Model) witnessDispatchTurns() (rows []grammar.Command, hidden int, dark bool) {
+	if m.CommandsDark {
+		return nil, 0, true
+	}
+	all := m.Commands
+	if len(all) > chatWitnessTail {
+		hidden = len(all) - chatWitnessTail
+		all = all[len(all)-chatWitnessTail:]
+	}
+	return all, hidden, false
+}
+
 func (m Model) coordinatorChatPane(w, h int) string {
 	var b strings.Builder
 	// the chat STEERS DIRECTION only (priority · hold · scope · accept/reject) — never speed/provider/
@@ -1324,24 +1352,8 @@ func (m Model) coordinatorChatPane(w, h int) string {
 		}
 	}
 
-	// window turns to the tail that fits: h − header(2) − footer; reserve 1 line for the elision disclosure
-	// when truncating (never a silent drop — the "… N earlier" is a required vertical disclosure).
-	turns := m.coordinatorChatTurns()
-	budget := h - 2 - len(footer)
-	if budget < 1 {
-		budget = 1
-	}
-	if len(turns) > budget {
-		shown := budget - 1
-		if shown < 0 {
-			shown = 0
-		}
-		hidden := len(turns) - shown
-		turns = turns[len(turns)-shown:]
-		b.WriteString(clipRunes(grammar.C("mut", fmt.Sprintf(" … %d earlier turns hidden", hidden)), w) + "\n")
-	}
 	marks := map[string]string{"operator": "›", "hapax": "‹", "lens": "·"}
-	for _, t := range turns {
+	renderTurn := func(t grammar.Turn) string {
 		mark := marks[t.Role]
 		if mark == "" {
 			mark = "·"
@@ -1349,8 +1361,70 @@ func (m Model) coordinatorChatPane(w, h int) string {
 		sum := grammar.Redact(t.AIR, "summary", t.Summary, m.AIR)
 		roleTok := airHue(grammar.LaneToken(t.Role), t.AIR, "role", m.AIR) // hue is a derived channel — demote on denied role
 		roleText := grammar.Redact(t.AIR, "role", t.Role, m.AIR)
-		line := grammar.C(roleTok, fmt.Sprintf(" %s %-8s ", mark, roleText)) + grammar.C("pri", sum)
-		b.WriteString(clipRunes(line, w) + "\n")
+		return clipRunes(grammar.C(roleTok, fmt.Sprintf(" %s %-8s ", mark, roleText))+grammar.C("pri", sum), w)
+	}
+
+	// separate the PINNED lens {{sel}} grounding turn (always first, role "lens") from the conversation —
+	// it must survive windowing (always-situate / never-alienate), never be evicted by witness rows.
+	turns := m.coordinatorChatTurns()
+	var grounding *grammar.Turn
+	convo := turns
+	if len(turns) > 0 && turns[0].Role == "lens" {
+		g := turns[0]
+		grounding, convo = &g, turns[1:]
+	}
+
+	// the WITNESS block (the demand→verdict loop closing in the surface it is issued from) sits above the
+	// footer, with its OWN elision so witness rows never starve the conversation.
+	witRows, witHidden, witDark := m.witnessDispatchTurns()
+	witnessLines := 0
+	if witDark {
+		witnessLines = 2 // separator + dark line
+	} else if len(witRows) > 0 {
+		witnessLines = 1 + len(witRows) // separator + rows
+		if witHidden > 0 {
+			witnessLines++
+		}
+	}
+	groundingLines := 0
+	if grounding != nil {
+		groundingLines = 1
+	}
+
+	// budget for the CONVERSATION turns = h − header(2) − footer − grounding − witness block.
+	budget := h - 2 - len(footer) - groundingLines - witnessLines
+	if budget < 1 {
+		budget = 1
+	}
+	if grounding != nil {
+		b.WriteString(renderTurn(*grounding) + "\n")
+	}
+	if len(convo) > budget {
+		shown := budget - 1 // 1 line for the elision disclosure
+		if shown < 0 {
+			shown = 0
+		}
+		b.WriteString(clipRunes(grammar.C("mut", fmt.Sprintf(" … %d earlier turns hidden", len(convo)-shown)), w) + "\n")
+		convo = convo[len(convo)-shown:]
+	}
+	for _, t := range convo {
+		b.WriteString(renderTurn(t) + "\n")
+	}
+	if witDark {
+		b.WriteString(" " + grammar.C("mut", "── witnessed frontdoor dispatches ──") + "\n")
+		reason := strings.TrimSpace(m.CommandsError)
+		if reason == "" {
+			reason = "command ledger unreachable"
+		}
+		b.WriteString(" " + grammar.C("mut", "· dark — "+clipRunes(reason, maxVisible(8, w-12))) + "\n")
+	} else if len(witRows) > 0 {
+		b.WriteString(" " + grammar.C("mut", "── witnessed frontdoor dispatches ──") + "\n")
+		if witHidden > 0 {
+			b.WriteString(" " + grammar.C("mut", fmt.Sprintf("↑%d earlier witnessed", witHidden)) + "\n")
+		}
+		for _, c := range witRows {
+			b.WriteString(" " + clipRunes(m.renderWitnessRow(c), maxVisible(8, w-1)) + "\n")
+		}
 	}
 	for _, ln := range footer {
 		b.WriteString(ln + "\n")
@@ -5193,7 +5267,7 @@ func (m Model) renderCommandCatalog(w int) string {
 			b.WriteString(" " + grammar.C("mut", fmt.Sprintf("↑%d earlier witnessed — showing the recent 8", hidden)) + "\n")
 		}
 		for _, c := range shown {
-			b.WriteString(" " + clipRunes(grammar.RenderCommandRow(c, m.AIR), maxVisible(8, w-1)) + "\n")
+			b.WriteString(" " + clipRunes(m.renderWitnessRow(c), maxVisible(8, w-1)) + "\n")
 		}
 	}
 	b.WriteString(" " + rule + "\n")
