@@ -14,6 +14,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
+import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
 
 _ROUTE_BINDING_TAIL_BYTES = 4 * 1024 * 1024
 
@@ -4206,6 +4207,21 @@ def _raw_tail(council_root: str, limit: int, before: str | None = None) -> list[
     return _page_before(out, before, limit)
 
 
+def _load_context_bundle(council_root: str) -> dict | None:
+    """Load the producer's reins_context_fact_bundle (spine/council-emitted), or None (honest-dark). Read
+    only — never mints or fabricates a bundle."""
+    for p in (os.environ.get("REINS_CONTEXT_BUNDLE"),
+              os.path.join(os.path.expanduser(council_root or ""), "reins-context-bundle.json")):
+        if p and os.path.exists(p):
+            try:
+                with open(p) as f:
+                    b = json.load(f)
+                return b if isinstance(b, dict) else None
+            except Exception:
+                return None
+    return None
+
+
 def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
     app = FastAPI()
     session_cfg = session_cfg or {}
@@ -4346,6 +4362,20 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
             return {"dark": False, "intake": read_intake_summary(session_cfg, allowlist)}
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "intake": {"sources": [], "rows": [], "totals": {}}}
+
+    @app.get("/read/context")
+    def read_context() -> dict:
+        # The tri-audience context substrate (operator / the Yard Crow / Hapax), AIR-sealed per audience.
+        # Sources the producer bundle (spine/council, via REINS_CONTEXT_BUNDLE or <root>/reins-context-
+        # bundle.json); HONEST-DARK until the producer emits — never a fabricated projection. Readout only.
+        bundle = _load_context_bundle(council_root)
+        if bundle is None:
+            return {"dark": True, "reason": "context-fact-bundle producer not emitting yet",
+                    "audiences": list(reins_context.AUDIENCES)}
+        try:
+            return {"dark": False, "projections": reins_context.project_all(bundle)}
+        except Exception as e:  # a malformed bundle degrades to honest-dark, never a half-projection
+            return {"dark": True, "reason": f"bundle malformed: {e}", "audiences": list(reins_context.AUDIENCES)}
 
     @app.get("/read/capabilities")
     def read_capabilities() -> dict:
