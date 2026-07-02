@@ -484,6 +484,7 @@ type Model struct {
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
 	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
+	VerbModes           map[string]string   // apply-seam: per-verb mode (preview verbs must not read as applied)
 	DeviceOverride      DeviceClass         // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
 	PendingCommand      *CommandRequest     // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
 	LastVerdict         string              // apply-seam: the last witnessed command verdict (rendered)
@@ -2619,7 +2620,8 @@ type MetaMsg struct {
 	ServingSHA string
 	Foreign    bool
 	Reachable  bool
-	Verbs      map[string]bool // the router's per-verb wired-state (apply seam)
+	Verbs      map[string]bool   // the router's per-verb wired-state (apply seam)
+	Modes      map[string]string // the router's per-verb mode (preview verbs must not read as applied)
 }
 
 // CommandRequest is a governed verb the cockpit will POST through the witnessed rail (apply seam).
@@ -2638,6 +2640,7 @@ type CommandVerdictMsg struct {
 	HTTP      int
 	EventID   string
 	Reason    string
+	FoldDelta string // the transport's own honest phrasing (a preview verb: "would emit …")
 	Reachable bool
 }
 
@@ -2652,7 +2655,13 @@ func (m Model) FoldCommandVerdict(v CommandVerdictMsg) Model {
 		if len(wit) > 12 {
 			wit = wit[:12]
 		}
-		m.LastVerdict = v.Verb + ": ✓ applied + witnessed (" + wit + ")"
+		if m.VerbModes[v.Verb] == "preview" {
+			// a preview verb wrote NOTHING — the demand was witnessed, but rendering "✓ applied" would be
+			// false-green on the frontdoor. Show the transport's own honest phrasing (a no-op preview).
+			m.LastVerdict = v.Verb + ": ◌ previewed (no write, witnessed " + wit + ")"
+		} else {
+			m.LastVerdict = v.Verb + ": ✓ applied + witnessed (" + wit + ")"
+		}
 	case v.Status == "idempotent-replay":
 		m.LastVerdict = v.Verb + ": ✓ already applied (idempotent replay — not re-run)"
 	default: // not-wired / stage-rejected / authority-rejected / preflight-failed / ...
@@ -2731,6 +2740,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ServingSHA = v.ServingSHA
 		if v.Verbs != nil {
 			m.WiredVerbs = v.Verbs // the apply seam consults this to offer SEND only for wired verbs
+		}
+		if v.Modes != nil {
+			m.VerbModes = v.Modes // a preview verb's ok is rendered as "previewed (no write)", never applied
 		}
 		m.LastFold = "meta"
 		return m, nil

@@ -36,9 +36,17 @@ func TestExecUnwiredGovernedVerbPreviewsOnly(t *testing.T) {
 
 // The verdict fold is honest across ok / refused / unreachable — never a fabricated success.
 func TestFoldCommandVerdictHonest(t *testing.T) {
-	ok := Model{}.FoldCommandVerdict(CommandVerdictMsg{Verb: "resume", Status: "ok", EventID: "abcdef012345deadbeef", Reachable: true})
-	if !strings.Contains(ok.Status, "✓") || !strings.Contains(ok.Status, "witnessed") || !strings.Contains(ok.Status, "abcdef012345") {
-		t.Fatalf("ok verdict must show applied+witnessed+eventid: %q", ok.Status)
+	// a GOVERNED verb ok reads as applied+witnessed+eventid
+	gov := Model{VerbModes: map[string]string{"close": "governed"}}.FoldCommandVerdict(
+		CommandVerdictMsg{Verb: "close", Status: "ok", EventID: "abcdef012345deadbeef", Reachable: true})
+	if !strings.Contains(gov.Status, "✓") || !strings.Contains(gov.Status, "witnessed") || !strings.Contains(gov.Status, "abcdef012345") {
+		t.Fatalf("governed ok verdict must show applied+witnessed+eventid: %q", gov.Status)
+	}
+	// a PREVIEW verb ok must NOT read as applied (never-false-green): resume is a no-op preview transport
+	prev := Model{VerbModes: map[string]string{"resume": "preview"}}.FoldCommandVerdict(
+		CommandVerdictMsg{Verb: "resume", Status: "ok", EventID: "abcdef012345deadbeef", Reachable: true})
+	if strings.Contains(prev.Status, "applied") || !strings.Contains(prev.Status, "previewed") || !strings.Contains(prev.Status, "no write") {
+		t.Fatalf("preview verb must read as previewed (no write), never applied: %q", prev.Status)
 	}
 	refused := Model{}.FoldCommandVerdict(CommandVerdictMsg{Verb: "dispatch", Status: "not-wired", Reason: "no ungated path", Reachable: true})
 	if !strings.Contains(refused.Status, "✖") || strings.Contains(refused.Status, "applied +") || !strings.Contains(refused.Status, "not-wired") {

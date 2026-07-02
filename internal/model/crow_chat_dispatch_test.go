@@ -84,3 +84,31 @@ func TestDispatchHintNothingWired(t *testing.T) {
 		t.Fatalf("empty wired set must say so (honest), got %q", h)
 	}
 }
+
+func TestDispatchHintExcludesNonDispatchableStage(t *testing.T) {
+	// stage is wired server-side but NOT in governedVerbSpecs -> the chat cannot dispatch it, so the hint
+	// must not advertise it (else the operator hits "unknown command").
+	m := New("REINS")
+	m.WiredVerbs = map[string]bool{"focus": true, "stage": true}
+	h := m.dispatchHint()
+	if strings.Contains(h, "/stage") {
+		t.Fatalf("hint must not advertise the non-dispatchable /stage, got %q", h)
+	}
+	if !strings.Contains(h, "/focus") {
+		t.Fatalf("hint must still advertise the dispatchable /focus, got %q", h)
+	}
+}
+
+func TestCoordChatInputSealsGovernedTargetOnAir(t *testing.T) {
+	// on air, a "/"-directive's governed TARGET is sealed (mirrors commandInputDisplay), verb kept.
+	m := New("REINS")
+	m.AIR = true
+	m.CoordChatInput = "/focus cc-task-secret"
+	got := m.coordChatInputDisplay()
+	if strings.Contains(got, "cc-task-secret") {
+		t.Fatalf("governed target must be sealed on air, got %q", got)
+	}
+	if !strings.Contains(got, "/focus") {
+		t.Fatalf("verb must survive (structural), got %q", got)
+	}
+}

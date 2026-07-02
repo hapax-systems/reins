@@ -4207,18 +4207,31 @@ def _raw_tail(council_root: str, limit: int, before: str | None = None) -> list[
     return _page_before(out, before, limit)
 
 
+class _BundleMalformed(Exception):
+    """A producer bundle is PRESENT but unreadable/malformed — distinct from an ABSENT producer, so
+    'producer broken' never masquerades as 'producer not emitting'."""
+
+
 def _load_context_bundle(council_root: str) -> dict | None:
-    """Load the producer's reins_context_fact_bundle (spine/council-emitted), or None (honest-dark). Read
-    only — never mints or fabricates a bundle."""
-    for p in (os.environ.get("REINS_CONTEXT_BUNDLE"),
-              os.path.join(os.path.expanduser(council_root or ""), "reins-context-bundle.json")):
-        if p and os.path.exists(p):
-            try:
-                with open(p) as f:
-                    b = json.load(f)
-                return b if isinstance(b, dict) else None
-            except Exception:
-                return None
+    """Load the producer's reins_context_fact_bundle (spine/council-emitted). Returns None when the producer
+    is genuinely ABSENT; raises _BundleMalformed when a bundle is PRESENT but broken (the two render as
+    different honest-dark reasons). Read only — never mints or fabricates a bundle.
+
+    If REINS_CONTEXT_BUNDLE is set, it is used EXCLUSIVELY (a broken bundle at the explicit path must not
+    silently fall through to the council default — that would hide operator misconfiguration)."""
+    env = os.environ.get("REINS_CONTEXT_BUNDLE")
+    paths = [env] if env else [os.path.join(os.path.expanduser(council_root or ""), "reins-context-bundle.json")]
+    for p in paths:
+        if not (p and os.path.exists(p)):
+            continue
+        try:
+            with open(p) as f:
+                b = json.load(f)
+        except Exception as e:
+            raise _BundleMalformed(f"{p}: {e}") from e
+        if not isinstance(b, dict):
+            raise _BundleMalformed(f"{p}: bundle is not a JSON object")
+        return b
     return None
 
 
@@ -4364,18 +4377,30 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
             return {"dark": True, "error": str(e), "intake": {"sources": [], "rows": [], "totals": {}}}
 
     @app.get("/read/context")
-    def read_context() -> dict:
+    def read_context(audience: str = "") -> dict:
         # The tri-audience context substrate (operator / the Yard Crow / Hapax), AIR-sealed per audience.
         # Sources the producer bundle (spine/council, via REINS_CONTEXT_BUNDLE or <root>/reins-context-
         # bundle.json); HONEST-DARK until the producer emits — never a fabricated projection. Readout only.
-        bundle = _load_context_bundle(council_root)
+        # `audience` scopes the response to ONE projection (default operator_private — the only caller today
+        # is the loopback cockpit) so operator-private facts are not handed to a non-operator consumer once
+        # yard/hapax wire in; project_all requires an explicit audience=all.
+        aud = audience or "operator_private"
+        if aud != "all" and aud not in reins_context.AUDIENCES:
+            return {"dark": True, "reason": f"unknown audience {aud!r}", "audiences": list(reins_context.AUDIENCES)}
+        try:
+            bundle = _load_context_bundle(council_root)
+        except _BundleMalformed as e:  # PRESENT but broken — a DIFFERENT dark than absent (operator misconfig)
+            return {"dark": True, "reason": f"producer bundle present but malformed: {e}",
+                    "audiences": list(reins_context.AUDIENCES)}
         if bundle is None:
             return {"dark": True, "reason": "context-fact-bundle producer not emitting yet",
                     "audiences": list(reins_context.AUDIENCES)}
         try:
-            return {"dark": False, "projections": reins_context.project_all(bundle)}
-        except Exception as e:  # a malformed bundle degrades to honest-dark, never a half-projection
-            return {"dark": True, "reason": f"bundle malformed: {e}", "audiences": list(reins_context.AUDIENCES)}
+            if aud == "all":
+                return {"dark": False, "projections": reins_context.project_all(bundle)}
+            return {"dark": False, "audience": aud, "projections": {aud: reins_context.project(bundle, aud)}}
+        except Exception as e:  # a projection failure degrades to honest-dark, never a half-projection
+            return {"dark": True, "reason": f"projection failed: {e}", "audiences": list(reins_context.AUDIENCES)}
 
     @app.get("/read/capabilities")
     def read_capabilities() -> dict:

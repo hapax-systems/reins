@@ -119,6 +119,8 @@ def affordance_explanation(sealed_fact: dict, audience: str) -> dict:
     # stage_injection_preview: HOLD when the content is provider-prompt-eligible but egress/consent is absent
     # (requires_hold) — the classic never-injector HOLD. Never `present` from this readout.
     if inputs.get("can_enter_provider_prompt"):
-        out.append(entry("stage_injection_preview", "hold" if inputs.get("requires_hold", True) else "hold"))
+        # never-injector: provider-prompt-eligible content is ALWAYS HOLD from this readout (egress/consent
+        # is not reins' to grant). A "present" injection affordance would need a separate governed path.
+        out.append(entry("stage_injection_preview", "hold"))
 
     return {"subject_ref": subject, "affordances": out}

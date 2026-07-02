@@ -203,7 +203,7 @@ func turnsTick(role string) tea.Cmd { // chat-pane live feed — polls the targe
 }
 func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — is this port actually reins?
 	m := api.FetchMeta(url)
-	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable, Verbs: m.WiredVerbs()}
+	return model.MetaMsg{App: m.App, ServingSHA: m.ServingSHA, Foreign: m.Foreign, Reachable: m.Reachable, Verbs: m.WiredVerbs(), Modes: m.VerbModes()}
 }
 
 // postCommandOnce is the apply-seam effect: POST a governed verb through the witnessed rail. The
@@ -217,7 +217,7 @@ func postCommandOnce(url, verb, target string, window int64) tea.Msg {
 	r := api.PostCommand(url, verb, target, packet, map[string]any{}, key)
 	return model.CommandVerdictMsg{
 		Verb: verb, Status: r.Status, HTTP: r.HTTP, EventID: r.EventID,
-		Reason: firstNonEmpty(r.Reason, r.Err), Reachable: r.Reachable,
+		Reason: firstNonEmpty(r.Reason, r.Err), FoldDelta: r.FoldDelta, Reachable: r.Reachable,
 	}
 }
 

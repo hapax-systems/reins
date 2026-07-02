@@ -54,3 +54,22 @@ func TestContextSuffixNoSubjectMatchEmpty(t *testing.T) {
 		t.Fatalf("no subject match -> empty suffix, got %q", s)
 	}
 }
+
+func TestContextSuffixSealedOnAir(t *testing.T) {
+	// the ctx suffix is operator_private-derived — it must NOT render on the airing frame (derived-channel seal).
+	m := New("REINS").FoldContext([]grammar.ContextAffordance{
+		{Subject: "task:cc-a", Kind: "yank_operator_private", State: "present"}}, false)
+	m.AIR = true
+	if s := m.contextSuffix("cc-a"); s != "" {
+		t.Fatalf("ctx suffix must be sealed on air, got %q", s)
+	}
+}
+
+func TestContextSuffixExactMatchNotSubstring(t *testing.T) {
+	// deterministic boundary-aware match: taskID "cc-a" must NOT match a subject "cc-a-extended"
+	m := New("REINS").FoldContext([]grammar.ContextAffordance{
+		{Subject: "cc-a-extended", Kind: "refocus", State: "present"}}, false)
+	if s := m.contextSuffix("cc-a"); s != "" {
+		t.Fatalf("substring collision: cc-a must not match cc-a-extended, got %q", s)
+	}
+}

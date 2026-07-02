@@ -96,14 +96,25 @@ def test_focus_inflection_wired_witnessed_no_spine_write():
     app = build_serve_app("", [])
     cmd = _endpoint(app, "/command/{verb}")
     resp = cmd("focus", reins_command.CommandRequest(
-        target="reform-task-x", authority_packet={"kind": "operator_attestation"},
+        target="reform-task-x",
+        authority_packet={"kind": "operator_attestation", "ruling": "RULING-REINS-OPERATOR-ATTESTATION-20260701"},
         preflight_receipt={}, idempotency_key="focus-k1",
     ))
     assert resp.status_code == 200
     body = resp.body.decode()
     assert "focus-inflection on reform-task-x" in body      # the witnessed inflection
+    assert "RECORDED for the spine to consume" in body      # honest: consumer pending (not present-tense)
     assert '"event_seq":null' in body.replace(" ", "")      # NO spine write — reins-local
     assert '"event_id":' in body                            # witnessed on the durable ledger
+
+
+def test_focus_rejects_non_attestation_packet():
+    # a bare-truthy packet must NOT mint a durable 'operator' focus — the attestation must shape-match.
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    r = cmd("focus", reins_command.CommandRequest(
+        target="t", authority_packet={"kind": "nonsense"}, preflight_receipt={}, idempotency_key="focus-bad"))
+    assert r.status_code != 200  # authority-rejected + witnessed (not applied)
     d = cmd("dispatch", reins_command.CommandRequest(
         target="x", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="d1"))
     assert d.status_code == 501  # dispatch remains spine-gated

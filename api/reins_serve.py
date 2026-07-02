@@ -167,7 +167,9 @@ def _focus_closures():
     focus originates in the reins frontdoor (per the convergence cleave); the spine only CONSUMES it."""
 
     def verify(packet: Any, target: str) -> bool:
-        return bool(packet) and bool(target)
+        # the attestation must SHAPE-match the ruling it claims — a bare-truthy packet from any same-UID
+        # process must not mint a durable 'operator' focus. The recorded attestation then means what it says.
+        return _is_operator_attestation(packet) and bool(target)
 
     def preflight(env: reins_command.Envelope) -> bool:
         return not env.preflight_receipt.get("blocked")
@@ -179,13 +181,25 @@ def _focus_closures():
             receipt_id=f"focus-{env.idempotency_key}",
             event_seq=None,  # no spine write — the ledger witness IS the record
             fold_delta=(
-                f"operator focus-inflection on {env.target} — witnessed frontdoor primitive "
-                "(the ROUTE + the spine consume it for prioritization; no dispatch, no spine write)"
+                f"operator focus-inflection on {env.target} — RECORDED for the spine to consume "
+                "(consumer pending: the seam contract is open; no dispatch, no spine write)"
             ),
             spooled=False,
         )
 
     return verify, preflight, transport
+
+
+def _is_operator_attestation(packet: Any) -> bool:
+    """Shape-check an operator_attestation packet (kind + the registered ruling id). This is NOT a
+    cryptographic proof — loopback presence remains the trust root (A3.3) — but it ensures the WITNESSED
+    attestation is what it claims, not an arbitrary truthy object. A stronger nonce/TTL lands before any
+    spine consumer reads focus rows or any WRITE verb (arm/close/dispatch) wires (U7)."""
+    return (
+        isinstance(packet, dict)
+        and packet.get("kind") == "operator_attestation"
+        and str(packet.get("ruling", "")).startswith("RULING-REINS-OPERATOR-ATTESTATION")
+    )
 
 
 def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
@@ -262,14 +276,24 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
             preflight_receipt=req.preflight_receipt,
             idempotency_key=req.idempotency_key,
         )
-        # the ledger already deduped the demand, so route_command sees a fresh emitted map.
-        resp = reins_command.route_command(
-            envelope,
-            verify_authority=verify,
-            preflight=preflight,
-            transport=transport,
-            already_emitted={},
-        )
+        # the ledger already deduped the demand, so route_command sees a fresh emitted map. A RAISING
+        # verify/preflight/transport must still leave a VERDICT — otherwise the demand strands as an
+        # unresolved 'pending' forever (witness-every-attempt, A3.2). Record transport-error + refuse typed.
+        try:
+            resp = reins_command.route_command(
+                envelope,
+                verify_authority=verify,
+                preflight=preflight,
+                transport=transport,
+                already_emitted={},
+            )
+        except Exception as e:  # the transport blew up — witness the failure, never leave it pending
+            ledger.record_verdict(eid, "transport-error", 500, repr(e))
+            return JSONResponse(
+                {"status": "transport-error", "http": 500, "wired": True, "event_id": eid,
+                 "reason": f"{verb} transport raised: {e!r} (witnessed; nothing applied)"},
+                status_code=500,
+            )
         ledger.record_verdict(eid, resp.status, resp.http, resp.reason or "")
         out = reins_command._resp_to_dict(resp)
         out["event_id"] = eid
@@ -319,7 +343,10 @@ def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict |
             "serving_sha": sha,
             "api_tree_sha": tree,
             "router": router_state,
-            "verbs": {v: {"wired": bool(s.get("wired"))} for v, s in VERB_TABLE.items()},
+            # mode is projected so the cockpit can render a PREVIEW verb honestly (a preview-mode ok is
+            # "would emit …", never "✓ applied") — never-false-green on the frontdoor.
+            "verbs": {v: {"wired": bool(s.get("wired")), "mode": s.get("mode", "")}
+                      for v, s in VERB_TABLE.items()},
         }
 
     return app

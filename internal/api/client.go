@@ -41,7 +41,8 @@ type ServingMeta struct {
 	// Verbs is the router's per-verb wired-state ({verb: {wired: bool}}) — the cockpit's apply seam
 	// only offers SEND for a wired verb; an unwired verb renders preview-only (A3.12a: one surface).
 	Verbs map[string]struct {
-		Wired bool `json:"wired"`
+		Wired bool   `json:"wired"`
+		Mode  string `json:"mode"` // "" | "inflection" | "preview" | "governed" — preview must NOT read as applied
 	} `json:"verbs"`
 	// Foreign is set by FetchMeta (not the wire) when the port answers without the reins
 	// identity — the cockpit renders PORT: FOREIGN SERVER.
@@ -59,12 +60,23 @@ func (m ServingMeta) WiredVerbs() map[string]bool {
 	return out
 }
 
+// VerbModes flattens Verbs to a {verb: mode} map so the cockpit renders a PREVIEW verb honestly (a
+// preview-mode ok is a no-op "would emit …", never "✓ applied + witnessed").
+func (m ServingMeta) VerbModes() map[string]string {
+	out := map[string]string{}
+	for v, s := range m.Verbs {
+		out[v] = s.Mode
+	}
+	return out
+}
+
 // CommandResult is the router's verdict for a POST /command/{verb} (the cockpit apply seam).
 type CommandResult struct {
 	Status    string `json:"status"`
 	HTTP      int    `json:"http"`
-	EventID   string `json:"event_id"` // the witnessed ledger event id (demand+verdict)
+	EventID   string `json:"event_id"`  // the witnessed ledger event id (demand+verdict)
 	Reason    string `json:"reason"`
+	FoldDelta string `json:"fold_delta"` // the transport's own honest phrasing (preview: "would emit …")
 	Duplicate bool   `json:"duplicate"`
 	Reachable bool   `json:"-"`
 	Err       string `json:"-"`

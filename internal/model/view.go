@@ -1323,7 +1323,7 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	}
 	prompt := " › "
 	if m.Mode == ModeCoordChat {
-		prompt += m.CoordChatInput + "▌"
+		prompt += m.coordChatInputDisplay() + "▌"
 	} else {
 		prompt += grammar.C("mut", "[c] steer: prioritize · hold · scope · accept/reject · /verb dispatches (send gated)")
 	}
@@ -1340,10 +1340,13 @@ func (m Model) coordinatorChatPane(w, h int) string {
 // ones, in a stable order (honest: only what /read/meta reports wired actually applies; an unwired verb
 // renders the never-mint preview, never a fabricated apply). Readout — the operator dispatches via "/verb".
 func (m Model) dispatchHint() string {
-	order := []string{"focus", "resume", "stage", "close", "arm", "rework", "refute"}
+	// a verb is dispatchable from the chat only if Exec can ROUTE it — i.e. it is in governedVerbSpecs.
+	// stage is wired server-side but NOT chat-dispatchable, so advertising "/stage" would send the operator
+	// into "unknown command". Intersect WiredVerbs with the chat grammar so hint == what actually works.
+	order := []string{"focus", "resume", "close", "arm", "rework", "refute"}
 	var wired []string
 	for _, v := range order {
-		if m.WiredVerbs[v] {
+		if _, dispatchable := governedVerbSpecs[v]; dispatchable && m.WiredVerbs[v] {
 			wired = append(wired, "/"+v)
 		}
 	}
@@ -1749,16 +1752,44 @@ func (m Model) coordContextReadout(t grammar.Task, w int) string {
 // the focused work-unit (matched by subject) as a compact " · ctx kind:state" — or "" when the producer is
 // dark or offers nothing (honest, no clutter). Readout only: the affordance is a WHY signal the operator
 // acts on THROUGH the governed apply seam — the cockpit never injects (the dig ruling).
+// coordChatInputDisplay redacts a "/"-directive's TARGET on air, mirroring commandInputDisplay: the Crow
+// chat is the single dispatch point AND airs on the livestream, so a governed verb's sensitive target id
+// is sealed in the on-air RENDERING (the executable CoordChatInput buffer is unchanged).
+func (m Model) coordChatInputDisplay() string {
+	if !m.AIR {
+		return m.CoordChatInput
+	}
+	in := strings.TrimSpace(m.CoordChatInput)
+	if !strings.HasPrefix(in, "/") {
+		return m.CoordChatInput // plain steer text follows the compose/send-gate doctrine, not this path
+	}
+	fields := strings.Fields(strings.TrimPrefix(in, "/"))
+	if len(fields) == 0 {
+		return m.CoordChatInput
+	}
+	if _, governed := governedVerbSpecs[fields[0]]; governed && len(fields) > 1 {
+		return "/" + fields[0] + " ▒▒▒"
+	}
+	return m.CoordChatInput
+}
+
 func (m Model) contextSuffix(taskID string) string {
+	// AIR guard: the ctx suffix is derived from the OPERATOR_PRIVATE projection (FetchContext hardcodes it),
+	// which is off-air by definition — showing an affordance kind on air would disclose that a (possibly
+	// redacted) subject carries operator-private context. Suppress on air (the derived-channel seal).
+	if m.AIR {
+		return ""
+	}
 	if m.ContextDark || len(m.ContextAffordances) == 0 || strings.TrimSpace(taskID) == "" {
 		return ""
 	}
+	// deterministic, boundary-aware subject match: exact first, then the closed prefixed form
+	// ("task:"+id) — never a bare Contains (cc-a must not match cc-a-extended; map order must not decide).
 	var affs []grammar.ContextAffordance
-	for subj, list := range m.ContextAffordances {
-		if subj == taskID || strings.Contains(subj, taskID) {
-			affs = list
-			break
-		}
+	if v, ok := m.ContextAffordances[taskID]; ok {
+		affs = v
+	} else if v, ok := m.ContextAffordances["task:"+taskID]; ok {
+		affs = v
 	}
 	best := ""
 	for _, a := range affs {
