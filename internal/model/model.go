@@ -3641,6 +3641,9 @@ func (m Model) updateMouse(v tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if idx, ok := m.taskRowAtY(v.X, v.Y); ok {
 				return m.focusTo(idx), nil
 			}
+			if idx, ok := m.sessionRowAtY(v.X, v.Y); ok {
+				return m.focusTo(idx), nil
+			}
 		}
 	}
 	return m, nil // other buttons/motion: inert
@@ -3674,6 +3677,41 @@ func (m Model) taskRowAtY(x, y int) (int, bool) {
 	}
 	idx := m.scrollOffset(visible) + row
 	if idx < 0 || idx >= len(m.visibleTasks()) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// sessionRowAtY maps a click to a session (lane) index on the narrow PageSessions body, replicating
+// sessionsListBody's SFocus-based scroll window. The wide body (w>=150) has a different geometry and is
+// deferred. Same Y=6 chrome + rail-aware X as tasks.
+func (m Model) sessionRowAtY(x, y int) (int, bool) {
+	if m.Page != PageSessions || m.Width >= 150 {
+		return 0, false
+	}
+	mainW := m.Width
+	if m.Width >= 100 && m.Width < 160 {
+		mainW = m.Width - railWidth - 1
+	}
+	if x < 0 || x >= mainW {
+		return 0, false
+	}
+	visible := taskRowsVisible(frameMidH(m.Height)) // = midH-2, matches sessionsListBody
+	start := 0
+	if len(m.Sessions) > visible {
+		if m.SFocus >= visible {
+			start = m.SFocus - visible + 1
+		}
+		if mx := len(m.Sessions) - visible; start > mx {
+			start = mx
+		}
+	}
+	row := y - tasksRowTopY
+	if row < 0 || row >= visible {
+		return 0, false
+	}
+	idx := start + row
+	if idx < 0 || idx >= len(m.Sessions) {
 		return 0, false
 	}
 	return idx, true

@@ -69,6 +69,37 @@ func TestMouseTapFocusesTaskRow(t *testing.T) {
 	}
 }
 
+// A LEFT tap on a session (lane) row focuses that lane — the second primary touch surface. Verified
+// against the ACTUAL View() geometry (parse the lane's Y, tap, assert focus).
+func TestMouseTapFocusesSessionRow(t *testing.T) {
+	sessions := []grammar.Session{
+		{Role: "alpha", AIR: map[string]string{}},
+		{Role: "beta", AIR: map[string]string{}},
+		{Role: "gamma", AIR: map[string]string{}},
+	}
+	m := New("REINS").FoldSessions(sessions, false)
+	m.Width, m.Height, m.Page = 120, 40, PageSessions
+	lines := strings.Split(m.View(), "\n")
+	targetY := -1
+	for y, ln := range lines {
+		if strings.Contains(ln, "gamma") {
+			targetY = y
+			break
+		}
+	}
+	if targetY < 0 {
+		t.Fatal("gamma lane not found in View() — cannot verify tap geometry")
+	}
+	nm, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 3, Y: targetY})
+	fs, ok := nm.(Model).FocusedSession()
+	if !ok || fs.Role != "gamma" {
+		t.Fatalf("tap at gamma's row (Y=%d) must focus gamma, got %q", targetY, fs.Role)
+	}
+	if nm.(Model).PendingCommand != nil {
+		t.Fatal("a tap must NOT invoke a governed command")
+	}
+}
+
 // Taps off the task list (above the rows, or over the right-hand rail) are inert — no focus jump, no command.
 func TestMouseTapOffListInert(t *testing.T) {
 	m := mouseTestModel()
