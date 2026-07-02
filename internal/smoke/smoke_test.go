@@ -3,7 +3,30 @@ package smoke
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
+
+// reins --demo renders the SEED NARRATIVE and the DEMO provenance marker TOGETHER — a stranger sees the
+// cell-grammar populated (not honest-dark), unmistakably marked fixture-not-live, with no live estate.
+func TestDemoSeedRendersNarrativeAndMarker(t *testing.T) {
+	m := SeedModel(180, 44)
+	m.Demo = true
+	out := ansi.Strip(m.View())
+	if !strings.Contains(out, "DEMO") || !strings.Contains(out, "not live") {
+		t.Fatalf("demo must show the persistent provenance marker, got no marker")
+	}
+	if !strings.Contains(out, "reform-") { // a seeded task/subject — the narrative is populated, not dark
+		t.Fatalf("demo must render the seed narrative (populated, not honest-dark), got:\n%s", out[:min(400, len(out))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // The cockpit must navigate to EVERY page without panicking and render a non-empty frame — the
 // automated half of "smoke-test navigation without a human". A panic on any page is a hard finding.
