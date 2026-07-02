@@ -234,6 +234,12 @@ func (m Model) viewTitle(w int) string {
 	left := grammar.C("brt", m.Title) + grammar.C("mut", " │ win ")
 	mid := strings.Join(tabs, grammar.C("mut", " · "))
 	right := grammar.C("yel", "@hapax")
+	if m.Demo {
+		// PERSISTENT provenance chrome (every page, from frame 1): this is a seed FIXTURE instance, not a
+		// live estate. Glyph-first ("◈ DEMO" survives grayscale/AIR); the hue is a redundant amplifier.
+		// Fixture-distinct-from-live is structural — the marker cannot scroll off (it is title-bar chrome).
+		right = grammar.C("blu", "◈ DEMO · fixture not live") + grammar.C("mut", " · ") + right
+	}
 	if m.PortForeign {
 		// A3.1d: the configured port answers but is NOT reins — a rendered state, never
 		// silent trust. Loud, on the title bar, until identity resolves.

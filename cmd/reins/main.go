@@ -309,6 +309,7 @@ type root struct {
 	m           model.Model
 	url         string
 	dispatchSeq int64 // monotonic; salts the idempotency key for LAST-WINS inflection verbs (focus/breakglass)
+	demo        bool  // reins --demo: seed-backed fixture instance — Init launches NO live fetch (structural)
 }
 
 // dispatchSlot picks the idempotency-key slot for a dispatched verb. A GOVERNED verb (close/arm/…) uses the
@@ -323,6 +324,12 @@ func dispatchSlot(mode string, seq, nowUnix int64) int64 {
 }
 
 func (r root) Init() tea.Cmd {
+	if r.demo {
+		// FIXTURE demo: launch NO live fetch (no fetchXOnce, no ticks, no posture-persist) — a stray fold
+		// would overwrite the seed with honest-dark, or render unmarked live. Only the cursor blink runs.
+		// This is the structural guarantee that a demo frame can never fabricate-live (audit repair).
+		return beatTick()
+	}
 	return tea.Batch(
 		func() tea.Msg { return fetchOnce(r.url) },
 		func() tea.Msg { return fetchTasksOnce(r.url) },
@@ -970,6 +977,21 @@ func main() {
 				fmt.Fprintln(os.Stderr, "PANIC on final step: "+last.Panic)
 			}
 			fmt.Println(last.View)
+		}
+		return
+	}
+	// --demo: a seed-backed FIXTURE instance. A stranger (or the operator on an estate-free box) sees the
+	// full cell-grammar narrative — tasks, sessions, events, gates, dynamics — with NO live estate, NO API,
+	// NO spine. The Demo flag drives a persistent per-page DEMO provenance marker (set from frame 1, so a
+	// frame can never render unmarked-live) and root.demo makes Init launch zero live fetch. The honest MVP
+	// of the kit: `reins --demo` and a stranger has a running interactive cockpit in <1s.
+	if hasArg("--demo") {
+		seed := smoke.SeedModel(160, 44)
+		seed.Demo = true
+		seed.Page = model.PageCoordinator
+		if _, err := tea.NewProgram(root{m: seed, demo: true}, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
+			os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
 		}
 		return
 	}

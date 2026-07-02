@@ -482,6 +482,7 @@ type Model struct {
 	TurnsDark           bool   // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
+	Demo                bool   // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
 	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
 	VerbModes           map[string]string   // apply-seam: per-verb mode (preview verbs must not read as applied)
