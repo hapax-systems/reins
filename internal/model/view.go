@@ -10507,7 +10507,7 @@ func (m Model) referencePageRailRows() []contextRow {
 		return []contextRow{
 			{"layout", "split:ctx · split:wide", "org"},
 			{"cursor", "▶ source · ◆ anchor", "yel"},
-			{"overflow", "… means hidden rows", "2nd"},
+			{"overflow", "… hidden rows · › clipped right", "2nd"},
 		}
 	}
 	return nil
@@ -13540,7 +13540,9 @@ func fitFloorActionParts(parts []string, w int) string {
 // fitWidth clips/pads a (possibly ANSI-colored) line to exactly w visible columns.
 func fitWidth(s string, w int) string {
 	if vw := ansi.StringWidth(s); vw > w {
-		return ansi.Truncate(s, w, "")
+		// content actually dropped -> disclose it with the right-edge overflow glyph, never a
+		// silent clip (honest-when-starved). The marker replaces the last cell, so width stays w.
+		return ansi.Truncate(s, w, layout.OverflowMark)
 	} else {
 		return s + strings.Repeat(" ", w-vw)
 	}

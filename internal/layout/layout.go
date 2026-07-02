@@ -157,8 +157,17 @@ func fit(block string, w, h int) []string {
 	return out
 }
 
+// OverflowMark is the single-cell right-edge glyph that discloses a horizontally TRUNCATED row —
+// the honest-when-starved signal for width overflow (mirrors the vertical "… rows hidden" affordance).
+// A glyph, not a color, carries the signal (color is a redundant amplifier). It replaces the last
+// dropped cell, so a marked row is still EXACTLY w wide — width-determinism is preserved.
+const OverflowMark = "›"
+
 func fitLine(s string, w int) string {
-	s = ansi.Truncate(s, w, "")
+	// content actually dropped -> disclose it at the right edge, never a silent clip.
+	if ansi.StringWidth(s) > w {
+		s = ansi.Truncate(s, w, OverflowMark)
+	}
 	if pad := w - ansi.StringWidth(s); pad > 0 {
 		s += strings.Repeat(" ", pad)
 	}
