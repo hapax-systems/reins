@@ -489,6 +489,7 @@ type Model struct {
 	Status              string // last command result / error (one line, above the hint)
 	Reactions           grammar.ReactionSet
 	Quitting            bool // Exec(:quit) sets this; Update turns it into tea.Quit
+	SwapRequested       bool // Exec(:swap) sets this + Quitting; main.go does the exec-handover after the TUI releases the terminal (U6b-deploy cockpit half — self-hosted development)
 	DynScale            int  // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
 	DynFocus            int  // selected dynamics element (node/edge/source) for epistemic inspection
 	LoopFocus           int  // selected A5 causal loop in :loops
@@ -1971,6 +1972,7 @@ var verbs = []verbDef{
 	{name: "presence", aliases: []string{"concourse"}, kind: commandRead, group: "window", gloss: "E11.8 presence-plane binder — figure/control vs ground/presence (honest-dark, pending design)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "deck", kind: commandRead, group: "window", gloss: "E8.3 the non-evicting operator-readout DECK — no-loss history vs the windowed event STREAM", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "route", aliases: []string{"routing"}, kind: commandRead, group: "window", gloss: "U5 E6.2 ROUTE — capability-routing projection (spine evidence; reins mints no decision)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "swap", kind: commandRead, group: "engine", gloss: "U6b hot-plug: exec-handover into the store's current generation with --resume (self-hosted development; zero posture loss)", authority: "local_read", receipt: "swap witness (U11)", uiDelta: "release terminal + re-exec"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "commands", aliases: []string{"cmds"}, kind: commandRead, group: "registry", gloss: "open the unified command catalog", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2179,6 +2181,11 @@ func (m Model) Exec(line string) Model {
 		m.Status = m.intentStatusFor(target, subject)
 	case "quit":
 		m.Quitting, m.Status = true, "bye"
+	case "swap":
+		// self-hosted hot-plug: release the terminal (Quitting) then main.go exec-handovers into the
+		// store's `current` generation with --resume, so the cockpit fields its own code changes with
+		// zero posture loss. A breakglass/unverified current is refused in main.go (never boots).
+		m.SwapRequested, m.Quitting, m.Status = true, true, "swapping to current generation…"
 	}
 	return m
 }

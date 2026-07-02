@@ -6,17 +6,20 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/api"
 	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/dispatch"
+	"github.com/hapax-systems/reins/internal/generation"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/graph"
 	"github.com/hapax-systems/reins/internal/imgpreview"
 	"github.com/hapax-systems/reins/internal/model"
 	"github.com/hapax-systems/reins/internal/smoke"
+	"github.com/hapax-systems/reins/internal/swap"
 )
 
 // fetchOnce: one events fetch -> an EventsMsg. Unreachable/dark folds honestly, never panics.
@@ -899,8 +902,40 @@ func main() {
 		}
 	}
 	r := root{m: launch, url: cfg.APIURL}
-	if _, err := tea.NewProgram(r, tea.WithAltScreen()).Run(); err != nil {
+	finalModel, err := tea.NewProgram(r, tea.WithAltScreen()).Run()
+	if err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(1)
+	}
+	// U6b-deploy cockpit half: if the operator ran :swap, exec-handover into the store's current
+	// generation AFTER the TUI has released the terminal (never mid-render). Zero posture loss.
+	if fm, ok := finalModel.(root); ok && fm.m.SwapRequested {
+		execHandover(fm.m)
+	}
+}
+
+// execHandover performs the cockpit self-swap once the terminal is released: externalize posture,
+// resolve the store's `current` generation, write the consume-once handoff, and syscall.Exec into it with
+// --resume so the new binary restores the operator's exact posture. A breakglass/unverified current is
+// REFUSED (never boots); a failure drops the operator to a shell with an honest line (the reins-run
+// supervisor, if present, then relaunches).
+func execHandover(m model.Model) {
+	root := strings.TrimSpace(os.Getenv("REINS_GENERATION_ROOT"))
+	if root == "" {
+		home, _ := os.UserHomeDir()
+		root = filepath.Join(home, ".local", "share", "reins")
+	}
+	store := generation.NewStore(root)
+	_ = model.WritePosture("", m.SnapshotPosture()) // externalize BEFORE the exec (restored via --resume)
+	plan := swap.ResolveExecPlan(store, store.Resolve(), os.Getenv("REINS_POSTURE_PATH"),
+		strconv.FormatInt(time.Now().UnixNano(), 36))
+	if !plan.ShouldExec {
+		fmt.Fprintf(os.Stderr, "reins: swap refused (breakglass) — %s\n", plan.BreakglassReason)
+		os.Exit(1)
+	}
+	_ = store.WriteHandoff(plan.Handoff) // consume-once baton (coupling b: before the exec)
+	if err := syscall.Exec(plan.Argv[0], plan.Argv, os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "reins: exec-handover into %s failed: %v\n", plan.Argv[0], err)
 		os.Exit(1)
 	}
 }
