@@ -27,7 +27,12 @@ def test_reqvec_scale_pinned_to_producer_contract_not_sample():
 
 
 def test_keyspace_is_the_frozen_11():
-    # drift pin: the routing keyspace is exactly the frozen-11 (the EDT<->router<->reins anchor).
+    # drift pin — now a REAL cross-package contract check (was self-referential len==11): reins's pinned
+    # keyspace must EQUAL the hapax-spine wheel's ROUTING_CLASSES. A spine 11->17 expansion surfaces here
+    # as a wheel-version bump the test catches, never silent drift across the seam.
+    from hapax.spine.edt_measure import ROUTING_CLASSES
+
+    assert tuple(ROUTING_CLASSES_PINNED) == tuple(ROUTING_CLASSES)
     assert len(ROUTING_CLASSES_PINNED) == 11
     assert "source_python" in ROUTING_CLASSES_PINNED and "verification" in ROUTING_CLASSES_PINNED
 

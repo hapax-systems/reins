@@ -19,8 +19,6 @@ Producer (spine/council bundle) lands later; this is verified against the contra
 """
 from __future__ import annotations
 
-from typing import Any
-
 # the fact_envelope.air channels — the tri-audience (+ public/on-air).
 AUDIENCES = ("operator_private", "yard_context", "hapax_substrate", "public_or_air")
 REDACTION_TOKEN = "▒▒▒"

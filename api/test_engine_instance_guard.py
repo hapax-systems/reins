@@ -53,29 +53,22 @@ def test_engine_carries_no_baked_home_paths():
     assert not leaks, "engine/instance leak — baked home path(s) in engine source:\n" + "\n".join(leaks)
 
 
-def test_reins_api_council_coupling_is_pinned_not_growing():
-    """HONEST coupling ledger: reins/api imports council's shared.* substrate in-process (the reins-
-    packagability BLOCKER the leak-guard was blind to). This does NOT fail on the documented debt, but PINS
-    it — a NEW cross-repo `from shared.X` fails, so the blocker cannot silently grow. The fix is to extract
-    these modules as a published `hapax-spine` wheel and declare it in reins/api/pyproject.toml, then delete
-    the sys.path.insert(council_root) hack (repository-architecture report §7, the ONE first step)."""
+def test_reins_api_is_decoupled_from_council_substrate():
+    """RESOLVED (was the coupling-debt ledger): reins/api now imports the SDLC-runtime mechanism from the
+    published `hapax-spine` WHEEL (`from hapax.spine.*`), NOT council's `shared.*` in-process. The
+    sys.path.insert(council_root) hack is gone; reins is a shippable kit. This test now GUARDS the decoupling
+    — any regression back to `from shared.X` or the sys.path hack fails."""
     src = (REPO / "api" / "reins_read.py").read_text()
     imported = set(re.findall(r"from shared\.(\w+) import", src))
-    KNOWN_BLOCKER = {  # council-substrate modules reins imports in-process -> the hapax-spine extraction set
-        "coord_event_log", "coord_projection", "dispatcher_policy", "langfuse_client",
-        "platform_capability_receipts", "platform_capability_registry", "quota_spend_ledger",
-    }
-    grew = imported - KNOWN_BLOCKER
-    assert not grew, (
-        "NEW cross-repo council coupling in reins/api extends the packagability blocker: "
-        + ", ".join(sorted(grew))
-        + " — do NOT add `from shared.X`; declare a published hapax-spine wheel dependency instead."
+    assert not imported, (
+        "reins/api must import NOTHING from council's shared.* — it depends on the hapax-spine wheel now. "
+        "Regressed imports: " + ", ".join(sorted(imported))
     )
-    # requirements.txt must keep disclosing the substrate coupling honestly (never claim standalone).
+    assert "sys.path.insert" not in src, "the council_root sys.path.insert hack must stay deleted"
     reqs = (REPO / "api" / "requirements.txt")
     if reqs.exists():
-        assert "shared" in reqs.read_text().lower(), (
-            "reins/api/requirements.txt must disclose the council-substrate coupling (it is not standalone)"
+        assert "hapax-spine" in reqs.read_text().lower(), (
+            "reins/api/requirements.txt must declare the hapax-spine wheel dependency"
         )
 
 

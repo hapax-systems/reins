@@ -1,5 +1,6 @@
-# READ API runtime deps. NOTE: this process also imports the live substrate (shared.coord_*),
-# so it must run in a python that can import the substrate too — on an integrated box, that is the
-# substrate's own venv (which already carries fastapi+uvicorn). Standalone use: pip install these.
+# READ API runtime deps. reins now imports the SDLC-runtime mechanism from the hapax-spine WHEEL
+# (`from hapax.spine.*`), NOT council's live substrate — this process is decoupled from the council
+# checkout. Set HAPAX_SPINE_CONFIG_DIR to the instance config dir for the capability-registry loaders.
 fastapi>=0.110
 uvicorn>=0.29
+hapax-spine>=0.1,<0.2

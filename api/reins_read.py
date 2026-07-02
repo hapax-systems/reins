@@ -6,7 +6,6 @@ import json
 import math
 import os
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -176,10 +175,7 @@ def _freshness(last_ts: str, now: float) -> float:
 
 def _task_history(council_root: str) -> dict:
     """One replay pass -> per-task {prior_stage (last transition's from_stage), last_ts, last_actor}."""
-    root = os.path.expanduser(council_root)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from shared.coord_event_log import default_event_log  # noqa: E402
+    from hapax.spine.coord_event_log import default_event_log
 
     hist: dict = {}
     for e in default_event_log().replay(fail_open=True).events:
@@ -2178,27 +2174,27 @@ def read_capability_summary(council_root: str, allowlist: list[str], cfg: dict |
     or read raw transcripts. Platforms are evidence rows; capabilities are first-class.
     """
     cfg = cfg or {}
-    root = os.path.expanduser(council_root)
-    if root and root not in sys.path:
-        sys.path.insert(0, root)
-    from shared.dispatcher_policy import (  # noqa: E402
+    from hapax.spine.dispatcher_policy import (
         ROUTE_AUTHORITY_RECEIPT_DIRNAME,
         load_dispatch_policy_sources,
     )
-    from shared.platform_capability_receipts import (  # noqa: E402
+    from hapax.spine.platform_capability_receipts import (
         DEFAULT_PLATFORM_CAPABILITY_RECEIPT_DIR,
     )
-    from shared.platform_capability_registry import (  # noqa: E402
-        PLATFORM_CAPABILITY_REGISTRY,
+    from hapax.spine.platform_capability_registry import (
         check_registry_freshness,
     )
-    from shared.quota_spend_ledger import (  # noqa: E402
+    from hapax.spine.quota_spend_ledger import (
         DEFAULT_QUOTA_SPEND_LEDGER_LIVE,
     )
 
+    # reins injects council's config dir as the registry path — the wheel's default resolves via
+    # HAPAX_SPINE_CONFIG_DIR (a sentinel when unset), so pass it explicitly (dark-regression guard).
+    registry_path = Path(os.path.expanduser(council_root)) / "config" / "platform-capability-registry.json"
+
     receipt_dir = Path(os.path.expanduser(str(cfg.get("capability_receipt_dir") or DEFAULT_PLATFORM_CAPABILITY_RECEIPT_DIR)))
     quota_path = Path(os.path.expanduser(str(cfg.get("quota_spend_ledger_live") or DEFAULT_QUOTA_SPEND_LEDGER_LIVE)))
-    sources_obj = load_dispatch_policy_sources(receipt_dir=receipt_dir)
+    sources_obj = load_dispatch_policy_sources(receipt_dir=receipt_dir, registry_path=registry_path)
     registry = sources_obj.registry
     routes = list(getattr(registry, "routes", ()) or []) if registry is not None else []
     freshness = check_registry_freshness(registry) if registry is not None else None
@@ -2208,7 +2204,7 @@ def read_capability_summary(council_root: str, allowlist: list[str], cfg: dict |
     pack_sources, pack_rows = _capability_surface_pack_rows(cfg, allowlist)
     hkp_sources, hkp_evidence_count, hkp_source_refs, hkp_blocker = _hkp_support_summary(cfg, allowlist)
     sources = [
-        _capability_source("platform_registry", PLATFORM_CAPABILITY_REGISTRY, len(routes), "observed" if registry is not None else "error", allowlist, sources_obj.registry_error or "typed platform capability registry"),
+        _capability_source("platform_registry", registry_path, len(routes), "observed" if registry is not None else "error", allowlist, sources_obj.registry_error or "typed platform capability registry"),
         _capability_source("platform_receipts", receipt_dir, _receipt_count(receipt_dir), "observed" if receipt_dir.exists() else "missing", allowlist, "local platform capability receipts"),
         _capability_source("route_authority_receipts", route_auth_dir, len(sources_obj.route_authority_receipts), "observed" if route_auth_dir.exists() else "missing", allowlist, "fresh route authority receipts"),
         _capability_source("quota_ledger", quota_path, 1 if sources_obj.quota_ledger is not None else 0, "observed" if sources_obj.quota_ledger is not None else "missing", allowlist, sources_obj.quota_error or sources_obj.quota_live_error or str(sources_obj.quota_ledger_source or "")),
@@ -4164,11 +4160,8 @@ def read_traces(council_root: str, limit: int = 40, allowlist: list[str] | None 
     """Fold the existing Langfuse LLM-observability plane into a recent-traces list (WS#2).
     Honest-dark when Langfuse is unreachable. Reuses shared.langfuse_client — never
     re-instruments LLM calls."""
-    root = os.path.expanduser(council_root)
-    if root not in sys.path:
-        sys.path.insert(0, root)
     try:
-        from shared.langfuse_client import is_available, langfuse_get  # noqa: E402
+        from hapax.spine.langfuse_client import is_available, langfuse_get
         if not is_available():
             return {"dark": True, "error": "langfuse unavailable", "traces": []}
         resp = langfuse_get("/traces", {"limit": limit, "orderBy": "timestamp.desc"})
@@ -4179,11 +4172,9 @@ def read_traces(council_root: str, limit: int = 40, allowlist: list[str] | None 
 
 
 def _projection(council_root: str) -> dict:
-    root = os.path.expanduser(council_root)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from shared.coord_event_log import default_event_log  # noqa: E402
-    from shared.coord_projection import CoordProjection  # noqa: E402
+    from hapax.spine.coord_event_log import default_event_log
+    from hapax.spine.coord_projection import CoordProjection
+
     return CoordProjection.from_replay(default_event_log().replay(fail_open=True)).to_record()
 
 
@@ -4198,10 +4189,7 @@ def _page_before(records: list[dict], before: str | None, limit: int) -> list[di
 
 
 def _raw_tail(council_root: str, limit: int, before: str | None = None) -> list[dict]:
-    root = os.path.expanduser(council_root)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from shared.coord_event_log import default_event_log  # noqa: E402
+    from hapax.spine.coord_event_log import default_event_log
     result = default_event_log().replay(fail_open=True)
     out = [e.to_record() for e in result.events]
     return _page_before(out, before, limit)

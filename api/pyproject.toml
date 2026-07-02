@@ -2,4 +2,7 @@
 name = "reins-read"
 version = "0.0.1"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.110", "uvicorn>=0.29"]
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "hapax-spine>=0.1,<0.2"]
+
+[tool.uv.sources]
+hapax-spine = { path = "../../hapax-spine", editable = true }
