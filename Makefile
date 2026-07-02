@@ -33,7 +33,9 @@ build: ## build the cockpit binary -> bin/reins
 
 install: build ## install the cockpit -> $(PREFIX)/bin/reins (on PATH)
 	@mkdir -p $(PREFIX)/bin
-	@cp bin/reins $(PREFIX)/bin/reins
+	@# rename-over, never cp-over: a RUNNING cockpit holds the old inode (cp fails ETXTBSY mid-session);
+	@# rename swaps the path atomically while live sessions keep their inode until exit
+	@cp bin/reins $(PREFIX)/bin/.reins.staged && mv -f $(PREFIX)/bin/.reins.staged $(PREFIX)/bin/reins
 	@printf 'reins: installed -> %s/bin/reins\n' "$(PREFIX)"
 
 test: ## go + python test suites
