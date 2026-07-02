@@ -27,7 +27,9 @@ import time
 import numpy as np
 from PIL import Image
 
-COUNCIL = "/home/user/projects/hapax-spine/shared"
+# engine/instance separation (G9): the council eval location is INSTANCE config, not engine constant —
+# env-overridable, ~-relative default, never a baked absolute home path.
+COUNCIL = os.path.expanduser(os.environ.get("REINS_COUNCIL_SHARED", "~/projects/hapax-spine"))
 
 
 def _load(name: str, path: str):
