@@ -2,16 +2,18 @@
   "receipt": {
     "kind": "av_witness",
     "witness_mode": "reins-local-terminal-self-witness",
-    "receipt_id": "c9febddac93fb9561b31e1d8",
-    "content_hash": "478fb975c2e957f15157e81ca01bcbe398f085cd6c77fe4a7b710aa348f53d6c",
-    "active_source_head": "4c51dce",
+    "receipt_id": "9a6518c45bca20b7da05b4a5",
+    "content_hash": "ef912cf4bf3efaa633721eb59b35128576e25fa742261cafc4995b27a6649451",
+    "active_source_head": "f131700",
     "status": "pass",
     "obs_moving": true,
-    "collected_at": 1782663445.4499905,
-    "expires_at": 1782665245.4499905,
+    "collected_at": 1783006027.674518,
+    "expires_at": 1783007827.674518,
     "via": "reins-shot",
-    "perceptual_digest": "570ed5781ad627a1c033ff85b04aa299f229e02c47a65c364b7218102025ea9b",
+    "perceptual_digest": "b271457a491d457496f2dd966059c94f2748c10493fb63e363cbfc09eee7fef6",
     "intent_hash": "1a52cf7781cf6c9c07fd35b14fa58e046fd6f2bb7e18cf5f90d85d81ce28e4da",
+    "intent_id": "relational-pane",
+    "intent_binding_hash": "596b568c3e1f417593fb9a8aac5a1cea33b7b864d73d442e318beb4dd60cf87a",
     "intent_pass": true,
     "signature": ""
   },
@@ -23,7 +25,7 @@
       "op": ">=",
       "target": 1.0,
       "critical": true,
-      "realized": 1.601,
+      "realized": 1.438,
       "holds": true
     },
     {
@@ -33,7 +35,7 @@
       "op": ">=",
       "target": 1.0,
       "critical": true,
-      "realized": 2.335,
+      "realized": 2.088,
       "holds": true
     },
     {
@@ -43,35 +45,35 @@
       "op": "<=",
       "target": 120.0,
       "critical": true,
-      "realized": 32.132,
+      "realized": 31.171,
       "holds": true
     }
   ],
   "realized_vector": {
     "local-terminal": {
       "ceiling": {
-        "luma": 37.72735871471125,
-        "edge_energy": 3.7063172713105477
+        "luma": 37.09033627790706,
+        "edge_energy": 3.5577312133525423
       },
       "left_wall": {
-        "luma": 29.263090192772257,
-        "edge_energy": 1.6005836429232363
+        "luma": 28.703473617212847,
+        "edge_energy": 1.4378506951377974
       },
       "right_wall": {
-        "luma": 23.31679047974189,
-        "edge_energy": 0.07319108138072905
+        "luma": 23.282821304935034,
+        "edge_energy": 0.06611343492664891
       },
       "floor": {
-        "luma": 25.83088623562544,
-        "edge_energy": 0.6897398512605454
+        "luma": 25.781897573162862,
+        "edge_energy": 0.6653857198114387
       },
       "entity_core": {
-        "luma": 32.13180379730904,
-        "edge_energy": 2.3353496969004706
+        "luma": 31.17095647612739,
+        "edge_energy": 2.087537021652037
       },
       "negative_space": {
-        "luma": 41.387558906521754,
-        "edge_energy": 4.713930825421087
+        "luma": 40.206805572828145,
+        "edge_energy": 4.3373005035256735
       }
     }
   }

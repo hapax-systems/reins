@@ -2,16 +2,18 @@
   "receipt": {
     "kind": "av_witness",
     "witness_mode": "reins-local-terminal-self-witness",
-    "receipt_id": "88eacfa58bce83672fbedf59",
-    "content_hash": "4e2b9028f7942bc52688b9b5e3f0d3c1023cce4cce9735c9113927b816f8c35e",
-    "active_source_head": "30ddf95",
+    "receipt_id": "ceb8724e101aa0e238957479",
+    "content_hash": "4442ada5d1ac372aaf886cff52c3dcfa147cf2380ce4811d7da4857b1c4eed57",
+    "active_source_head": "f131700",
     "status": "pass",
     "obs_moving": true,
-    "collected_at": 1782662222.7643225,
-    "expires_at": 1782664022.7643225,
+    "collected_at": 1783006025.8672569,
+    "expires_at": 1783007825.8672569,
     "via": "reins-shot",
-    "perceptual_digest": "46ace5f9a35eb36c050792ce5a9f8256de11a54e1b0e393de740b2b8492bf1f7",
-    "intent_hash": "1a52cf7781cf6c9c07fd35b14fa58e046fd6f2bb7e18cf5f90d85d81ce28e4da",
+    "perceptual_digest": "e844e1dd34fd4bfd9e5258d2a06030b9b24ce7f012d6988d7982546b5da19487",
+    "intent_hash": "404425189410136056a2e4e9fc2edb979278c32eb3333cefc78aa87cf9e783e1",
+    "intent_id": "identity-pane",
+    "intent_binding_hash": "c9fb9ec5559f2e37e8cd5e37a51fc13d9a5845e4c99f24ae592659eb3ccb5da7",
     "intent_pass": true,
     "signature": ""
   },
@@ -23,7 +25,7 @@
       "op": ">=",
       "target": 1.0,
       "critical": true,
-      "realized": 2.958,
+      "realized": 1.291,
       "holds": true
     },
     {
@@ -31,9 +33,9 @@
       "region": "entity_core",
       "metric": "edge_energy",
       "op": ">=",
-      "target": 1.0,
+      "target": 0.5,
       "critical": true,
-      "realized": 1.054,
+      "realized": 0.783,
       "holds": true
     },
     {
@@ -43,35 +45,35 @@
       "op": "<=",
       "target": 120.0,
       "critical": true,
-      "realized": 27.197,
+      "realized": 26.118,
       "holds": true
     }
   ],
   "realized_vector": {
     "local-terminal": {
       "ceiling": {
-        "luma": 38.466046843345175,
-        "edge_energy": 3.943207962272095
+        "luma": 37.74356739489598,
+        "edge_energy": 3.7625959634647135
       },
       "left_wall": {
-        "luma": 34.670592908445336,
-        "edge_energy": 2.9576043343670566
+        "luma": 27.93664343263424,
+        "edge_energy": 1.2914748254792223
       },
       "right_wall": {
-        "luma": 23.47737641660857,
-        "edge_energy": 0.12062729038941528
+        "luma": 23.485293323191083,
+        "edge_energy": 0.12333379464728136
       },
       "floor": {
-        "luma": 26.801513729171557,
-        "edge_energy": 0.9501660594111689
+        "luma": 25.528122768949522,
+        "edge_energy": 0.5970520652158793
       },
       "entity_core": {
-        "luma": 27.196532440843878,
-        "edge_energy": 1.0535068158049552
+        "luma": 26.11773979398501,
+        "edge_energy": 0.7833213400598145
       },
       "negative_space": {
-        "luma": 40.99647282542019,
-        "edge_energy": 4.5379629126254
+        "luma": 41.304389655791844,
+        "edge_energy": 4.714360642273304
       }
     }
   }

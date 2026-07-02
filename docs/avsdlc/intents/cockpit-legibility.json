@@ -1,4 +1,5 @@
 {
+  "intent_id": "cockpit-legibility",
   "predicates": [
     {
       "pov_label": "local-terminal",

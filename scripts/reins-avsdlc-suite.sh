@@ -28,9 +28,11 @@ for entry in "${PANES[@]}"; do
   png="$TMP/${intent}.png"
   "$bin" --drive "$spec" size:160x44 $LIVE > "$TMP/frame.ansi" 2>/dev/null
   freeze "$TMP/frame.ansi" --language ansi --output "$png" >/dev/null 2>&1
+  # persist the dossier (G7: the cockpit-legibility receipt previously never reached disk — the suite
+  # ran the witness but discarded it; a witness that leaves no receipt is prose, not evidence)
   if python3 "$REPO/scripts/reins-avsdlc-witness.py" --frame "$png" \
        --intent "$REPO/docs/avsdlc/intents/${intent}.json" --pov local-terminal \
-       --source-head "$head" >/dev/null 2>&1; then
+       --source-head "$head" --out "$REPO/docs/releases/${intent}-witness" >/dev/null 2>&1; then
     printf '  PASS  %-14s %s\n' "$intent" "$spec"; pass=$((pass+1))
   else
     printf '  FAIL  %-14s %s\n' "$intent" "$spec"; fail=$((fail+1))

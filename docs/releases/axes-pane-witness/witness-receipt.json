@@ -2,16 +2,18 @@
   "receipt": {
     "kind": "av_witness",
     "witness_mode": "reins-local-terminal-self-witness",
-    "receipt_id": "67f5716d922aaf377ef97748",
-    "content_hash": "7081e39ad12bb20dbfde8f37d130c6156b3d8b544fda8eff0d29750fc9c4a8e4",
-    "active_source_head": "a52e960",
+    "receipt_id": "c2421ce3a9c80f5cb042b01b",
+    "content_hash": "d5feb73c164f58338379e20805103b7990339a86a76a36ffdff0b05ebb48e75f",
+    "active_source_head": "f131700",
     "status": "pass",
     "obs_moving": true,
-    "collected_at": 1782634148.3752341,
-    "expires_at": 1782635948.3752341,
+    "collected_at": 1783006023.9615345,
+    "expires_at": 1783007823.9615345,
     "via": "reins-shot",
-    "perceptual_digest": "6969c51a70ece7dec047c846e2159b3c0b91952aa138c1197a8d2fa4e4045be3",
+    "perceptual_digest": "aae0c04b0bb48a28fcf9cdf4c541a6dd4b18e91557e97e14180513804bbf1a6e",
     "intent_hash": "1a52cf7781cf6c9c07fd35b14fa58e046fd6f2bb7e18cf5f90d85d81ce28e4da",
+    "intent_id": "axes-pane",
+    "intent_binding_hash": "0993653515e34563d36d703319f45a250e0a2ab0c0b3bb790ed6964392fccbee",
     "intent_pass": true,
     "signature": ""
   },
@@ -33,7 +35,7 @@
       "op": ">=",
       "target": 1.0,
       "critical": true,
-      "realized": 3.035,
+      "realized": 3.037,
       "holds": true
     },
     {
@@ -43,35 +45,35 @@
       "op": "<=",
       "target": 120.0,
       "critical": true,
-      "realized": 34.68,
+      "realized": 34.678,
       "holds": true
     }
   ],
   "realized_vector": {
     "local-terminal": {
       "ceiling": {
-        "luma": 36.96386847134633,
-        "edge_energy": 3.5467477658580813
+        "luma": 37.720332078848124,
+        "edge_energy": 3.7478310995777315
       },
       "left_wall": {
-        "luma": 31.558917677010726,
-        "edge_energy": 2.1703728252906873
+        "luma": 31.553688312091527,
+        "edge_energy": 2.170105697402581
       },
       "right_wall": {
-        "luma": 23.929898939720882,
-        "edge_energy": 0.2362657750432804
+        "luma": 23.92986013008988,
+        "edge_energy": 0.23627012378876894
       },
       "floor": {
-        "luma": 25.34374219497812,
-        "edge_energy": 0.565012765836324
+        "luma": 25.408119120000272,
+        "edge_energy": 0.5688995177076144
       },
       "entity_core": {
-        "luma": 34.68037400118985,
-        "edge_energy": 3.035251421751383
+        "luma": 34.6782112584116,
+        "edge_energy": 3.036769762563293
       },
       "negative_space": {
-        "luma": 44.06681382912573,
-        "edge_energy": 5.315247667228654
+        "luma": 44.311810823695225,
+        "edge_energy": 5.349218905395695
       }
     }
   }

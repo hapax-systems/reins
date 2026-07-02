@@ -1,0 +1,90 @@
+{
+  "receipt": {
+    "kind": "av_witness",
+    "witness_mode": "reins-local-terminal-self-witness",
+    "receipt_id": "e7fe4899bc0068787a5a4850",
+    "content_hash": "d2a0266165e31bf0b4bfc97a263452cdb80b59183b3302cbf3f03fc79655d286",
+    "active_source_head": "f131700",
+    "status": "pass",
+    "obs_moving": true,
+    "collected_at": 1783006021.9681733,
+    "expires_at": 1783007821.9681733,
+    "via": "reins-shot",
+    "perceptual_digest": "be1e5af0a8ab495dbfa1e88cb51918f686fa4e2a46927fbc13d3fc2ea9a34d88",
+    "intent_hash": "53b3b57dfac7d142625d9d08817c040a7dce19c0ea76ada1686d77cfec2ec226",
+    "intent_id": "cockpit-legibility",
+    "intent_binding_hash": "813eb79714456a027df841eeca6b5b56bf1bd0187818b5618672aae8d04610bb",
+    "intent_pass": true,
+    "signature": ""
+  },
+  "predicates": [
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 2.0,
+      "critical": true,
+      "realized": 2.456,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "floor",
+      "metric": "edge_energy",
+      "op": ">=",
+      "target": 1.0,
+      "critical": true,
+      "realized": 1.383,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "entity_core",
+      "metric": "luma",
+      "op": "<=",
+      "target": 150.0,
+      "critical": false,
+      "realized": 32.329,
+      "holds": true
+    },
+    {
+      "pov": "local-terminal",
+      "region": "negative_space",
+      "metric": "luma",
+      "op": "<=",
+      "target": 150.0,
+      "critical": false,
+      "realized": 44.367,
+      "holds": true
+    }
+  ],
+  "realized_vector": {
+    "local-terminal": {
+      "ceiling": {
+        "luma": 40.250010791973914,
+        "edge_energy": 4.398741807842272
+      },
+      "left_wall": {
+        "luma": 40.176711116630706,
+        "edge_energy": 4.213535009001902
+      },
+      "right_wall": {
+        "luma": 23.89877206327522,
+        "edge_energy": 0.23906360253283288
+      },
+      "floor": {
+        "luma": 28.543931243816083,
+        "edge_energy": 1.3832490466177672
+      },
+      "entity_core": {
+        "luma": 32.329015561527285,
+        "edge_energy": 2.456308004419797
+      },
+      "negative_space": {
+        "luma": 44.36711765396786,
+        "edge_energy": 5.217730084660289
+      }
+    }
+  }
+}

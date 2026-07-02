@@ -63,6 +63,22 @@ def main() -> None:
     verdict = bool(vi.intent_pass(record, realized))
     intent_hash = vi.intent_hash_from_record(record)
 
+    # G8 fix (per-intent binding): the council canonical intent_hash covers ONLY predicates+floor, so two
+    # pane intents with identical predicate sets COLLIDE (axes/relational shared 1a52cf77… — a receipt could
+    # not prove WHICH pane's intent it witnessed; wrong-intent substitution was invisible). Bind the intent's
+    # declared identity into the receipt: every intent file MUST carry an `intent_id` matching its basename;
+    # the binding hash chains identity onto the canonical hash. Fail-closed: an anonymous or mislabeled
+    # intent is not witnessable. The council module is untouched (its hash stays canonical for cross-checks).
+    intent_id = str(intent_data.get("intent_id", "")).strip()
+    expected_id = os.path.splitext(os.path.basename(args.intent))[0]
+    if not intent_id:
+        print("REFUSED: intent carries no intent_id — an anonymous intent is not witnessable (G8)", file=sys.stderr)
+        sys.exit(2)
+    if intent_id != expected_id:
+        print(f"REFUSED: intent_id {intent_id!r} != intent file identity {expected_id!r} — substitution guard (G8)", file=sys.stderr)
+        sys.exit(2)
+    intent_binding_hash = hashlib.sha256(f"{intent_id}:{intent_hash}".encode("utf-8")).hexdigest()
+
     frame_bytes = open(args.frame, "rb").read()
     content_hash = hashlib.sha256(frame_bytes).hexdigest()
     perceptual_digest = hashlib.sha256(json.dumps(realized, sort_keys=True).encode()).hexdigest()
@@ -81,6 +97,8 @@ def main() -> None:
         "via": "reins-shot",
         "perceptual_digest": perceptual_digest,
         "intent_hash": intent_hash,
+        "intent_id": intent_id,                      # WHICH intent this receipt witnessed (G8)
+        "intent_binding_hash": intent_binding_hash,  # sha256(intent_id:intent_hash) — per-pane, collision-proof
         "intent_pass": verdict,
         "signature": "",  # operator HMAC key is the release gate, not this self-witness
     }
