@@ -45,6 +45,7 @@ const (
 	PageRdlc         = 27 // E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists
 	PagePresence     = 28 // E11.8 presence-plane binder (figure/control vs ground/presence) — honest-dark pending agy
 	PageDeck         = 29 // E8.3 DECK — the non-evicting operator-readout history (no-loss, vs the event STREAM)
+	PageRoute        = 30 // U5 E6.2 ROUTE — the capability-routing PROJECTION (spine evidence; reins mints no decision)
 )
 
 const (
@@ -455,6 +456,9 @@ type Model struct {
 	VaultDark           bool
 	Observe             []grammar.ObserveDimension // E11.7 whole-system awareness (live /read/observe)
 	ObserveDark         bool
+	RoutePosture        grammar.RoutePosture   // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
+	RouteCandidates     []grammar.RouteCandidate // U5 — measured demand per routing_class
+	RouteDark           bool
 	DynamicsDark        bool
 	EpistemicsDark      bool
 	EventsError         string
@@ -1831,6 +1835,15 @@ func (m Model) FoldObserve(dims []grammar.ObserveDimension, dark bool) Model {
 	return m
 }
 
+// FoldRoute is the pure projection for :route — the spine's routing posture + measured demand, or
+// honest-dark. Reins renders this evidence and mints nothing (the decision stays the spine's).
+func (m Model) FoldRoute(posture grammar.RoutePosture, candidates []grammar.RouteCandidate, dark bool) Model {
+	m.RoutePosture = posture
+	m.RouteCandidates = candidates
+	m.RouteDark = dark
+	return m
+}
+
 func (m Model) FoldCapabilities(caps grammar.CapabilitySummary, dark bool) Model {
 	m.Capabilities = caps
 	m.CapabilitiesDark = dark
@@ -2455,6 +2468,12 @@ type ObserveMsg struct {
 	Dark       bool
 	Error      string
 }
+type RouteMsg struct {
+	Posture    grammar.RoutePosture
+	Candidates []grammar.RouteCandidate
+	Dark       bool
+	Error      string
+}
 type GatesMsg struct {
 	Gates grammar.GateSummary
 	Dark  bool
@@ -2622,6 +2641,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ObserveMsg:
 		m = m.FoldObserve(v.Dimensions, v.Dark)
 		m.LastFold = "observe"
+		return m, nil
+	case RouteMsg:
+		m = m.FoldRoute(v.Posture, v.Candidates, v.Dark)
+		m.LastFold = "route"
 		return m, nil
 	case GatesMsg:
 		m = m.FoldGates(v.Gates, v.Dark)

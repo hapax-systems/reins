@@ -240,6 +240,17 @@ func vaultTick(url string) tea.Cmd { // vault metadata is near-static -> a slow 
 func observeTick(url string) tea.Cmd { // whole-system signals -> a steady refresh
 	return tea.Tick(10*time.Second, func(time.Time) tea.Msg { return fetchObserveOnce(url) })
 }
+func fetchRouteOnce(url string) tea.Msg { // U5: the honest ROUTE projection (posture + candidates)
+	posture, cands, dark, err := api.FetchRoute(url)
+	msg := model.RouteMsg{Posture: posture, Candidates: cands, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+func routeTick(url string) tea.Cmd { // routing evidence tracks the gate-event feed
+	return tea.Tick(8*time.Second, func(time.Time) tea.Msg { return fetchRouteOnce(url) })
+}
 func turnBlocksTick(role, ts, turnID string) tea.Cmd { // the FOCUSED turn's detail blocks (honest-empty until capture-output)
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTurnBlocksOnce(role, ts, turnID) })
 }
@@ -279,6 +290,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchObserveOnce(r.url) },
 		func() tea.Msg { return fetchMetaOnce(r.url) },
 		func() tea.Msg { return fetchCommandsOnce(r.url) },
+		func() tea.Msg { return fetchRouteOnce(r.url) },
 		func() tea.Msg {
 			role, ts, id, ok := r.m.FocusedTurnRef()
 			if !ok {
@@ -286,7 +298,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
 	)
 }
 
@@ -320,6 +332,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, metaTick(r.url) // re-arm the serving-identity handshake
 	case model.CommandsMsg:
 		return r, commandsTick(r.url) // re-arm the witnessed command-ledger poll
+	case model.RouteMsg:
+		return r, routeTick(r.url) // re-arm the ROUTE projection poll
 	case posturePersistMsg:
 		_ = model.WritePosture("", r.m.SnapshotPosture()) // best-effort externalize; re-arm the cadence
 		return r, posturePersistTick()
@@ -440,6 +454,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageLegend, true
 	case "observe", "system", "awareness":
 		return model.PageObserve, true
+	case "route", "routing":
+		return model.PageRoute, true
 	case "vault", "obsidian":
 		return model.PageVault, true
 	case "rdlc", "claims", "labrack":

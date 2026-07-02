@@ -446,6 +446,68 @@ type commandsResp struct {
 	Enforcement string       `json:"enforcement"`
 }
 
+type routeCandidateRow struct {
+	RoutingClass   string          `json:"routing_class"`
+	InKeyspace     bool            `json:"in_keyspace"`
+	MeasuredEvents int             `json:"measured_events"`
+	DispatchReqvec json.RawMessage `json:"dispatch_reqvec"` // an 8-dim int object OR the string "absent"
+}
+
+type routeCandidatesResp struct {
+	Dark       bool                `json:"dark"`
+	Error      string              `json:"error"`
+	Decision   string              `json:"decision"`
+	TaskReqvec string              `json:"task_reqvec"`
+	Candidates []routeCandidateRow `json:"candidates"`
+}
+
+// FetchRoute reads the honest ROUTE projection (U4): /route/posture + /route/candidates. Returns
+// (posture, candidates, dark, err). dark=true (unreachable/errored feed) renders the :route page
+// honest-dark. The polymorphic dispatch_reqvec (an 8-dim map OR "absent") is decoded here: a complete
+// int map => ReqvecMeasured, anything else (the "absent" sentinel) => not measured (never fabricated).
+func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, bool, error) {
+	c := newReadHTTPClient()
+	var posture grammar.RoutePosture
+	resp, err := c.Get(apiURL + "/route/posture")
+	if err != nil {
+		return posture, nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/route/posture"); err != nil {
+		return posture, nil, true, err
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&posture); err != nil {
+		return posture, nil, true, err
+	}
+
+	cresp, err := c.Get(apiURL + "/route/candidates")
+	if err != nil {
+		return posture, nil, posture.Dark, nil // posture rendered; candidates dark
+	}
+	defer cresp.Body.Close()
+	if err := checkOK(cresp, "/route/candidates"); err != nil {
+		return posture, nil, posture.Dark, nil
+	}
+	var cr routeCandidatesResp
+	if err := json.NewDecoder(cresp.Body).Decode(&cr); err != nil {
+		return posture, nil, posture.Dark, nil
+	}
+	cands := make([]grammar.RouteCandidate, 0, len(cr.Candidates))
+	for _, row := range cr.Candidates {
+		gc := grammar.RouteCandidate{
+			RoutingClass: row.RoutingClass, InKeyspace: row.InKeyspace,
+			MeasuredEvents: row.MeasuredEvents,
+		}
+		var m map[string]int
+		if len(row.DispatchReqvec) > 0 && json.Unmarshal(row.DispatchReqvec, &m) == nil && len(m) > 0 {
+			gc.DispatchReqvec = m
+			gc.ReqvecMeasured = true
+		}
+		cands = append(cands, gc)
+	}
+	return posture, cands, posture.Dark, nil
+}
+
 // FetchCommands reads the witnessed command ledger projection (/read/commands): demand+verdict datoms
 // with an honest witness state + the enforcement cell. Returns (commands, enforcement, dark, err).
 func FetchCommands(apiURL string) ([]grammar.Command, string, bool, error) {

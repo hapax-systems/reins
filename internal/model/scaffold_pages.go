@@ -83,6 +83,92 @@ func (m Model) renderObserve(w int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// renderRoute — U5 E6.2 ROUTE, LIVE from /route/posture + /route/candidates (read-only projection).
+// Reins RENDERS the spine's routing evidence and mints NOTHING: the decision is always the spine's
+// (NO SPINE DECISION ON FILE until echoed), no band/floor/ranking, no display scalar. Per routing_class
+// the measured DEMAND vector renders as its 8 dims OR the word ABSENT (never a null-dict / fabricated
+// zeros). Honest-dark when the gate-event feed is unreachable. Keyspace drift (an out-of-11 class) is
+// surfaced, not absorbed. AIR: every field is structural/numeric (routing_class + reqvec ints) — nothing
+// path/PII-class is surfaced, so the page airs as-is.
+func (m Model) renderRoute(w int) string {
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	p := m.RoutePosture
+	b.WriteString(" " + grammar.C("brt", "ROUTE") + grammar.C("mut", "  "+clipRunes("capability-routing projection — reins renders spine evidence, mints no decision", maxVisible(8, w-9))) + "\n")
+	b.WriteString(" " + rule + "\n")
+	if m.RouteDark || p.Dark {
+		reason := strings.TrimSpace(p.Error)
+		if reason == "" {
+			reason = "the gate-event routing substrate is unreachable"
+		}
+		b.WriteString(" " + grammar.C("mut", clipRunes("(route dark — "+reason+"; no fabricated routing state)", maxVisible(10, w-2))))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	// posture: the decision (always NO SPINE DECISION until the spine echoes) + keyspace + reqvec contract.
+	decision := p.Decision
+	if strings.TrimSpace(decision) == "" {
+		decision = "NO SPINE DECISION ON FILE"
+	}
+	b.WriteString(" " + grammar.C("2nd", "decision  ") + grammar.C("brt", decision) + "\n")
+	if p.Keyspace.PinnedCount > 0 {
+		cov := fmt.Sprintf("%d/%d observed", p.Keyspace.ObservedCount, p.Keyspace.PinnedCount)
+		b.WriteString(" " + grammar.C("2nd", "keyspace  ") + grammar.C("mut", cov+" of the frozen-11 routing classes") + "\n")
+		if len(p.Keyspace.UnknownObserved) > 0 { // drift — surfaced, never absorbed
+			b.WriteString(" " + grammar.C("yel", "drift     ") + grammar.C("yel", "observed outside the pinned-11: "+clipRunes(strings.Join(p.Keyspace.UnknownObserved, " "), maxVisible(8, w-30))) + "\n")
+		}
+	}
+	if len(p.Reqvec.Dims) > 0 {
+		b.WriteString(" " + grammar.C("2nd", "reqvec    ") + grammar.C("mut", fmt.Sprintf("%d dims · ints %d..%d (%s)", len(p.Reqvec.Dims), p.Reqvec.Min, p.Reqvec.Max, p.Reqvec.RangeSource)) + "\n")
+	}
+	if len(p.Sources) > 0 {
+		parts := make([]string, 0, len(p.Sources))
+		for _, s := range p.Sources {
+			g := "·"
+			if s.State == "live" {
+				g = "●"
+			}
+			parts = append(parts, g+" "+s.Name+" "+s.State)
+		}
+		b.WriteString(" " + grammar.C("2nd", "sources   ") + grammar.C("mut", clipRunes(strings.Join(parts, "  ·  "), maxVisible(8, w-12))) + "\n")
+	}
+	// candidates: measured DEMAND per routing_class — the 8-dim vector or ABSENT (never a null-dict).
+	b.WriteString(" " + rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "MEASURED DEMAND") + grammar.C("mut", "  "+clipRunes("per routing_class — task_reqvec ABSENT (no producer); ranking is the spine's", maxVisible(8, w-18))) + "\n")
+	if len(m.RouteCandidates) == 0 {
+		b.WriteString(" " + grammar.C("mut", "· no measured demand yet (gate-events carry no routing_class)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	for _, c := range m.RouteCandidates {
+		keyGlyph, keyTok := "·", "mut"
+		if !c.InKeyspace {
+			keyGlyph, keyTok = "!", "yel" // out-of-keyspace drift on the row
+		}
+		demand := grammar.C("mut", "ABSENT")
+		if c.ReqvecMeasured {
+			demand = grammar.C("2nd", renderReqvecCompact(c.DispatchReqvec))
+		}
+		row := fmt.Sprintf("%-18s ×%-3d ", clipRunes(c.RoutingClass, 18), c.MeasuredEvents)
+		b.WriteString(" " + grammar.C(keyTok, keyGlyph) + " " + grammar.C("pri", row) + demand + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderReqvecCompact renders a measured requirement_vector as a fixed-order compact glyph line
+// (q i c m v a p g = the 8 dims) — the raw measured ints, no aggregate/score. Fixed dim order keeps
+// the row width-deterministic regardless of map iteration.
+func renderReqvecCompact(rv map[string]int) string {
+	order := []struct{ key, label string }{
+		{"quality_floor", "q"}, {"information_scope", "i"}, {"context_length", "c"},
+		{"mutation_risk", "m"}, {"verification_demand", "v"}, {"ambiguity_novelty", "a"},
+		{"composition_coupling", "p"}, {"governance_sensitivity", "g"},
+	}
+	parts := make([]string, 0, len(order))
+	for _, o := range order {
+		parts = append(parts, fmt.Sprintf("%s%d", o.label, rv[o.key]))
+	}
+	return strings.Join(parts, " ")
+}
+
 // renderVault — E11.5b Obsidian research/planning navigation, LIVE from /read/vault (titles + obsidian://
 // links; bodies default-deny, never fetched). AIR: the vault is operator-private life-planning (LDLC
 // air_class "private-life") → the list SEALS on air (the count airs, the titles do not). Honest-dark when
