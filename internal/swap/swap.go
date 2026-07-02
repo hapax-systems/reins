@@ -15,6 +15,7 @@ package swap
 
 import (
 	"path/filepath"
+	"strconv"
 
 	"github.com/hapax-systems/reins/internal/generation"
 )
@@ -34,11 +35,19 @@ type ExecPlan struct {
 // writes a consume-once Handoff naming the posture + target sha. A breakglass resolution (no verified
 // generation) execs NOTHING — an unverified generation must never boot.
 func ResolveExecPlan(store *generation.Store, res generation.Resolution, posturePath, nonce string) ExecPlan {
-	if res.Tier == generation.TierBreakglass || res.SHA == "" {
+	// ALLOWLIST the exec gate: exec ONLY a recognized current/prev tier with a non-empty sha. Anything
+	// else — breakglass, an empty sha, or an unrecognized tier string — execs nothing. This localizes the
+	// "an unverified generation must never boot" invariant INSIDE swap.go rather than trusting that every
+	// caller feeds fresh Resolve() output (a denylist would exec a {SHA:"x", Tier:"garbage"} resolution).
+	if res.SHA == "" || (res.Tier != generation.TierCurrent && res.Tier != generation.TierPrev) {
+		reason := res.Reason
+		if reason == "" {
+			reason = "unrecognized resolution tier " + strconv.Quote(res.Tier) + " — refusing to exec"
+		}
 		return ExecPlan{
 			ShouldExec:       false,
 			Tier:             generation.TierBreakglass,
-			BreakglassReason: res.Reason,
+			BreakglassReason: reason,
 		}
 	}
 	binary := filepath.Join(store.GenerationDir(res.SHA), "reins")
@@ -83,12 +92,17 @@ type SupervisorAction struct {
 // exit, or a failure after the confirm / after probation — a healthy generation that later died) simply
 // relaunches current with --resume. If there is no prev to roll back to, it is breakglass.
 func DecideSupervisorAction(s SupervisorState) SupervisorAction {
-	probationFailure := s.ChildExitCode != 0 && !s.ConfirmSeen && s.WithinProbation
+	// a probation failure needs a real current to attribute the failure to (an empty current falls
+	// through to the generic no-current breakglass below).
+	probationFailure := s.ChildExitCode != 0 && !s.ConfirmSeen && s.WithinProbation && s.CurrentSHA != ""
 	if probationFailure {
 		if s.PrevSHA == "" {
+			// no prev to roll back to. QUARANTINE the failed current anyway, so a naive systemd restart's
+			// Resolve() falls straight to breakglass instead of re-selecting the bad current in a loop.
 			return SupervisorAction{
-				Kind:   ActionBreakglass,
-				Reason: "current generation failed probation and there is no prev to roll back to — manual recovery",
+				Kind:          ActionBreakglass,
+				QuarantineSHA: s.CurrentSHA,
+				Reason:        "current failed probation and there is no prev — quarantined to stop a re-select loop; manual recovery",
 			}
 		}
 		return SupervisorAction{

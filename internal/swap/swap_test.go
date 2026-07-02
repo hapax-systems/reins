@@ -34,12 +34,28 @@ func TestResolveExecPlanBreakglassNeverExecs(t *testing.T) {
 	}
 }
 
-// A prev-tier resolution execs the prev generation's binary (rollback boot).
+// A prev-tier resolution execs the prev generation's binary (rollback boot) with its own Handoff.
 func TestResolveExecPlanPrevTier(t *testing.T) {
 	store := generation.NewStore("/store")
-	plan := ResolveExecPlan(store, generation.Resolution{SHA: "gen1", Tier: generation.TierPrev, Reason: "current quarantined -> prev"}, "/p", "n")
+	plan := ResolveExecPlan(store, generation.Resolution{SHA: "gen1", Tier: generation.TierPrev, Reason: "current quarantined -> prev"}, "/post.json", "nonce-p")
 	if !plan.ShouldExec || !strings.Contains(plan.Argv[0], "gen1") || plan.Tier != generation.TierPrev {
 		t.Fatalf("prev-tier should exec gen1: %+v", plan)
+	}
+	if plan.Handoff.TargetSHA != "gen1" || plan.Handoff.PosturePath != "/post.json" || plan.Handoff.Nonce != "nonce-p" {
+		t.Fatalf("prev-tier Handoff must be pinned independently: %+v", plan.Handoff)
+	}
+}
+
+// The exec gate is an ALLOWLIST: an unrecognized tier with a non-empty sha must NOT exec (defense in
+// depth — safety cannot depend on Resolve() only ever emitting known tiers).
+func TestResolveExecPlanUnknownTierNeverExecs(t *testing.T) {
+	store := generation.NewStore("/store")
+	plan := ResolveExecPlan(store, generation.Resolution{SHA: "x", Tier: "garbage", Reason: ""}, "/p", "n")
+	if plan.ShouldExec {
+		t.Fatal("an unrecognized tier MUST NOT exec (allowlist gate; unverified never boots)")
+	}
+	if plan.BreakglassReason == "" {
+		t.Fatal("must surface a reason for refusing an unrecognized tier")
 	}
 }
 
@@ -56,13 +72,40 @@ func TestSupervisorProbationFailureRollsBack(t *testing.T) {
 	}
 }
 
-// A probation failure with NO prev is breakglass (nothing safe to roll back to).
-func TestSupervisorProbationFailureNoPrevIsBreakglass(t *testing.T) {
+// A probation failure with NO prev is breakglass — AND quarantines the bad current so a naive restart
+// doesn't re-select it in a loop.
+func TestSupervisorProbationFailureNoPrevIsBreakglassAndQuarantines(t *testing.T) {
 	a := DecideSupervisorAction(SupervisorState{
 		ChildExitCode: 1, ConfirmSeen: false, WithinProbation: true, CurrentSHA: "new", PrevSHA: "",
 	})
 	if a.Kind != ActionBreakglass {
 		t.Fatalf("probation failure with no prev must be breakglass, got %s", a.Kind)
+	}
+	if a.QuarantineSHA != "new" {
+		t.Fatalf("the bad current must be quarantined even on no-prev breakglass (stop the re-select loop), got %q", a.QuarantineSHA)
+	}
+}
+
+// The !ConfirmSeen guard MUST be isolated: confirm arrived, then the process died STILL WITHIN probation.
+// This is a healthy generation that later crashed -> relaunch current, NEVER roll back. (A mutation that
+// drops the confirm guard would wrongly roll back here — this is the load-bearing safety property.)
+func TestSupervisorConfirmedInProbationDeathRelaunchesCurrent(t *testing.T) {
+	a := DecideSupervisorAction(SupervisorState{
+		ChildExitCode: 1, ConfirmSeen: true, WithinProbation: true, CurrentSHA: "new", PrevSHA: "old",
+	})
+	if a.Kind != ActionRelaunchCurrent || a.RelaunchSHA != "new" {
+		t.Fatalf("a confirmed generation dying inside probation must relaunch current, not roll back: %+v", a)
+	}
+}
+
+// The ExitCode guard MUST be isolated: a CLEAN exit inside probation before confirm is not a failure ->
+// relaunch current, never roll back.
+func TestSupervisorCleanExitInProbationRelaunchesCurrent(t *testing.T) {
+	a := DecideSupervisorAction(SupervisorState{
+		ChildExitCode: 0, ConfirmSeen: false, WithinProbation: true, CurrentSHA: "new", PrevSHA: "old",
+	})
+	if a.Kind != ActionRelaunchCurrent {
+		t.Fatalf("a clean exit within probation must relaunch current, not roll back: %+v", a)
 	}
 }
 
