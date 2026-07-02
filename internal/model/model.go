@@ -2757,6 +2757,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width, m.Height = v.Width, v.Height // the zones lay out against this
 		return m, nil
+	case tea.MouseMsg:
+		return m.updateMouse(v)
 	case tea.KeyMsg:
 		if v.Type == tea.KeyRunes && len(v.Runes) > 1 && !v.Paste {
 			var cmd tea.Cmd
@@ -3621,6 +3623,21 @@ func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 // updateVerbMenu handles the object-verb menu (ModeVerbMenu): a verb key pre-seeds the governed COMMAND
 // preview for the focused task IF that verb is state-legal (illegal verbs are inert — verbs attach to
 // objects, not to memory). [Esc] dismisses. It mints nothing; it only opens the preview path.
+// updateMouse maps pointer input (the deck's touchscreen/trackpad, or any mouse) onto the cockpit. Mouse
+// drives NAVIGATION only — the wheel moves the focus through the current page's list by reusing the exact
+// j/k key path (so every page's focus semantics come along for free). It NEVER invokes a governed verb:
+// mutations stay behind the send-gate/apply seam (A2/A3), so a stray tap or scroll cannot apply anything.
+// Text selection is preserved via the terminal's Shift-drag bypass (mouse capture is cell-motion only).
+func (m Model) updateMouse(v tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch v.Button {
+	case tea.MouseButtonWheelUp:
+		return m.Update(tea.KeyMsg{Type: tea.KeyUp}) // focus prev (identical to 'k')
+	case tea.MouseButtonWheelDown:
+		return m.Update(tea.KeyMsg{Type: tea.KeyDown}) // focus next (identical to 'j')
+	}
+	return m, nil // clicks/motion: inert for now (tap-to-focus row mapping is a follow-on)
+}
+
 func (m Model) updateVerbMenu(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if keyName(v) == "esc" {
 		m.Mode = ModeNormal

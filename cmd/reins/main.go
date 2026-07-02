@@ -951,7 +951,7 @@ func main() {
 		}
 	}
 	r := root{m: launch, url: cfg.APIURL}
-	finalModel, err := tea.NewProgram(r, tea.WithAltScreen()).Run()
+	finalModel, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
