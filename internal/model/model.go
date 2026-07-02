@@ -3698,8 +3698,38 @@ func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// wired verb; an unwired verb renders the never-mint preview). Plain text (no "/") stays the steer
 		// COMPOSER: a non-empty compose opens the AIR-safe send-gate; an empty compose closes.
 		if in := strings.TrimSpace(m.CoordChatInput); strings.HasPrefix(in, "/") {
-			m.CoordChatInput = ""
-			return m.Exec(strings.TrimPrefix(in, "/")), nil
+			fields := strings.Fields(strings.TrimPrefix(in, "/"))
+			verb := ""
+			if len(fields) > 0 {
+				verb = fields[0]
+			}
+			switch {
+			case verb == "q" || verb == "quit" || verb == "swap":
+				// app-lifecycle verbs are NOT dispatch — a mis-transcribed voice "/q" must not quit the
+				// cockpit. Not reachable from the chat "/" surface.
+				m.CoordChatInput = ""
+				m.Status = "/" + verb + " is not a dispatch verb"
+				return m, nil
+			case m.wiredGovernedVerb(verb):
+				// a WIRED governed verb MUTATES: it must not fire on one Enter (parity with the [v]-menu +
+				// the send-gate — the operator's PRIMARY input is voice, and a mis-heard "/verb" + Enter
+				// must not dispatch). Stage into ModeCommand with the governed-envelope preview; a SECOND
+				// deliberate Enter confirms + dispatches.
+				target := ""
+				if len(fields) > 1 {
+					target = fields[1]
+				} else if t, ok := m.FocusedTask(); ok {
+					target = t.TaskID
+				}
+				m.CoordChatInput = ""
+				m.Mode, m.Input, m.CompIdx = ModeCommand, verb+" "+target, 0
+				m.Status = m.governedVerbPreview(verb)
+				return m, nil
+			default:
+				// navigation + unwired-preview verbs do not mutate — execute immediately.
+				m.CoordChatInput = ""
+				return m.Exec(strings.TrimPrefix(in, "/")), nil
+			}
 		}
 		if len(m.composeParts()) > 0 {
 			m.Mode = ModeSendGate
@@ -3961,6 +3991,13 @@ func (m Model) execGovernedVerb(verb string, args []string) Model {
 	m.PendingCommand = &CommandRequest{Verb: verb, Target: target}
 	m.Status = verb + " → applying (witnessed)…"
 	return m
+}
+
+// wiredGovernedVerb reports whether a verb both is chat-dispatchable (in governedVerbSpecs) AND wired —
+// the class that mutates and therefore needs a confirm step when dispatched from the chat.
+func (m Model) wiredGovernedVerb(verb string) bool {
+	_, gov := governedVerbSpecs[verb]
+	return gov && m.WiredVerbs[verb]
 }
 
 // governedVerbEnvelope builds the never-mint preview envelope for a door/dock verb against a target.

@@ -7,20 +7,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// The Yard Crow chat is the single dispatch point (convergence keystone): a "/"-directive runs the command
-// grammar. A wired governed DIRECTION verb (/focus) stages the WITNESSED apply-seam POST.
-func TestCrowChatSlashDispatchesWiredVerb(t *testing.T) {
+// The Yard Crow chat is the single dispatch point (convergence keystone). A wired governed verb does NOT
+// fire on one Enter (voice-primary safety): it STAGES into ModeCommand with a preview; a second Enter
+// confirms + dispatches through the witnessed apply seam.
+func TestCrowChatSlashStagesWiredVerbForConfirm(t *testing.T) {
 	m := New("REINS")
 	m.Mode = ModeCoordChat
 	m.WiredVerbs = map[string]bool{"focus": true}
 	m.CoordChatInput = "/focus cc-task-x"
 	nm, _ := m.updateCoordChat(tea.KeyMsg{Type: tea.KeyEnter})
 	out := nm.(Model)
-	if out.PendingCommand == nil || out.PendingCommand.Verb != "focus" || out.PendingCommand.Target != "cc-task-x" {
-		t.Fatalf("/focus must dispatch focus through the apply seam, got %+v", out.PendingCommand)
+	if out.PendingCommand != nil {
+		t.Fatal("a wired verb must NOT dispatch on the first Enter (needs confirm)")
+	}
+	if out.Mode != ModeCommand || out.Input != "focus cc-task-x" {
+		t.Fatalf("wired verb must stage into ModeCommand with the target, got mode=%d input=%q", out.Mode, out.Input)
 	}
 	if out.CoordChatInput != "" {
-		t.Fatalf("dispatch must clear the chat input, got %q", out.CoordChatInput)
+		t.Fatalf("staging must clear the chat input, got %q", out.CoordChatInput)
+	}
+	// the SECOND Enter (now in ModeCommand) confirms + dispatches
+	confirmed := out.Exec(out.Input)
+	if confirmed.PendingCommand == nil || confirmed.PendingCommand.Verb != "focus" || confirmed.PendingCommand.Target != "cc-task-x" {
+		t.Fatalf("confirm must dispatch focus through the apply seam, got %+v", confirmed.PendingCommand)
+	}
+}
+
+// App-lifecycle verbs (/q, /swap) are NOT reachable from the chat dispatch surface — a mis-transcribed
+// voice "/q" must not quit the cockpit.
+func TestCrowChatSlashExcludesLifecycleVerbs(t *testing.T) {
+	for _, v := range []string{"/q", "/quit", "/swap"} {
+		m := New("REINS")
+		m.Mode = ModeCoordChat
+		m.CoordChatInput = v
+		nm, _ := m.updateCoordChat(tea.KeyMsg{Type: tea.KeyEnter})
+		out := nm.(Model)
+		if out.PendingCommand != nil || out.Mode == ModeCommand {
+			t.Fatalf("%s must not dispatch or stage from the chat, got mode=%d pending=%v", v, out.Mode, out.PendingCommand)
+		}
 	}
 }
 
