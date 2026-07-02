@@ -103,6 +103,21 @@ def read_route_posture(path: str | None = None) -> dict:
     }
 
 
+def _measured_reqvec_or_absent(rv: object):
+    """The measured 8-dim vector iff ALL dims are present with an int value; else the "absent" sentinel.
+    An empty or partial vector is NOT a measured vector — rendering it as {dim: null} would be the
+    absent-ambiguity A2.3 forbids (a null masquerading as measured)."""
+    if not isinstance(rv, dict):
+        return "absent"
+    out = {}
+    for d in REQVEC_DIMS:
+        v = rv.get(d)
+        if not isinstance(v, int) or isinstance(v, bool):  # missing / null / non-int -> not measured
+            return "absent"
+        out[d] = v
+    return out
+
+
 def read_route_candidates(path: str | None = None) -> dict:
     """Measured DEMAND evidence per routing_class — the latest measured requirement_vector per observed
     class (raw measured, no computed score). task_reqvec ABSENT (no producer). Candidate RANKING is a
@@ -126,13 +141,14 @@ def read_route_candidates(path: str | None = None) -> dict:
 
     candidates = []
     for rc in sorted(counts):
-        rv = latest.get(rc)
         candidates.append({
             "routing_class": rc,
             "in_keyspace": rc in ROUTING_CLASSES_PINNED,
             "measured_events": counts[rc],
-            # dispatch_reqvec: the measured demand vector (present iff a measured vector exists).
-            "dispatch_reqvec": ({d: rv.get(d) for d in REQVEC_DIMS} if isinstance(rv, dict) else "absent"),
+            # dispatch_reqvec: the measured demand vector, present ONLY when a COMPLETE measured vector
+            # exists. An empty/partial vector (e.g. the live `verification` row's {}) renders the word
+            # ABSENT, never an 8-key null-dict — a null-dict is the absent-ambiguity A2.3 forbids.
+            "dispatch_reqvec": _measured_reqvec_or_absent(latest.get(rc)),
         })
     return {
         "dark": False,

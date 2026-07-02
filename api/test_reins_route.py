@@ -65,9 +65,44 @@ def test_candidates_measured_demand_task_reqvec_absent_no_scalar(tmp_path):
     assert row["in_keyspace"] is True and row["measured_events"] == 2
     # measured demand is the LATEST raw vector (4s), honest 5s not clipped by any sample-scaling.
     assert row["dispatch_reqvec"]["quality_floor"] == 4
-    # NO display scalar minted anywhere in the projection.
-    blob = json.dumps(cand).lower()
-    assert "aggregate_score" not in blob and "\"score\"" not in blob and "rank" not in blob
+    # NO display scalar minted anywhere in EITHER projection (candidates + posture).
+    for blob in (json.dumps(read_route_candidates(p)).lower(), json.dumps(read_route_posture(p)).lower()):
+        assert "aggregate_score" not in blob
+        assert "\"score\"" not in blob and "_score" not in blob
+        assert "rank" not in blob and "posterior" not in blob
+
+
+def test_empty_or_partial_reqvec_renders_absent_not_null_dict(tmp_path):
+    # A2.3 honesty: an empty/partial requirement_vector (the live `verification` row carries {}) must
+    # render the word "absent", NEVER an 8-key null-dict (a null masquerading as measured).
+    p = str(tmp_path / "gate-events.jsonl")
+    _write_events(p, [
+        {"routing_class": "verification", "requirement_vector": {}},  # empty -> absent
+        {"routing_class": "coordination", "requirement_vector": {"quality_floor": 5}},  # partial -> absent
+        {"routing_class": "runtime_ops"},  # no vector key at all -> absent
+        {"routing_class": "source_python", "requirement_vector": {d: 2 for d in REQVEC_DIMS}},  # complete
+    ])
+    cand = read_route_candidates(p)
+    by = {c["routing_class"]: c["dispatch_reqvec"] for c in cand["candidates"]}
+    assert by["verification"] == "absent", "empty {} must render absent, not a null-dict"
+    assert by["coordination"] == "absent", "partial vector must render absent"
+    assert by["runtime_ops"] == "absent", "missing vector must render absent"
+    assert by["source_python"] == {d: 2 for d in REQVEC_DIMS}, "complete vector renders measured"
+    # never a null value anywhere in the projection (the absent-ambiguity A2.3 forbids)
+    assert "null" not in json.dumps(cand) and None not in _flatten(cand)
+
+
+def _flatten(obj):
+    out = []
+    if isinstance(obj, dict):
+        for v in obj.values():
+            out.extend(_flatten(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            out.extend(_flatten(v))
+    else:
+        out.append(obj)
+    return out
 
 
 def test_dark_when_feed_absent(tmp_path):
