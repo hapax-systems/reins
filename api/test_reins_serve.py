@@ -47,8 +47,10 @@ def test_read_meta_identity_handshake():
     assert meta["api_tree_sha"]
     assert meta["router"] == "mounted"
     assert set(meta["verbs"]) == set(VERB_TABLE)
-    wired = [v for v, s in meta["verbs"].items() if s["wired"]]
-    assert wired == ["resume", "stage"]  # resume preview (read-only) + governed generation staging (U6b)
+    wired = sorted(v for v, s in meta["verbs"].items() if s["wired"])
+    # resume preview (read-only) + governed generation staging (U6b) + focus (operator-attested frontdoor
+    # inflection — reins-local, not spine dispatch; convergence rung 2).
+    assert wired == ["focus", "resume", "stage"]
 
 
 def test_unwired_verb_refuses_typed_501():
@@ -86,6 +88,25 @@ def test_resume_preview_wired_zero_mint():
     body = resp.body.decode()
     assert "would emit session.resume(lane-a)" in body  # preview, not a write
     assert '"event_seq":null' in body.replace(" ", "")  # NO spine write happened
+
+
+def test_focus_inflection_wired_witnessed_no_spine_write():
+    # convergence rung 2: focus is the operator's attested frontdoor prioritization primitive — wired,
+    # witnessed on the ledger, NO spine write; dispatch stays not-wired (no spine front-running).
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    resp = cmd("focus", reins_command.CommandRequest(
+        target="reform-task-x", authority_packet={"kind": "operator_attestation"},
+        preflight_receipt={}, idempotency_key="focus-k1",
+    ))
+    assert resp.status_code == 200
+    body = resp.body.decode()
+    assert "focus-inflection on reform-task-x" in body      # the witnessed inflection
+    assert '"event_seq":null' in body.replace(" ", "")      # NO spine write — reins-local
+    assert '"event_id":' in body                            # witnessed on the durable ledger
+    d = cmd("dispatch", reins_command.CommandRequest(
+        target="x", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="d1"))
+    assert d.status_code == 501  # dispatch remains spine-gated
 
 
 def test_router_failure_degrades_to_read_only_disclosed(monkeypatch):

@@ -211,6 +211,9 @@ func TaskVerbs(t Task) []TaskVerb {
 		{Key: "r", Name: "rework", Legal: pred == "hold"},
 		{Key: "f", Name: "refute", Legal: stage >= 5},
 		{Key: "c", Name: "close", Legal: pred == "ship"},
+		// focus: the operator's attention/prioritization — always legal, wired + operator-attested (the
+		// reins frontdoor primitive the spine consumes; not a lifecycle transition).
+		{Key: "F", Name: "focus", Legal: true},
 	}
 }
 

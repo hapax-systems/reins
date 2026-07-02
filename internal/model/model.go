@@ -3883,6 +3883,7 @@ var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receip
 	"refute": {"review.fail(target)", "governed COMMAND route", "target + open review thread", "review receipt → spine", "review recorded as fail"},
 	"close":  {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
 	"resume": {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
+	"focus":  {"sdlc.focus_inflection(target)", "operator_attestation (loopback) — reins-local frontdoor primitive", "target + operator attention", "witnessed focus-inflection → ledger (route + spine consume)", "focus witnessed; the operator's prioritization is durable"},
 }
 
 // execGovernedVerb is the cockpit APPLY SEAM. A WIRED governed verb (per the router's live wired-set

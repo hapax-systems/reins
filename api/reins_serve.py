@@ -48,7 +48,7 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     "approve": {"wired": False},
     "deny": {"wired": False},
     "handoff": {"wired": False},
-    "focus": {"wired": False},
+    "focus": {"wired": True, "mode": "inflection"},  # operator-attested frontdoor primitive (reins-local, not spine dispatch)
     "breakglass": {"wired": False},
     "resume": {"wired": True, "mode": "preview"},  # read-only preview wedge (no spine write)
     # governed generation staging (U6b-stage): verifies a target generation against the store's
@@ -158,6 +158,36 @@ def _stage_closures():
     return verify, preflight, transport
 
 
+def _focus_closures():
+    """The operator-attested `focus` verb (convergence rung 2). The operator's focus-inflection — which
+    task/session the operator is attending to — recorded as a WITNESSED reins primitive the ROUTE + the
+    spine consume for prioritization. verify: an operator_attestation packet + a target. preflight: not
+    blocked. transport: the witnessed demand->verdict row IS the durable inflection (no separate store; no
+    spine write; reins mints nothing), so the transport just confirms it. This is NOT spine dispatch —
+    focus originates in the reins frontdoor (per the convergence cleave); the spine only CONSUMES it."""
+
+    def verify(packet: Any, target: str) -> bool:
+        return bool(packet) and bool(target)
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"focus-{env.idempotency_key}",
+            event_seq=None,  # no spine write — the ledger witness IS the record
+            fold_delta=(
+                f"operator focus-inflection on {env.target} — witnessed frontdoor primitive "
+                "(the ROUTE + the spine consume it for prioritization; no dispatch, no spine write)"
+            ),
+            spooled=False,
+        )
+
+    return verify, preflight, transport
+
+
 def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
     """The verb-table router. Raises on construction failure — the caller degrades
     to read-only and discloses (never a half-mounted write surface).
@@ -172,6 +202,7 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
     closures_by_verb = {
         "resume": _resume_preview_closures(),
         "stage": _stage_closures(),
+        "focus": _focus_closures(),
     }
 
     @app.post("/command/{verb}")
