@@ -72,6 +72,54 @@ type Event struct {
 	AIR                               map[string]string // field -> "ok"|"deny"
 }
 
+// Command is one witnessed command datom from the durable ledger (/read/commands): a demand+verdict
+// pair folded to its current status, with typed refs. The witness is `pending` until the spine echoes
+// the command_id (U7/SA-3). Rendered read-only; Reins mints nothing here.
+type Command struct {
+	Verb, Target, Status, Witness string
+	TaskID, SessionRole           string
+	AIR                           map[string]string // field -> "ok"|"deny"
+}
+
+// commandStatusGlyph: monochrome-safe class marker for a command verdict (color is a redundant
+// amplifier over the glyph). ok ✓ · refused/rejected/failed ✖ · not-wired/unregistered ⊘ · pending ▸.
+func commandStatusGlyph(status string) string {
+	switch {
+	case status == "ok":
+		return "✓"
+	case status == "pending":
+		return "▸"
+	case strings.Contains(status, "not-wired"), strings.Contains(status, "unregistered"):
+		return "⊘"
+	default: // authority-rejected / preflight-failed / transport-failed / not-implemented
+		return "✖"
+	}
+}
+
+// RenderCommandRow renders one witnessed command datom as a width-stable row. Target is AIR-redacted
+// (a target can carry a name/id); verb + status + witness are structural. No score/scalar is rendered.
+func RenderCommandRow(c Command, on bool) string {
+	glyph := commandStatusGlyph(c.Status)
+	target := Redact(c.AIR, "target", c.Target, on)
+	status := c.Status
+	if status == "" {
+		status = "pending"
+	}
+	witness := c.Witness
+	if witness == "" {
+		witness = "pending"
+	}
+	ref := ""
+	if t := strings.TrimSpace(c.TaskID); t != "" {
+		ref = " · " + Redact(c.AIR, "task_id", t, on)
+	} else if r := strings.TrimSpace(c.SessionRole); r != "" {
+		ref = " · " + Redact(c.AIR, "session_role", r, on)
+	}
+	return C("mut", glyph) + " " + C("pri", fmt.Sprintf("%-9s", c.Verb)) +
+		C("2nd", " "+target) + C("mut", " · ") + C("brt", status) +
+		C("mut", " · witness ") + C("mut", witness) + C("2nd", ref)
+}
+
 // Glyph: the closed, learned alphabet — the cell carries the kind by semantic class
 // (▸ in-progress · ✓ success · ✖ failure · ⇡ advance · ⚑ flag · ◆ task · ↟ PR), monochrome-safe.
 var glyphs = map[string]string{

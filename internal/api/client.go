@@ -429,6 +429,56 @@ type observeResp struct {
 	Dimensions []grammar.ObserveDimension `json:"dimensions"`
 }
 
+type commandRow struct {
+	Verb        string            `json:"verb"`
+	Target      string            `json:"target"`
+	Status      string            `json:"status"`
+	Witness     string            `json:"witness"`
+	TaskID      string            `json:"task_id"`
+	SessionRole string            `json:"session_role"`
+	AIR         map[string]string `json:"air"`
+}
+
+type commandsResp struct {
+	Dark        bool         `json:"dark"`
+	Error       string       `json:"error"`
+	Commands    []commandRow `json:"commands"`
+	Enforcement string       `json:"enforcement"`
+}
+
+// FetchCommands reads the witnessed command ledger projection (/read/commands): demand+verdict datoms
+// with an honest witness state + the enforcement cell. Returns (commands, enforcement, dark, err).
+func FetchCommands(apiURL string) ([]grammar.Command, string, bool, error) {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/commands")
+	if err != nil {
+		return nil, "dark", true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/commands"); err != nil {
+		return nil, "dark", true, err
+	}
+	var r commandsResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, "dark", true, err
+	}
+	out := make([]grammar.Command, 0, len(r.Commands))
+	for _, cr := range r.Commands {
+		out = append(out, grammar.Command{
+			Verb: cr.Verb, Target: cr.Target, Status: cr.Status, Witness: cr.Witness,
+			TaskID: cr.TaskID, SessionRole: cr.SessionRole, AIR: cr.AIR,
+		})
+	}
+	enf := r.Enforcement
+	if enf == "" {
+		enf = "absent"
+	}
+	if r.Error != "" {
+		return out, enf, true, fmt.Errorf("%s", r.Error)
+	}
+	return out, enf, r.Dark, nil
+}
+
 // FetchObserve reads the whole-system awareness aggregate (/read/observe) — per-dimension live/dark, raw
 // (the Go renderObserve applies AIR). dark=true renders the :observe page honest-dark.
 func FetchObserve(apiURL string) ([]grammar.ObserveDimension, bool, error) {

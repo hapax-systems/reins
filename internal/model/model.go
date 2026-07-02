@@ -430,6 +430,10 @@ type Model struct {
 	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
+	Commands            []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
+	CommandsEnforcement string            // U3b: the enforcement cell — armed|breakglass|absent|dark (absent until CP-E)
+	CommandsDark        bool
+	CommandsError       string
 	pending             *pendingReanchor // U2: identity anchors from --resume awaiting the first non-dark fold (unexported: never serialized)
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
@@ -2496,6 +2500,26 @@ type MetaMsg struct {
 	Reachable  bool
 }
 
+// CommandsMsg carries the witnessed command-ledger projection (/read/commands) into Update (U3b).
+type CommandsMsg struct {
+	Commands    []grammar.Command
+	Enforcement string
+	Dark        bool
+	Error       string
+}
+
+// FoldCommands folds the witnessed command ledger. Honest-dark on an unreachable/error feed (the render
+// discloses it); enforcement defaults to "absent" (the gate observably does not exist yet — never dark).
+func (m Model) FoldCommands(cmds []grammar.Command, enforcement string, dark bool) Model {
+	m.Commands = cmds
+	if strings.TrimSpace(enforcement) == "" {
+		enforcement = "absent"
+	}
+	m.CommandsEnforcement = enforcement
+	m.CommandsDark = dark
+	return m
+}
+
 // TurnBlocksMsg carries the per-turn Block stream for ONE turn (keyed by its full TurnID = ts|role|kind,
 // so two turns sharing ts+role with different kind never mis-assign). Honest-empty until capture-output.
 type TurnBlocksMsg struct {
@@ -2540,6 +2564,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.PortForeign = v.Reachable && v.Foreign
 		m.ServingSHA = v.ServingSHA
 		m.LastFold = "meta"
+		return m, nil
+	case CommandsMsg:
+		m = m.FoldCommands(v.Commands, v.Enforcement, v.Dark)
+		m.CommandsError = v.Error
+		m.LastFold = "commands"
 		return m, nil
 	case TurnBlocksMsg:
 		// store the focused turn's Block stream under its full TurnID; empty/dark leaves the detail

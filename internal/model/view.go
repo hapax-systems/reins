@@ -5039,6 +5039,35 @@ func (m Model) renderCommandCatalog(w int) string {
 	var b strings.Builder
 	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
 	targetFocus := m.targetRowFocusActive()
+	// U3b — the WITNESSED LEDGER: the live demand+verdict datoms from /read/commands, so the
+	// operator sees the frontdoor's real command activity, not just the static verb catalog. The
+	// enforcement cell renders the four-word state (armed|breakglass|absent|dark); `absent` is honest
+	// (the dispatch-gate does not exist until CP-E), never dark-conflated.
+	enf := m.CommandsEnforcement
+	if strings.TrimSpace(enf) == "" {
+		enf = "absent"
+	}
+	b.WriteString(" " + grammar.C("brt", "WITNESSED LEDGER") +
+		grammar.C("mut", " — enforcement ") + grammar.C("brt", enf) + "\n")
+	switch {
+	case m.CommandsDark:
+		reason := strings.TrimSpace(m.CommandsError)
+		if reason == "" {
+			reason = "command ledger unreachable"
+		}
+		b.WriteString(" " + grammar.C("mut", "· dark — "+clipRunes(reason, maxVisible(8, w-10))) + "\n")
+	case len(m.Commands) == 0:
+		b.WriteString(" " + grammar.C("mut", "· no commands witnessed yet (demand+verdict rows appear here as they occur)") + "\n")
+	default:
+		shown := m.Commands
+		if len(shown) > 8 { // the recent tail — the catalog below is the reference
+			shown = shown[len(shown)-8:]
+		}
+		for _, c := range shown {
+			b.WriteString(" " + clipRunes(grammar.RenderCommandRow(c, m.AIR), maxVisible(8, w-1)) + "\n")
+		}
+	}
+	b.WriteString(" " + rule + "\n")
 	b.WriteString(" " + grammar.C("brt", "COMMANDS") + grammar.C("mut", " — "+m.commandsSummary()) + "\n")
 	b.WriteString(" " + grammar.C("mut", "one catalog backs hotkeys, command line completion, probes, and governed intent previews") + "\n")
 	if targetFocus {

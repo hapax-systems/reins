@@ -196,6 +196,17 @@ func fetchMetaOnce(url string) tea.Msg { // U1: serving-identity handshake — i
 func metaTick(url string) tea.Cmd { // identity is near-static; a slow re-check catches a mid-session port swap
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchMetaOnce(url) })
 }
+func fetchCommandsOnce(url string) tea.Msg { // U3b: the witnessed command-ledger projection
+	cmds, enf, dark, err := api.FetchCommands(url)
+	msg := model.CommandsMsg{Commands: cmds, Enforcement: enf, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+func commandsTick(url string) tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchCommandsOnce(url) })
+}
 
 // hasArg reports whether a bare flag is present anywhere in os.Args (order-independent).
 func hasArg(flag string) bool {
@@ -267,6 +278,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchVaultOnce(r.url) },
 		func() tea.Msg { return fetchObserveOnce(r.url) },
 		func() tea.Msg { return fetchMetaOnce(r.url) },
+		func() tea.Msg { return fetchCommandsOnce(r.url) },
 		func() tea.Msg {
 			role, ts, id, ok := r.m.FocusedTurnRef()
 			if !ok {
@@ -274,7 +286,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(),
 	)
 }
 
@@ -306,6 +318,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, observeTick(r.url) // re-arm whole-system polling
 	case model.MetaMsg:
 		return r, metaTick(r.url) // re-arm the serving-identity handshake
+	case model.CommandsMsg:
+		return r, commandsTick(r.url) // re-arm the witnessed command-ledger poll
 	case posturePersistMsg:
 		_ = model.WritePosture("", r.m.SnapshotPosture()) // best-effort externalize; re-arm the cadence
 		return r, posturePersistTick()
