@@ -3679,8 +3679,16 @@ func (m Model) updateFilter(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateCoordChat(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch v.Type {
 	case tea.KeyEnter:
-		// no Enter-sends: a non-empty compose (text and/or basket) opens the egress SEND-GATE for an
-		// explicit AIR-safe review + confirm/dump; an empty compose just closes.
+		// The Yard Crow chat is the single DISPATCH point (convergence keystone): a leading "/" runs the
+		// command grammar — governed DIRECTION verbs (e.g. /focus <task>) route through the WITNESSED apply
+		// seam, navigation verbs switch views. Direction-only-conformant: the operator steers direction/
+		// prioritization, never speed or routing (Exec → execGovernedVerb stages a witnessed POST for a
+		// wired verb; an unwired verb renders the never-mint preview). Plain text (no "/") stays the steer
+		// COMPOSER: a non-empty compose opens the AIR-safe send-gate; an empty compose closes.
+		if in := strings.TrimSpace(m.CoordChatInput); strings.HasPrefix(in, "/") {
+			m.CoordChatInput = ""
+			return m.Exec(strings.TrimPrefix(in, "/")), nil
+		}
 		if len(m.composeParts()) > 0 {
 			m.Mode = ModeSendGate
 		} else {
