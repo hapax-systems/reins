@@ -623,12 +623,12 @@ func hconcatCols(div string, h int, cols ...[]string) string {
 func (m Model) composePage(w, h int) *layout.Spec {
 	switch m.Page {
 	case PageCoordinator:
-		return m.specCoordinator()
+		return m.specCoordinator(w)
 	case PageEvents:
 		if m.EventsDark {
 			return nil // dark: fall through to eventsBody (preserves the dark-reason disclosure)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.eventsListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.eventContextPane(pw) }},
 			0.65, m.eventsEmergentRelation())
@@ -636,7 +636,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if m.TasksDark {
 			return nil // dark: fall through to taskBody (dark-reason disclosure)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 74, Render: func(pw, ph int) string { return m.tasksListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.taskWorkDomainPane(pw) }},
 			0.60, m.tasksEmergentRelation())
@@ -644,7 +644,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if m.SessionsDark {
 			return nil // dark: fall through to sessionsBody (dark-reason disclosure)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.sessionsListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.sessionConstraintPane(pw) }},
 			0.62, m.sessionsEmergentRelation())
@@ -657,7 +657,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if len(m.epistemicRows()) == 0 {
 			return nil // empty/dark → the legacy single-pane body (NO EPISTEMIC ROWS disclosure)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.epistemicListBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedEpistemicPath(pw) }},
 			0.62, m.epistemicsEmergentRelation())
@@ -669,7 +669,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if m.TracesDark || len(m.Traces) == 0 {
 			return nil // dark/empty → tracesBody (dark hint / empty list)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.tracesListBody(pw, ph) }},
 			&layout.Pane{MinW: 40, Render: func(pw, ph int) string { return m.renderSelectedTrace(pw) }},
 			0.62, m.tracesEmergentRelation())
@@ -680,7 +680,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if len(m.TurnLadder) == 0 {
 			return nil
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.turnListBody(pw, ph) }},
 			&layout.Pane{MinW: 48, Render: func(pw, ph int) string { return m.turnDetailBody(pw) }},
 			0.55, "focused turn → blocks")
@@ -693,7 +693,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if len(lookupIntentArgs()) == 0 {
 			return nil
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.intentTargetsBody(pw, ph) }},
 			&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.renderSelectedIntentReview(pw) }},
 			0.50, "selected target → governed route review")
@@ -706,7 +706,7 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		if m.DynamicsDark || len(m.dynamicsFocusRows()) == 0 {
 			return nil // dark/empty → bodyForPage (the legacy reference document / dark hint)
 		}
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 72, Render: func(pw, ph int) string { return m.dynamicsMapBody(pw, ph) }},
 			&layout.Pane{MinW: 48, Render: func(pw, ph int) string { return m.renderDynamicsSelectedElement(pw) }},
 			0.62, "selected map element ← navigate the map")
@@ -715,22 +715,22 @@ func (m Model) composePage(w, h int) *layout.Spec {
 		// It derives qualitative feedback structure from m.Dynamics at render time: no simulation, no
 		// probe fixture unless the dynamics graph itself is empty. Empty acyclic graphs still compose and
 		// disclose that there are no current loops.
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 70, Render: func(pw, ph int) string { return m.loopListBody(pw, ph) }},
 			&layout.Pane{MinW: 50, Render: func(pw, ph int) string { return m.loopDetailBody(pw) }},
 			0.50, "loop -> structure")
 	case PageAxes:
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 64, Render: func(pw, ph int) string { return m.axisListBody(pw, ph) }},
 			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.axisDetailBody(pw) }},
 			0.50, "axis -> five-tuple contract")
 	case PageIdentity:
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 60, Render: func(pw, ph int) string { return m.identityListBody(pw, ph) }},
 			&layout.Pane{MinW: 52, Render: func(pw, ph int) string { return m.identityDetailBody(pw) }},
 			0.5, "principal -> identity contract")
 	case PageRelational:
-		return m.specListContext(
+		return m.specListContext(w,
 			&layout.Pane{MinW: 58, Render: func(pw, ph int) string { return m.relationalListBody(pw, ph) }},
 			&layout.Pane{MinW: 54, Render: func(pw, ph int) string { return m.relationalDetailBody(pw) }},
 			0.46, "consent facet -> posture")
@@ -866,7 +866,7 @@ var dispatchRoutableSet = []string{
 // specCoordinator is the flagship STANDING-EMERGENT split: LENS │ (COORDINATOR │ CHAT). The lens is
 // the single driving locus; coordinator+chat are transcluded from its selection. The root connector
 // relation is EMERGENT (relate.Derive); the inner one is ambient (no authored join → no header).
-func (m Model) specCoordinator() *layout.Spec {
+func (m Model) specCoordinator(w int) *layout.Spec {
 	div := grammar.C("border", "│")
 	lens := &layout.Pane{MinW: 28, Render: func(pw, ph int) string { return m.coordinatorLensPane(pw, ph) }}
 	coord := &layout.Pane{MinW: 22, Render: func(pw, ph int) string { return m.coordinatorContextPane(pw, ph) }}
@@ -877,11 +877,11 @@ func (m Model) specCoordinator() *layout.Spec {
 	// RESPONSIVE collapse — the operator's cramping was here: three panes packed into ~50-col thirds on a
 	// handheld. Now the pane count fits the device (min of the class cap and the width budget).
 	pc := m.paneCap()
-	if pc >= 3 && m.Width >= lens.MinW+coord.MinW+chat.MinW+2 {
+	if pc >= 3 && w >= lens.MinW+coord.MinW+chat.MinW+2 {
 		inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
 		return layout.Split(layout.Leaf(lens), inner, 0.4, m.verdictConnector(m.coordinatorEmergentRelation()))
 	}
-	if pc >= 2 && m.Width >= lens.MinW+chat.MinW+1 {
+	if pc >= 2 && w >= lens.MinW+chat.MinW+1 {
 		// handheld: LENS (nav) | CHAT (the operator's primary steer surface — voice→chat lands here). The
 		// middle coord-context drops on the small screen (reachable via the lens zones).
 		return layout.Split(layout.Leaf(lens), layout.Leaf(chat), 0.42, m.verdictConnector(m.coordinatorEmergentRelation()))
@@ -999,12 +999,12 @@ func sessionEntity(s grammar.Session, airOn bool) relate.Entity {
 // specListContext is the shared STANDING-ELUCIDATE shape: a list primary │ the focused row's context
 // secondary, joined by the EMERGENT connector relation. Every self-anchored cohort page composes
 // through this — the generalization of specCoordinator's split.
-func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, relation string) *layout.Spec {
-	// RESPONSIVE: keep the 2-pane list|context only if the device allows >=2 panes AND the width can give
-	// both their MinW; otherwise collapse to the single list column (context reachable via the page's own
-	// affordances / a drill-in). Compact/mobile always single-columns. Fixes the handheld cramping where
-	// panes used to shrink below legibility instead of dropping.
-	if m.paneCap() >= 2 && m.Width >= primary.MinW+secondary.MinW+1 {
+func (m Model) specListContext(w int, primary, secondary *layout.Pane, ratio float64, relation string) *layout.Spec {
+	// RESPONSIVE: keep the 2-pane list|context only if the device allows >=2 panes AND the RENDER width w
+	// (the body budget the spec renders at, not the full terminal) can give both their MinW; otherwise
+	// collapse to the single list column (context reachable via the page's own affordances / a drill-in).
+	// Compact/mobile always single-columns. paneCap() is the device class; w is the fit check.
+	if m.paneCap() >= 2 && w >= primary.MinW+secondary.MinW+1 {
 		return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio, m.verdictConnector(relation))
 	}
 	return layout.Leaf(primary)
