@@ -1325,10 +1325,32 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	if m.Mode == ModeCoordChat {
 		prompt += m.CoordChatInput + "▌"
 	} else {
-		prompt += grammar.C("mut", "[c] steer: prioritize · hold · clarify scope · accept/reject (send gated)")
+		prompt += grammar.C("mut", "[c] steer: prioritize · hold · scope · accept/reject · /verb dispatches (send gated)")
 	}
 	b.WriteString(clipRunes(grammar.C("pri", prompt), maxVisible(8, w)) + "\n")
+	// dispatch discoverability: composing a "/"-directive → show the verbs the chat can dispatch NOW through
+	// the witnessed apply seam (honest: only the WIRED verbs apply; others render the never-mint preview).
+	if m.Mode == ModeCoordChat && strings.HasPrefix(strings.TrimSpace(m.CoordChatInput), "/") {
+		b.WriteString(clipRunes(grammar.C("mut", " "+m.dispatchHint()), maxVisible(8, w)) + "\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// dispatchHint lists the verbs the Yard Crow chat can DISPATCH through the apply seam right now — the WIRED
+// ones, in a stable order (honest: only what /read/meta reports wired actually applies; an unwired verb
+// renders the never-mint preview, never a fabricated apply). Readout — the operator dispatches via "/verb".
+func (m Model) dispatchHint() string {
+	order := []string{"focus", "resume", "stage", "close", "arm", "rework", "refute"}
+	var wired []string
+	for _, v := range order {
+		if m.WiredVerbs[v] {
+			wired = append(wired, "/"+v)
+		}
+	}
+	if len(wired) == 0 {
+		return "dispatch: no verbs wired yet — /verb previews (never-mint) until the seam arms"
+	}
+	return "dispatch: " + strings.Join(wired, " · ") + " wired · others /verb → preview"
 }
 
 // coordinatorChatTurns seeds the chat from the lens selection (the {{sel}} transclusion) + the

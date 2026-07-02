@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,5 +63,24 @@ func TestCrowChatSlashNavigationSwitchesPage(t *testing.T) {
 	}
 	if out.PendingCommand != nil {
 		t.Fatal("a navigation verb must not stage a command POST")
+	}
+}
+
+// The dispatch hint honestly lists only the WIRED verbs (discoverability for the Crow chat "/" surface).
+func TestDispatchHintListsWiredOnly(t *testing.T) {
+	m := New("REINS")
+	m.WiredVerbs = map[string]bool{"focus": true, "resume": true} // stage/close not wired
+	h := m.dispatchHint()
+	if !strings.Contains(h, "/focus") || !strings.Contains(h, "/resume") {
+		t.Fatalf("wired verbs must appear, got %q", h)
+	}
+	if strings.Contains(h, "/close") || strings.Contains(h, "/stage") {
+		t.Fatalf("unwired verbs must NOT be listed as dispatch-ready, got %q", h)
+	}
+}
+
+func TestDispatchHintNothingWired(t *testing.T) {
+	if h := New("REINS").dispatchHint(); !strings.Contains(h, "no verbs wired") {
+		t.Fatalf("empty wired set must say so (honest), got %q", h)
 	}
 }
