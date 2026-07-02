@@ -461,6 +461,25 @@ type routeCandidatesResp struct {
 	Candidates []routeCandidateRow `json:"candidates"`
 }
 
+// reqvecCanonicalDims is the frozen 8-dim requirement_vector keyset (producer contract). A measured
+// dispatch_reqvec must carry ALL eight — a partial object is treated as ABSENT, never zero-filled.
+var reqvecCanonicalDims = []string{
+	"quality_floor", "information_scope", "context_length", "mutation_risk",
+	"verification_demand", "ambiguity_novelty", "composition_coupling", "governance_sensitivity",
+}
+
+func reqvecComplete(m map[string]int) bool {
+	if len(m) != len(reqvecCanonicalDims) {
+		return false
+	}
+	for _, d := range reqvecCanonicalDims {
+		if _, ok := m[d]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // FetchRoute reads the honest ROUTE projection (U4): /route/posture + /route/candidates. Returns
 // (posture, candidates, dark, err). dark=true (unreachable/errored feed) renders the :route page
 // honest-dark. The polymorphic dispatch_reqvec (an 8-dim map OR "absent") is decoded here: a complete
@@ -498,8 +517,11 @@ func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, 
 			RoutingClass: row.RoutingClass, InKeyspace: row.InKeyspace,
 			MeasuredEvents: row.MeasuredEvents,
 		}
+		// measured ONLY when a COMPLETE 8-dim vector decodes — a partial object (or the "absent"
+		// string) stays unmeasured, so the render says ABSENT rather than fabricating q0 for the
+		// missing dims (the zero-vector honesty failure class).
 		var m map[string]int
-		if len(row.DispatchReqvec) > 0 && json.Unmarshal(row.DispatchReqvec, &m) == nil && len(m) > 0 {
+		if len(row.DispatchReqvec) > 0 && json.Unmarshal(row.DispatchReqvec, &m) == nil && reqvecComplete(m) {
 			gc.DispatchReqvec = m
 			gc.ReqvecMeasured = true
 		}

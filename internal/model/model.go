@@ -1970,6 +1970,7 @@ var verbs = []verbDef{
 	{name: "rdlc", aliases: []string{"claims", "labrack"}, kind: commandRead, group: "window", gloss: "E11.4 Research Development Lifecycle (Labrack) — honest-DARK until the RDLC model exists", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "presence", aliases: []string{"concourse"}, kind: commandRead, group: "window", gloss: "E11.8 presence-plane binder — figure/control vs ground/presence (honest-dark, pending design)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "deck", kind: commandRead, group: "window", gloss: "E8.3 the non-evicting operator-readout DECK — no-loss history vs the windowed event STREAM", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "route", aliases: []string{"routing"}, kind: commandRead, group: "window", gloss: "U5 E6.2 ROUTE — capability-routing projection (spine evidence; reins mints no decision)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "commands", aliases: []string{"cmds"}, kind: commandRead, group: "registry", gloss: "open the unified command catalog", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2119,6 +2120,9 @@ func (m Model) Exec(line string) Model {
 	case "deck":
 		m = m.switchPage(PageDeck)
 		m.Status = ":deck"
+	case "route", "routing":
+		m = m.switchPage(PageRoute)
+		m.Status = ":route"
 	case "air":
 		switch arg0(args) {
 		case "on":

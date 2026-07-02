@@ -109,16 +109,19 @@ func (m Model) renderRoute(w int) string {
 	if strings.TrimSpace(decision) == "" {
 		decision = "NO SPINE DECISION ON FILE"
 	}
-	b.WriteString(" " + grammar.C("2nd", "decision  ") + grammar.C("brt", decision) + "\n")
+	// every posture line is clipped by its exact visible prefix width (10-char label + 1 lead = 11),
+	// so the row is width-deterministic even on adversarial wire strings — never overflows w.
+	b.WriteString(" " + grammar.C("2nd", "decision  ") + grammar.C("brt", clipRunes(decision, maxVisible(8, w-11))) + "\n")
 	if p.Keyspace.PinnedCount > 0 {
 		cov := fmt.Sprintf("%d/%d observed", p.Keyspace.ObservedCount, p.Keyspace.PinnedCount)
-		b.WriteString(" " + grammar.C("2nd", "keyspace  ") + grammar.C("mut", cov+" of the frozen-11 routing classes") + "\n")
+		b.WriteString(" " + grammar.C("2nd", "keyspace  ") + grammar.C("mut", clipRunes(cov+" of the frozen-11 routing classes", maxVisible(8, w-11))) + "\n")
 		if len(p.Keyspace.UnknownObserved) > 0 { // drift — surfaced, never absorbed
-			b.WriteString(" " + grammar.C("yel", "drift     ") + grammar.C("yel", "observed outside the pinned-11: "+clipRunes(strings.Join(p.Keyspace.UnknownObserved, " "), maxVisible(8, w-30))) + "\n")
+			// prefix = 1 lead + "drift     "(10) + "observed outside the pinned-11: "(32) = 43 visible.
+			b.WriteString(" " + grammar.C("yel", "drift     ") + grammar.C("yel", "observed outside the pinned-11: "+clipRunes(strings.Join(p.Keyspace.UnknownObserved, " "), maxVisible(8, w-43))) + "\n")
 		}
 	}
 	if len(p.Reqvec.Dims) > 0 {
-		b.WriteString(" " + grammar.C("2nd", "reqvec    ") + grammar.C("mut", fmt.Sprintf("%d dims · ints %d..%d (%s)", len(p.Reqvec.Dims), p.Reqvec.Min, p.Reqvec.Max, p.Reqvec.RangeSource)) + "\n")
+		b.WriteString(" " + grammar.C("2nd", "reqvec    ") + grammar.C("mut", clipRunes(fmt.Sprintf("%d dims · ints %d..%d (%s)", len(p.Reqvec.Dims), p.Reqvec.Min, p.Reqvec.Max, p.Reqvec.RangeSource), maxVisible(8, w-11))) + "\n")
 	}
 	if len(p.Sources) > 0 {
 		parts := make([]string, 0, len(p.Sources))

@@ -51,6 +51,42 @@ func TestRenderRouteHonest(t *testing.T) {
 	}
 }
 
+// The operator-facing surface must actually OPEN: `:route` (and its alias) through the interactive
+// command path must switch to PageRoute — the U5 deliverable is an interactive pane, not a --probe page.
+func TestRouteReachableInteractively(t *testing.T) {
+	for _, cmd := range []string{"route", "routing"} {
+		m := New("REINS").Exec(cmd)
+		if m.Page != PageRoute {
+			t.Fatalf(":%s did not switch to PageRoute (got page %d) — the pane is unreachable", cmd, m.Page)
+		}
+	}
+	// and the verb is registered (so command completion + the catalog list it).
+	if _, ok := lookupVerb("route"); !ok {
+		t.Fatal("route verb not registered in the verbs table")
+	}
+}
+
+// Width-determinism on the DRIFT posture line (the earlier miss: the fixture had no UnknownObserved,
+// so the overflow was never exercised). Populate it with long class names at 80 and 120.
+func TestRenderRouteDriftWidthDeterministic(t *testing.T) {
+	p := sampleRoutePosture()
+	p.Keyspace.UnknownObserved = []string{
+		"a-very-long-unexpected-routing-class-name", "another-out-of-keyspace-drift-class-name", "third",
+	}
+	m := Model{Width: 120}.FoldRoute(p, nil, false)
+	for _, w := range []int{80, 120} {
+		for _, ln := range strings.Split(m.renderRoute(w), "\n") {
+			if vw := ansi.StringWidth(ln); vw > w {
+				t.Fatalf("drift line exceeds width %d (got %d): %q", w, vw, ansi.Strip(ln))
+			}
+		}
+	}
+	// the drift is still surfaced (not clipped away entirely) at 120.
+	if !strings.Contains(ansi.Strip(m.renderRoute(120)), "observed outside the pinned-11") {
+		t.Fatal("drift line must remain surfaced")
+	}
+}
+
 func TestRenderRouteHonestDark(t *testing.T) {
 	dark := Model{Width: 120}.FoldRoute(grammar.RoutePosture{Dark: true, Error: "feed unreachable"}, nil, true)
 	out := ansi.Strip(dark.renderRoute(120))

@@ -46,6 +46,45 @@ func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
 	}
 }
 
+func TestFetchRouteDecodesMeasuredVsAbsent(t *testing.T) {
+	// A candidate's dispatch_reqvec is measured ONLY when a COMPLETE 8-dim object decodes; a partial
+	// object, the "absent" string, or a missing key must yield ReqvecMeasured=false (render says ABSENT,
+	// never fabricated zeros). This pins the decode-side ABSENT honesty the U5 review flagged.
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/route/posture":
+			_, _ = w.Write([]byte(`{"dark":false,"decision":"NO SPINE DECISION ON FILE"}`))
+		case "/route/candidates":
+			_, _ = w.Write([]byte(`{"dark":false,"decision":"NO SPINE DECISION ON FILE","task_reqvec":"absent","candidates":[
+				{"routing_class":"complete","in_keyspace":true,"measured_events":2,"dispatch_reqvec":{"quality_floor":5,"information_scope":1,"context_length":1,"mutation_risk":3,"verification_demand":3,"ambiguity_novelty":3,"composition_coupling":4,"governance_sensitivity":1}},
+				{"routing_class":"partial","in_keyspace":true,"measured_events":1,"dispatch_reqvec":{"quality_floor":5}},
+				{"routing_class":"absent_str","in_keyspace":true,"measured_events":1,"dispatch_reqvec":"absent"}
+			]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	})
+
+	_, cands, dark, err := FetchRoute(apiURL)
+	if err != nil || dark {
+		t.Fatalf("FetchRoute unexpected err=%v dark=%v", err, dark)
+	}
+	by := map[string]bool{}
+	for _, c := range cands {
+		by[c.RoutingClass] = c.ReqvecMeasured
+	}
+	if !by["complete"] {
+		t.Fatal("a complete 8-dim vector must decode as measured")
+	}
+	if by["partial"] {
+		t.Fatal("a partial vector must NOT be measured (would fabricate zeros) — must render ABSENT")
+	}
+	if by["absent_str"] {
+		t.Fatal("the \"absent\" string must NOT be measured")
+	}
+}
+
 func TestFetchDomainsReadsSourceBackedSummary(t *testing.T) {
 	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/domains" {
