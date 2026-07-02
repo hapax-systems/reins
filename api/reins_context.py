@@ -93,10 +93,23 @@ def affordance_explanation(sealed_fact: dict, audience: str) -> dict:
     conf = sealed_fact.get("confidence_word", "absent")
     inputs = sealed_fact.get("affordance_inputs") or {}
     redacted = sealed_fact.get("_air_redacted", False)
-    why = {"fact_id": sealed_fact.get("fact_id"), "freshness": fresh, "confidence": conf}
+    state = sealed_fact.get("state") or {}
+    value_state = state.get("value_state", "lit")
+    why = {"fact_id": sealed_fact.get("fact_id"), "freshness": fresh, "confidence": conf,
+           "value_state": value_state, "reason_codes": state.get("reason_codes", [])}
 
-    def entry(kind: str, state: str) -> dict:
-        return {"subject_ref": subject, "affordance_kind": kind, "state": state, "why": why}
+    def entry(kind: str, st: str) -> dict:
+        return {"subject_ref": subject, "affordance_kind": kind, "state": st, "why": why}
+
+    # value_state GATES the affordance set (producer contract §Missing-State). A HOLD/refused fact must NOT
+    # project as a live row with full affordances — that is the "stale rows look live" failure §7 forbids.
+    if value_state == "hold":
+        # evidence exists but a gate (AIR/authority/confidence/consent/review) blocks use — a hold marker
+        # carrying the blocked reason + a refocus skeleton, nothing live.
+        return {"subject_ref": subject, "affordances": [entry("hold", "hold"), entry("refocus", "present")]}
+    if value_state == "refused":
+        # the producer/governance spine refuses projection — refusal skeleton (inspect/refocus only).
+        return {"subject_ref": subject, "affordances": [entry("inspect", "refused"), entry("refocus", "present")]}
 
     out: list[dict] = []
     # explain_why: present if the classification survived AIR (structure remains) and freshness isn't dark.
@@ -109,11 +122,13 @@ def affordance_explanation(sealed_fact: dict, audience: str) -> dict:
     else:
         out.append(entry("explain_why", "absent"))
 
-    # refocus: present even for a redacted row if the structural skeleton survived (it did — we're here).
+    # refocus: present even for a redacted/stale row if the structural skeleton survived (it did — we're here).
     out.append(entry("refocus", "present"))
 
-    # yank_operator_private: ONLY in the operator audience, only when the body is un-redacted + allowed.
-    if audience == "operator_private" and inputs.get("can_yank_operator_private") and not redacted:
+    # yank_operator_private: ONLY in the operator audience, un-redacted body, AND fresh — a STALE fact must
+    # not offer a live yank (the contract §7 stale-not-live rule; stale evidence is inspect-only).
+    if (audience == "operator_private" and inputs.get("can_yank_operator_private")
+            and not redacted and fresh not in ("stale", "dark", "absent")):
         out.append(entry("yank_operator_private", "present"))
 
     # stage_injection_preview: HOLD when the content is provider-prompt-eligible but egress/consent is absent

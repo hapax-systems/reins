@@ -76,3 +76,31 @@ def test_readout_only_never_injector():
     # the module exposes NO egress/inject path — action routes through the governed apply seam elsewhere.
     for banned in ("send", "dispatch", "inject", "publish", "spawn", "spend", "provider_call"):
         assert not hasattr(rc, banned), f"reins_context must expose no {banned} path (never-injector)"
+
+
+def test_value_state_hold_suppresses_live_affordances():
+    # a HOLD fact must NOT project explain_why/yank — only a hold marker + refocus skeleton (contract §7).
+    fact = {"fact_id": "h1", "subject_ref": "chunk:held", "freshness_state": "fresh",
+            "text_domain": ["design"], "affordance_inputs": {"can_explain": True, "can_yank_operator_private": True},
+            "state": {"value_state": "hold", "reason_codes": ["provider_send_not_authorized"]}}
+    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
+    assert a.get("hold") == "hold"
+    assert "explain_why" not in a and "yank_operator_private" not in a
+    assert a.get("refocus") == "present"
+
+
+def test_value_state_refused_is_skeleton():
+    fact = {"fact_id": "r1", "subject_ref": "chunk:refused", "freshness_state": "fresh",
+            "state": {"value_state": "refused"}}
+    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
+    assert a.get("inspect") == "refused" and a.get("refocus") == "present"
+    assert "explain_why" not in a
+
+
+def test_stale_fact_offers_no_live_yank():
+    # a STALE fact is inspect-only — a live yank on stale evidence is the "stale rows look live" failure.
+    fact = {"fact_id": "s1", "subject_ref": "chunk:stale", "freshness_state": "stale",
+            "affordance_inputs": {"can_yank_operator_private": True}, "state": {"value_state": "lit"}}
+    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
+    assert "yank_operator_private" not in a
+    assert a.get("explain_why") == "stale"
