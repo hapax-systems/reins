@@ -3634,8 +3634,49 @@ func (m Model) updateMouse(v tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.Update(tea.KeyMsg{Type: tea.KeyUp}) // focus prev (identical to 'k')
 	case tea.MouseButtonWheelDown:
 		return m.Update(tea.KeyMsg{Type: tea.KeyDown}) // focus next (identical to 'j')
+	case tea.MouseButtonLeft:
+		// tap-to-focus: a press on a task row focuses it — NAVIGATION only (never activates/applies; a
+		// tap cannot confirm a mutation, so a stray touch is safe).
+		if v.Action == tea.MouseActionPress {
+			if idx, ok := m.taskRowAtY(v.X, v.Y); ok {
+				return m.focusTo(idx), nil
+			}
+		}
 	}
-	return m, nil // clicks/motion: inert for now (tap-to-focus row mapping is a follow-on)
+	return m, nil // other buttons/motion: inert
+}
+
+// tasksRowTopY is the screen row of the FIRST task row on PageTasks: the title chrome (title 1 + vital 2 +
+// rule 1 = body starts at row 4) plus the tasks pane's own preamble (context line 1 + header 1). VIEW-
+// COUPLED by necessity (no layout-engine hit-testing yet); mouse_input_test parses View() so a layout
+// change breaks the test rather than silently mis-mapping taps.
+const tasksRowTopY = 6
+
+// taskRowAtY maps a click at (x,y) to a visible-task index on PageTasks, or (0,false) if the click isn't
+// on a task row (wrong page, above the list, past the last row, or over the right-hand rail).
+func (m Model) taskRowAtY(x, y int) (int, bool) {
+	if m.Page != PageTasks {
+		return 0, false
+	}
+	// main-area width (mirrors View's rail rule for the row pages): the rail is hidden only when narrow
+	// (<100) or wide enough to self-context (>=160); otherwise it takes railWidth+1 on the right.
+	mainW := m.Width
+	if m.Width >= 100 && m.Width < 160 {
+		mainW = m.Width - railWidth - 1
+	}
+	if x < 0 || x >= mainW {
+		return 0, false // over the rail / divider, not the task list
+	}
+	visible := taskRowsVisible(frameMidH(m.Height))
+	row := y - tasksRowTopY
+	if row < 0 || row >= visible {
+		return 0, false
+	}
+	idx := m.scrollOffset(visible) + row
+	if idx < 0 || idx >= len(m.visibleTasks()) {
+		return 0, false
+	}
+	return idx, true
 }
 
 func (m Model) updateVerbMenu(v tea.KeyMsg) (tea.Model, tea.Cmd) {

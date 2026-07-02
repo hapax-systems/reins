@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,14 +43,47 @@ func TestMouseWheelMatchesKeyNav(t *testing.T) {
 	}
 }
 
-// A non-wheel mouse event (click/motion) is inert — no command staged, no panic.
-func TestMouseClickIsInert(t *testing.T) {
-	base := mouseTestModel()
-	nm, _ := base.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 5, Y: 5})
-	if nm.(Model).PendingCommand != nil {
-		t.Fatal("a click must not invoke a governed command")
+// A LEFT tap on a task row focuses that task — verified against the ACTUAL View() geometry (parse to find
+// the row's Y, tap there, assert focus). This View-parsing guard fails if the layout chrome shifts, rather
+// than silently mis-mapping taps. A tap never invokes a command.
+func TestMouseTapFocusesTaskRow(t *testing.T) {
+	m := mouseTestModel() // 120x40, PageTasks, tasks t1/t2/t3, initial focus t1
+	lines := strings.Split(m.View(), "\n")
+	targetY := -1
+	for y, ln := range lines {
+		if strings.Contains(ln, "t3") { // t3's task row (initial focus is t1, so the rail can't hold t3)
+			targetY = y
+			break
+		}
 	}
-	if nm.(Model).View() != base.View() {
-		t.Fatal("an inert click should not change the view")
+	if targetY < 0 {
+		t.Fatal("t3's row not found in View() — cannot verify tap geometry")
+	}
+	nm, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 3, Y: targetY})
+	ft, ok := nm.(Model).FocusedTask()
+	if !ok || ft.TaskID != "t3" {
+		t.Fatalf("tap at t3's row (Y=%d) must focus t3, got %q", targetY, ft.TaskID)
+	}
+	if nm.(Model).PendingCommand != nil {
+		t.Fatal("a tap must NOT invoke a governed command")
+	}
+}
+
+// Taps off the task list (above the rows, or over the right-hand rail) are inert — no focus jump, no command.
+func TestMouseTapOffListInert(t *testing.T) {
+	m := mouseTestModel()
+	start, _ := m.FocusedTask()
+	// over the rail (x past the main area at 120 cols: mainW = 120-36-1 = 83)
+	nm, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 110, Y: 7})
+	if ft, _ := nm.(Model).FocusedTask(); ft.TaskID != start.TaskID {
+		t.Fatalf("a tap over the rail must not move focus (%s -> %s)", start.TaskID, ft.TaskID)
+	}
+	// above the first row (in the title chrome)
+	nm2, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 3, Y: 1})
+	if ft, _ := nm2.(Model).FocusedTask(); ft.TaskID != start.TaskID {
+		t.Fatalf("a tap in the title chrome must not move focus")
+	}
+	if nm.(Model).PendingCommand != nil || nm2.(Model).PendingCommand != nil {
+		t.Fatal("off-list taps must not invoke a command")
 	}
 }
