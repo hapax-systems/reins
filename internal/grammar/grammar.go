@@ -1502,7 +1502,7 @@ func RenderHelp() string {
 		"      “…let reason hold the reins.”      — Benjamin Franklin",
 		"",
 		"PAGES",
-		"  [Z] :coordinator     the Yard Coordinator — selection lens + steer-chat + cockpit (the landing page)",
+		"  [Z] :crow           The Yard Crow — selection lens + steer-chat + cockpit (the landing page)",
 		"  [1] :events          live coord event stream; [j/k] select, [y] yank event fields",
 		"  [2] :tasks           task registry; [/] filter, [f] hint/select, [V] class-select",
 		"  [3] :sessions        live lane roster; [j/k] select, [Enter] detail, [r] resume stub",

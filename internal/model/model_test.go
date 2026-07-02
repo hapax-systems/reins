@@ -706,7 +706,7 @@ func TestCoordinatorLensDrivesContext(t *testing.T) {
 	}, false)
 	m.Width, m.Height, m.Page = 200, 30, PageCoordinator
 	v := ansi.Strip(m.View())
-	for _, want := range []string{"LENS", "COORDINATOR", "selection lattice", "alpha-task"} {
+	for _, want := range []string{"LENS", "CROW", "selection lattice", "alpha-task"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("coordinator pane missing %q:\n%s", want, v)
 		}

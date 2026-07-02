@@ -1285,7 +1285,7 @@ func (m Model) coordinatorRelationBanner(w int) string {
 			sel = id
 		}
 	}
-	msg := fmt.Sprintf("▶ COORDINATION   lens selection ⟶ drives ⟶ coordinator + chat   ·   join: {{sel}} lattice-descent   ·   sel=%s", sel)
+	msg := fmt.Sprintf("▶ THE YARD CROW   lens selection ⟶ drives ⟶ crow + chat   ·   join: {{sel}} lattice-descent   ·   sel=%s", sel)
 	return " " + grammar.C("2nd", clipRunes(msg, maxVisible(8, w-1)))
 }
 
@@ -1547,7 +1547,7 @@ func (m Model) coordinatorContextPane(w, h int) string {
 		return m.coordinatorFilePreview(w, h)
 	}
 	var b strings.Builder
-	b.WriteString(" " + grammar.C("brt", "COORDINATOR") + grammar.C("mut", " · the lens selection drives this context") + "\n")
+	b.WriteString(" " + grammar.C("brt", "CROW") + grammar.C("mut", " · the lens selection drives this context") + "\n")
 	b.WriteString(m.coordinatorSelectionContext(w))
 	b.WriteString(m.coordinatorThroughputLine(w) + "\n")
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")

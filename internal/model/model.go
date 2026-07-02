@@ -2007,7 +2007,7 @@ var verbs = []verbDef{
 	{name: "traces", aliases: []string{"trace"}, kind: commandRead, group: "window", gloss: "recent LLM-observability traces (model/tokens/cost/latency)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "dispatch", aliases: []string{"disp"}, kind: commandRead, group: "window", gloss: "the capability-dispatch ledger + measurement surface (cost/quality/utilization, honest gaps)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "yard", kind: commandRead, group: "window", gloss: "Trainyard-style SDLC cockpit over live Reins read models", authority: "local_read", receipt: "none", uiDelta: "switch window"},
-	{name: "coordinator", aliases: []string{"coord"}, kind: commandRead, group: "window", gloss: "Yard Coordinator: a Miller-column lens (left) drives the coordinator context (right)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "crow", aliases: []string{"coordinator", "coord"}, kind: commandRead, group: "window", gloss: "The Yard Crow: a Miller-column lens (left) drives the crow context (right)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "readiness", aliases: []string{"ready", "gates", "gate"}, kind: commandRead, group: "window", gloss: "gates/readiness projection across read sources, lanes, tasks, and command routes", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "intake", aliases: []string{"observations", "obs", "inbox"}, kind: commandRead, group: "window", gloss: "source-backed intake observations/demand projection", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "capabilities", aliases: []string{"caps", "cap"}, kind: commandRead, group: "window", gloss: "capability routing fit/admission projection", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2139,9 +2139,9 @@ func (m Model) Exec(line string) Model {
 	case "yard":
 		m = m.switchPage(PageYard)
 		m.Status = ":yard"
-	case "coordinator":
+	case "crow":
 		m = m.switchPage(PageCoordinator)
-		m.Status = ":coordinator"
+		m.Status = ":crow · The Yard Crow"
 	case "readiness":
 		m = m.switchPage(PageReadiness)
 		m.Status = ":readiness"

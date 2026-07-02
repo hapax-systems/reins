@@ -49,21 +49,21 @@ func TestResponsiveCoordinatorCollapse(t *testing.T) {
 		m.Page, m.Width, m.Height, m.DeviceOverride = PageCoordinator, w, 44, dev
 		return m.View()
 	}
-	// MONITOR @220 -> full 3-pane (the middle COORDINATOR context pane is present)
-	if mon := view(DeviceMonitor, 220); !strings.Contains(mon, "COORDINATOR") {
-		t.Fatal("monitor must keep the 3-pane coordinator (COORDINATOR context pane)")
+	// MONITOR @220 -> full 3-pane (the middle CROW context pane is present)
+	if mon := view(DeviceMonitor, 220); !strings.Contains(mon, "CROW") {
+		t.Fatal("monitor must keep the 3-pane coordinator (CROW context pane)")
 	}
-	// HANDHELD @164 -> 2-pane LENS|CHAT; the middle COORDINATOR pane DROPS (was the cramp), chat survives
+	// HANDHELD @164 -> 2-pane LENS|CHAT; the middle CROW pane DROPS (was the cramp), chat survives
 	hh := view(DeviceHandheld, 164)
 	if !strings.Contains(hh, "LENS") || !strings.Contains(hh, "CHAT") {
 		t.Fatalf("handheld coordinator must keep LENS + CHAT")
 	}
-	if strings.Contains(hh, "COORDINATOR") {
+	if strings.Contains(hh, "CROW") {
 		t.Fatal("handheld must COLLAPSE the 3rd coordinator pane (the cramping) — got the middle pane")
 	}
-	// COMPACT @80 -> single column (chat only): no LENS/COORDINATOR pane headers, chat content present
+	// COMPACT @80 -> single column (chat only): no LENS/CROW pane headers, chat content present
 	c := view(DeviceCompact, 80)
-	if strings.Contains(c, "COORDINATOR") || strings.Contains(c, "LENS ·") {
+	if strings.Contains(c, "CROW") || strings.Contains(c, "LENS ·") {
 		t.Fatal("compact must be a single column (no lens/coordinator pane headers)")
 	}
 	if !strings.Contains(c, "steer") && !strings.Contains(c, "hapax") {

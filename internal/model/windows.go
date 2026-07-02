@@ -176,7 +176,7 @@ var windowRegistry = []WindowDef{
 	{Key: "2", ID: "tasks", Name: "tasks", Short: "tasks", Page: PageTasks, Scope: "instance", Lifecycle: "sdlc", Kind: "registry"},
 	{Key: "3", ID: "sessions", Name: "sessions", Short: "sess", Page: PageSessions, Scope: "instance", Lifecycle: "sdlc", Kind: "fleet"},
 	{Key: "Y", ID: "yard", Name: "yard", Short: "yard", Page: PageYard, Scope: "instance", Lifecycle: "sdlc", Kind: "cockpit"},
-	{Key: "Z", ID: "coordinator", Name: "yard coordinator", Short: "coord", Page: PageCoordinator, Scope: "instance", Lifecycle: "sdlc", Kind: "cockpit"},
+	{Key: "Z", ID: "coordinator", Name: "the yard crow", Short: "crow", Page: PageCoordinator, Scope: "instance", Lifecycle: "sdlc", Kind: "cockpit"},
 	{Key: "R", ID: "readiness", Name: "readiness", Short: "ready", Page: PageReadiness, Scope: "instance", Lifecycle: "sdlc", Kind: "gate"},
 	{Key: "I", ID: "intake", Name: "intake observations", Short: "obs", Page: PageIntake, Scope: "instance", Lifecycle: "intake", Kind: "triage"},
 	{Key: "C", ID: "capabilities", Name: "capabilities", Short: "caps", Page: PageCaps, Scope: "instance", Lifecycle: "routing", Kind: "matrix"},
