@@ -205,7 +205,13 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
             "route_id": refs.get("route_id", ""),
             "command_id": refs.get("command_id", ""),
         }
-        commands.append({**fields, "air": classify_air(fields, allow)})
+        air = classify_air(fields, allow)
+        # design pack §9: a command TARGET is path-class (it can name a repo/worktree/path) —
+        # force-deny it on air regardless of the allowlist, mirroring to_turn's summary deny. The
+        # generic facet allowlist happens to classify `target` (an EDGES facet) as ok, which would
+        # leak a path on the derived channel; command targets are SENSITIVE. (never leak on air)
+        air["target"] = "deny"
+        commands.append({**fields, "air": air})
 
     return {
         "dark": False,

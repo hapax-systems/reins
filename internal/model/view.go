@@ -5060,8 +5060,10 @@ func (m Model) renderCommandCatalog(w int) string {
 		b.WriteString(" " + grammar.C("mut", "· no commands witnessed yet (demand+verdict rows appear here as they occur)") + "\n")
 	default:
 		shown := m.Commands
-		if len(shown) > 8 { // the recent tail — the catalog below is the reference
+		if len(shown) > 8 { // recent tail — disclose the drop honestly (never silently hide rows)
+			hidden := len(shown) - 8
 			shown = shown[len(shown)-8:]
+			b.WriteString(" " + grammar.C("mut", fmt.Sprintf("↑%d earlier witnessed — showing the recent 8", hidden)) + "\n")
 		}
 		for _, c := range shown {
 			b.WriteString(" " + clipRunes(grammar.RenderCommandRow(c, m.AIR), maxVisible(8, w-1)) + "\n")

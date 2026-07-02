@@ -42,6 +42,24 @@ func TestCommandsLensHonestDarkAndEmpty(t *testing.T) {
 	}
 }
 
+// On-air, an AIR-denied target must NOT appear in the rendered row (path-class §9 — the derived
+// channel must never leak a command target). Pins the Go redaction path with on=true (H1/M1).
+func TestCommandRowRedactsTargetOnAir(t *testing.T) {
+	c := grammar.Command{
+		Verb: "claim", Target: "/home/x/projects/secret-worktree", Status: "ok", Witness: "pending",
+		AIR: map[string]string{"target": "deny", "task_id": "deny", "session_role": "deny"},
+	}
+	on := ansi.Strip(grammar.RenderCommandRow(c, true))
+	if strings.Contains(on, "secret-worktree") {
+		t.Fatalf("on-air command row leaks the denied target (path-class): %q", on)
+	}
+	// off air, the target is visible (redaction only bites on air).
+	off := ansi.Strip(grammar.RenderCommandRow(c, false))
+	if !strings.Contains(off, "secret-worktree") {
+		t.Fatalf("off-air row should show the target: %q", off)
+	}
+}
+
 // no-display-scalar: the command lens must not render a fabricated numeric ranking/score for a command.
 func TestCommandsLensNoScalar(t *testing.T) {
 	m := Model{Width: 120}.FoldCommands([]grammar.Command{

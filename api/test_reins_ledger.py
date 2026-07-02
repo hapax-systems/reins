@@ -91,3 +91,20 @@ def test_missing_ledger_is_empty_not_dark(tmp_path):
     proj = read_commands(str(tmp_path / "nope.jsonl"))
     assert proj["dark"] is False and proj["commands"] == [] and proj["enforcement"] == "absent"
     assert not os.path.exists(str(tmp_path / "nope.jsonl"))
+
+
+def test_command_target_denied_on_air_under_production_allowlist(tmp_path):
+    # H1 regression: a command target is path-class (design pack §9) and MUST deny on air even under
+    # the PRODUCTION allowlist — the generic facet allowlist classifies `target` (EDGES) as ok, which
+    # would leak a path on the derived channel. The earlier toy-allowlist test masked this.
+    import facet_registry
+
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t")
+    d = led.record_demand("claim", "/home/x/projects/secret-worktree", "idem-air",
+                          CommandRefs(task_id="cc-task-x", route_id="r1"))
+    led.record_verdict(d["event_id"], "ok", 200)
+
+    proj = read_commands(p, allowlist=facet_registry.air_allowlist())
+    cmd = proj["commands"][0]
+    assert cmd["air"]["target"] == "deny", "command target must NEVER air (path-class §9)"
