@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import reins_command
+import reins_generation
 import reins_ledger
 import reins_read
 import reins_route
@@ -50,6 +51,10 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     "focus": {"wired": False},
     "breakglass": {"wired": False},
     "resume": {"wired": True, "mode": "preview"},  # read-only preview wedge (no spine write)
+    # governed generation staging (U6b-stage): verifies a target generation against the store's
+    # byte-binding + witnesses the attempt; it does NOT flip the current pointer (staging != swapping —
+    # the swap is U6b-swap). Wired-before-swap is safe: staging is inert until a swap mechanism exists.
+    "stage": {"wired": True, "mode": "governed"},
 }
 
 
@@ -124,6 +129,35 @@ def _resume_preview_closures():
     return verify, preflight, transport
 
 
+def _stage_closures():
+    """The governed `stage` verb (U6b-stage). verify: the authority packet + target sha must be present.
+    preflight: not explicitly blocked. transport: VALIDATE the target generation against the store's
+    byte-binding (reins_generation.verify_generation — the Go Verify contract) and record a stage receipt;
+    a missing/tampered/quarantined generation returns a TYPED stage-rejected (422), never a blind ok.
+    NO pointer flip — verify_generation is read-only; the swap is U6b-swap."""
+
+    def verify(packet: Any, target: str) -> bool:
+        return bool(packet) and bool(target)
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        ok, reason = reins_generation.verify_generation(env.target)
+        if not ok:
+            return reins_command.Response(status="stage-rejected", http=422, reason=reason)
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"stage-{env.target}",
+            event_seq=None,  # no spine write; the swap receipt genus (reins.swap.*) completes at U11
+            fold_delta=f"generation {env.target} staged + verified (ready to swap; no pointer flip)",
+            spooled=False,
+        )
+
+    return verify, preflight, transport
+
+
 def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
     """The verb-table router. Raises on construction failure — the caller degrades
     to read-only and discloses (never a half-mounted write surface).
@@ -134,7 +168,11 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
     durable seen-set — the in-memory map is retired (a replayed key across a restart is a
     duplicate, not a re-invoke). /read/commands projects these rows, so the frontdoor is
     witnessed in the RUNNING server, not just the module."""
-    verify, preflight, transport = _resume_preview_closures()
+    # per-verb transports: a wired verb without a bound transport is an HONEST 501 (never a blind pass).
+    closures_by_verb = {
+        "resume": _resume_preview_closures(),
+        "stage": _stage_closures(),
+    }
 
     @app.post("/command/{verb}")
     def command(verb: str, req: reins_command.CommandRequest) -> JSONResponse:
@@ -170,6 +208,17 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
                  "reason": reason},
                 status_code=501,
             )
+
+        cl = closures_by_verb.get(verb)
+        if cl is None:
+            # wired in the table but no transport bound — disclose, never blind-pass a write surface.
+            reason = f"{verb} is wired but has no bound transport (router misconfig)"
+            ledger.record_verdict(eid, "no-transport", 501, reason)
+            return JSONResponse(
+                {"status": "no-transport", "http": 501, "wired": True, "event_id": eid, "reason": reason},
+                status_code=501,
+            )
+        verify, preflight, transport = cl
 
         envelope = reins_command.Envelope(
             verb=verb,

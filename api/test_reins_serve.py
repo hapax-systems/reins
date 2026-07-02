@@ -48,7 +48,7 @@ def test_read_meta_identity_handshake():
     assert meta["router"] == "mounted"
     assert set(meta["verbs"]) == set(VERB_TABLE)
     wired = [v for v, s in meta["verbs"].items() if s["wired"]]
-    assert wired == ["resume"]  # day-1: ONLY the read-only preview is wired
+    assert wired == ["resume", "stage"]  # resume preview (read-only) + governed generation staging (U6b)
 
 
 def test_unwired_verb_refuses_typed_501():
@@ -110,7 +110,7 @@ def test_import_graph_guard_no_mint_surface():
         "hapax_methodology_dispatch", "escape_grant_mint", "cc_claim",
     )
     api_dir = pathlib.Path(__file__).parent
-    for mod in ("reins_serve.py", "reins_command.py", "reins_ledger.py", "reins_route.py"):
+    for mod in ("reins_serve.py", "reins_command.py", "reins_ledger.py", "reins_route.py", "reins_generation.py"):
         tree = ast.parse((api_dir / mod).read_text())
         imported: list[str] = []
         for node in ast.walk(tree):
@@ -171,6 +171,60 @@ def test_router_durable_idempotency_replay_is_duplicate():
     # exactly ONE command datom despite the replay (durable dedup, not a second demand).
     proj = _endpoint(app, "/read/commands")()
     assert len(proj["commands"]) == 1
+
+
+def test_stage_verified_generation_is_witnessed_ok(tmp_path, monkeypatch):
+    # U6b-stage: POST /command/stage with a VERIFIED target generation -> 200 ok + a stage receipt,
+    # witnessed in the ledger (demand+verdict). NO current pointer is flipped (staging != swapping).
+    import hashlib
+    import json
+
+    import reins_generation
+
+    root = str(tmp_path / "genstore")
+    monkeypatch.setenv("REINS_GENERATION_ROOT", root)
+    sha = "genABC"
+    d = pathlib.Path(root) / "generations" / sha
+    (d / "api").mkdir(parents=True)
+    (d / "reins").write_bytes(b"BIN")
+    api = {"reins_serve.py": b"s", "reins_read.py": b"r"}
+    for n, c in api.items():
+        (d / "api" / n).write_bytes(c)
+    h = hashlib.sha256()
+    for n in sorted(api):
+        reins_generation._framed(h, n.encode())
+        reins_generation._framed(h, api[n])
+    (d / "manifest.json").write_text(json.dumps({
+        "sha": sha, "binary_sha256": hashlib.sha256(b"BIN").hexdigest(),
+        "api_tree_sha256": h.hexdigest(), "created": "t", "prev": "",
+    }))
+
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    resp = cmd("stage", reins_command.CommandRequest(
+        target=sha, authority_packet={"kind": "stage-authority"}, preflight_receipt={}, idempotency_key="s1"))
+    assert resp.status_code == 200
+    body = resp.body.decode()
+    assert "staged + verified" in body and "no pointer flip" in body
+
+    proj = _endpoint(app, "/read/commands")()
+    row = next(c for c in proj["commands"] if c["verb"] == "stage")
+    assert row["status"] == "ok"  # witnessed
+    # no swap happened: the store's current pointer was never written.
+    assert not (pathlib.Path(root) / "current").exists()
+
+
+def test_stage_missing_generation_typed_refusal_witnessed(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_GENERATION_ROOT", str(tmp_path / "empty"))
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    resp = cmd("stage", reins_command.CommandRequest(
+        target="does-not-exist", authority_packet={"kind": "x"}, preflight_receipt={}, idempotency_key="s2"))
+    assert resp.status_code == 422  # typed stage-rejected, not a blind ok, not a generic 502
+    assert "absent" in resp.body.decode()
+    proj = _endpoint(app, "/read/commands")()
+    row = next(c for c in proj["commands"] if c["verb"] == "stage")
+    assert row["status"] == "stage-rejected"  # the refusal is witnessed too
 
 
 def test_resume_preview_is_witnessed_ok():
