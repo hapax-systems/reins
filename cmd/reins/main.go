@@ -129,6 +129,15 @@ func fetchCapabilitiesOnce(url string) tea.Msg {
 	return msg
 }
 
+func fetchContextOnce(url string) tea.Msg {
+	affs, dark, err := api.FetchContext(url)
+	msg := model.ContextMsg{Affordances: affs, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+
 func fetchVaultOnce(url string) tea.Msg {
 	notes, dark, err := api.FetchVault(url)
 	msg := model.VaultMsg{Notes: notes, Dark: dark}
@@ -259,6 +268,9 @@ func intakeTick(url string) tea.Cmd {
 func capabilitiesTick(url string) tea.Cmd {
 	return tea.Tick(12*time.Second, func(time.Time) tea.Msg { return fetchCapabilitiesOnce(url) })
 }
+func contextTick(url string) tea.Cmd { // the tri-audience /read/context substrate -> steady refresh
+	return tea.Tick(12*time.Second, func(time.Time) tea.Msg { return fetchContextOnce(url) })
+}
 func vaultTick(url string) tea.Cmd { // vault metadata is near-static -> a slow refresh
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchVaultOnce(url) })
 }
@@ -307,6 +319,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchSessionsOnce(r.url) },
 		func() tea.Msg { return fetchIntakeOnce(r.url) },
 		func() tea.Msg { return fetchCapabilitiesOnce(r.url) },
+		func() tea.Msg { return fetchContextOnce(r.url) },
 		func() tea.Msg { return fetchGatesOnce(r.url) },
 		func() tea.Msg { return fetchDomainsOnce(r.url) },
 		func() tea.Msg { return fetchTracesOnce(r.url) },
@@ -369,6 +382,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, intakeTick(r.url) // re-arm intake snapshot polling
 	case model.CapabilitiesMsg:
 		return r, capabilitiesTick(r.url) // re-arm capability-routing polling
+	case model.ContextMsg:
+		return r, contextTick(r.url) // re-arm the tri-audience context-substrate polling
 	case model.VaultMsg:
 		return r, vaultTick(r.url) // re-arm vault-metadata polling
 	case model.ObserveMsg:

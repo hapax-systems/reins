@@ -495,6 +495,8 @@ type Model struct {
 	SessionDetail       grammar.SessionDetail
 	Intake              grammar.IntakeSummary
 	Capabilities        grammar.CapabilitySummary
+	ContextAffordances  map[string][]grammar.ContextAffordance // tri-audience /read/context, operator projection
+	ContextDark         bool
 	Gates               grammar.GateSummary
 	Domains             grammar.DomainSummary
 	Dynamics            grammar.Graph
@@ -1904,6 +1906,23 @@ func (m Model) FoldRoute(posture grammar.RoutePosture, candidates []grammar.Rout
 	return m
 }
 
+// FoldContext is the pure projection for the tri-audience /read/context substrate: the operator-cockpit
+// affordances (classification→affordance→WHY), grouped by subject. Honest-dark until the spine producer
+// emits the fact bundle. Readout only — reins mints nothing; action routes through the governed apply seam.
+func (m Model) FoldContext(affs []grammar.ContextAffordance, dark bool) Model {
+	m.ContextDark = dark
+	if len(affs) == 0 {
+		m.ContextAffordances = nil
+		return m
+	}
+	grouped := make(map[string][]grammar.ContextAffordance, len(affs))
+	for _, a := range affs {
+		grouped[a.Subject] = append(grouped[a.Subject], a)
+	}
+	m.ContextAffordances = grouped
+	return m
+}
+
 func (m Model) FoldCapabilities(caps grammar.CapabilitySummary, dark bool) Model {
 	m.Capabilities = caps
 	m.CapabilitiesDark = dark
@@ -2535,6 +2554,12 @@ type CapabilitiesMsg struct {
 	Dark         bool
 	Error        string
 }
+
+type ContextMsg struct {
+	Affordances []grammar.ContextAffordance
+	Dark        bool
+	Error       string
+}
 type VaultMsg struct {
 	Notes []grammar.VaultNote
 	Dark  bool
@@ -2756,6 +2781,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.IntakeError = v.Error
 		m.IntakeSeq++
 		m.LastFold = "intake"
+		return m, nil
+	case ContextMsg:
+		m = m.FoldContext(v.Affordances, v.Dark)
 		return m, nil
 	case CapabilitiesMsg:
 		m = m.FoldCapabilities(v.Capabilities, v.Dark)

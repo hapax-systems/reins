@@ -203,6 +203,15 @@ type TaskVerb struct {
 // TaskVerbs returns the governed verbs for a task with their SDLC-stage-gated legality. A done task
 // offers none; an S7-hold task offers arm/rework. They route through the governed COMMAND surface — the
 // cockpit never mints authority; the [v] menu only pre-seeds the preview.
+// ContextAffordance is one classification→affordance→WHY entry from the tri-audience /read/context
+// operator-cockpit projection: an affordance reins OFFERS on a subject and its honest state. Readout only
+// (the never-injector doctrine) — the cockpit SHOWS it; action routes through the governed apply seam.
+type ContextAffordance struct {
+	Subject string `json:"subject_ref"`
+	Kind    string `json:"affordance_kind"`
+	State   string `json:"state"`
+}
+
 func TaskVerbs(t Task) []TaskVerb {
 	pred := strings.ToLower(strings.TrimSpace(t.PredictedStage))
 	stage := whoisStageIndex(t.Stage)

@@ -468,6 +468,50 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 	return r.Capabilities, r.Dark, nil
 }
 
+type ctxProjection struct {
+	Affordances []struct {
+		Subject     string                     `json:"subject_ref"`
+		Affordances []grammar.ContextAffordance `json:"affordances"`
+	} `json:"affordances"`
+	FactCount int `json:"fact_count"`
+}
+
+type contextResp struct {
+	Dark        bool                     `json:"dark"`
+	Reason      string                   `json:"reason"`
+	Projections map[string]ctxProjection `json:"projections"`
+}
+
+// FetchContext reads the tri-audience /read/context substrate and returns the OPERATOR-COCKPIT projection's
+// affordances (subject → offered affordance + state), flattened. Honest-dark until the spine producer emits
+// the fact bundle (then it lights up with no code change). Readout only — never an injector.
+func FetchContext(apiURL string) ([]grammar.ContextAffordance, bool, error) {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/context")
+	if err != nil {
+		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/context"); err != nil {
+		return nil, true, err
+	}
+	var r contextResp
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, true, err
+	}
+	if r.Dark {
+		return nil, true, nil // producer not emitting — honest-dark, not an error
+	}
+	var out []grammar.ContextAffordance
+	for _, subj := range r.Projections["operator_private"].Affordances {
+		for _, a := range subj.Affordances {
+			a.Subject = subj.Subject
+			out = append(out, a)
+		}
+	}
+	return out, false, nil
+}
+
 type vaultResp struct {
 	VaultRoot string              `json:"vault_root"`
 	Dark      bool                `json:"dark"`

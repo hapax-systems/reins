@@ -1693,6 +1693,7 @@ func (m Model) coordinatorSelectionContext(w int) string {
 // each eval token redacts per-field via the proven sessionFieldValueForAir+airHue pattern; honest-dark
 // when no lane is bound (or the binding is withheld on air).
 func (m Model) coordContextReadout(t grammar.Task, w int) string {
+	ctxSuffix := m.contextSuffix(t.TaskID)
 	var sess grammar.Session
 	found := false
 	for _, s := range m.Sessions {
@@ -1706,7 +1707,7 @@ func (m Model) coordContextReadout(t grammar.Task, w int) string {
 		break
 	}
 	if !found {
-		return " " + grammar.C("mut", "   coord ctx  no lane bound (or binding withheld on air)") + "\n"
+		return " " + grammar.C("mut", "   coord ctx  no lane bound (or binding withheld on air)") + ctxSuffix + "\n"
 	}
 	role := sessionFieldValueForAir(sess, "role", m.AIR)
 	seg := grammar.C("2nd", "   coord ctx  ") +
@@ -1719,7 +1720,37 @@ func (m Model) coordContextReadout(t grammar.Task, w int) string {
 		seg += grammar.C(airHue(blockerToken(sess.Blocker), sess.AIR, "blocker", m.AIR), " · blocker "+blk)
 	}
 	seg += grammar.C(airHue(attentionToken(sess.Attention), sess.AIR, "attention", m.AIR), " · attn "+sessionFieldValueForAir(sess, "attention", m.AIR))
-	return " " + seg + "\n"
+	return " " + seg + ctxSuffix + "\n"
+}
+
+// contextSuffix renders the highest-signal affordance the tri-audience /read/context substrate OFFERS on
+// the focused work-unit (matched by subject) as a compact " · ctx kind:state" — or "" when the producer is
+// dark or offers nothing (honest, no clutter). Readout only: the affordance is a WHY signal the operator
+// acts on THROUGH the governed apply seam — the cockpit never injects (the dig ruling).
+func (m Model) contextSuffix(taskID string) string {
+	if m.ContextDark || len(m.ContextAffordances) == 0 || strings.TrimSpace(taskID) == "" {
+		return ""
+	}
+	var affs []grammar.ContextAffordance
+	for subj, list := range m.ContextAffordances {
+		if subj == taskID || strings.Contains(subj, taskID) {
+			affs = list
+			break
+		}
+	}
+	best := ""
+	for _, a := range affs {
+		if a.State == "present" { // an EARNED affordance — the strongest WHY signal
+			return grammar.C("2nd", " · ctx "+a.Kind)
+		}
+		if best == "" {
+			best = a.Kind + ":" + a.State // else the first (e.g. a HOLD — still informative)
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return grammar.C("mut", " · ctx "+best)
 }
 
 func (m Model) bodyForPage(w, h int) string {
