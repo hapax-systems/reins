@@ -100,9 +100,19 @@ class CommandLedger:
         return "1970-01-01T00:00:00Z"  # deterministic default; production injects a real clock
 
     def _append(self, row: dict[str, Any]) -> None:
+        # fsync per row so the witness survives power loss — closing the file only flushes to the OS page
+        # cache, which a hard power-off discards. This estate has a documented power-loss incident
+        # (2026-06-08 UPS trip) AND a disarmed hardware watchdog, so "durable" must mean on-disk, not
+        # in-cache. Per-row fsync is trivially cheap at the command write rate. Best-effort: an fsync that
+        # raises (e.g. a filesystem without fsync) must not lose the write already flushed to the OS.
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
 
     def record_demand(
         self, verb: str, target: str, idempotency_key: str, refs: CommandRefs | None = None
