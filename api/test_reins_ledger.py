@@ -32,20 +32,50 @@ def test_demand_then_verdict_rows(tmp_path):
     assert rows[1]["witness"] == "pending"  # spine echo not yet wired (U7/SA-3)
 
 
-def test_durable_idempotency_across_reload(tmp_path):
+def test_durable_success_dedup_across_reload(tmp_path):
+    # idempotency dedups on terminal SUCCESS and survives a restart: a demand + an ok verdict, then a
+    # FRESH ledger over the same file rebuilds the succeeded-set, so a replayed key is a duplicate that
+    # replays the original success — NOT a re-run.
     p = str(tmp_path / "commands.jsonl")
     led = CommandLedger(p, clock=lambda: "t")
     first = led.record_demand("dispatch", "lane-a", "idem-42")
     assert first["duplicate"] is False
+    led.record_verdict(first["event_id"], "ok", 200)
 
-    # a FRESH ledger over the same file (simulating a process restart) must rebuild the seen-set.
-    reloaded = CommandLedger(p, clock=lambda: "t")
+    reloaded = CommandLedger(p, clock=lambda: "t")  # simulate a process restart
     replay = reloaded.record_demand("dispatch", "lane-a", "idem-42")
-    assert replay["duplicate"] is True
-    assert replay["event_id"] == first["event_id"]
-    # exactly ONE demand row on disk despite the replay.
-    demand_rows = [r for r in reloaded.rows() if r["kind"] == "demand"]
-    assert len(demand_rows) == 1
+    assert replay["duplicate"] is True and replay["event_id"] == first["event_id"]
+    assert replay["prior_http"] == 200  # replays the original success outcome
+    # no SECOND demand row appended for the succeeded key (dedup, not re-demand).
+    assert len([r for r in reloaded.rows() if r["kind"] == "demand"]) == 1
+
+
+def test_valid_json_nonobject_line_is_skipped_not_crashed(tmp_path):
+    # a valid-JSON-but-non-object line (null/true/42/"s"/[...]) must be skipped on reload AND read,
+    # never an AttributeError on row.get — a single such line otherwise bricked the whole composed app.
+    p = str(tmp_path / "commands.jsonl")
+    with open(p, "w") as f:
+        for junk in ("null", "true", "42", '"a string"', "[1,2,3]"):
+            f.write(junk + "\n")
+        f.write('{"kind":"demand","event_id":"e1","receipt_id":"r1"}\n')
+    led = CommandLedger(p, clock=lambda: "t")  # must NOT raise
+    rows = led.rows()  # must NOT raise
+    assert all(isinstance(r, dict) for r in rows)
+    assert len(rows) == 1 and rows[0]["event_id"] == "e1"
+    # read_commands over the same file must not 500
+    proj = read_commands(p, allowlist=["verb", "status"])
+    assert proj["dark"] is False
+
+
+def test_retry_before_success_is_not_a_duplicate(tmp_path):
+    # a demand whose verdict never reached success is RETRYABLE across a reload — not a duplicate.
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t")
+    led.record_demand("dispatch", "lane-a", "idem-99")
+    led.record_verdict(led.record_demand("dispatch", "lane-a", "idem-99")["event_id"], "not-wired", 501)
+    reloaded = CommandLedger(p, clock=lambda: "t")
+    retry = reloaded.record_demand("dispatch", "lane-a", "idem-99")
+    assert retry["duplicate"] is False  # never succeeded -> retryable, no fabricated duplicate
 
 
 def test_corrupt_line_is_skipped_not_crashed(tmp_path):

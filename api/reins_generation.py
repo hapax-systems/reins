@@ -66,6 +66,10 @@ def verify_generation(sha: str, root: str | None = None) -> tuple[bool, str]:
             m = json.load(f)
     except (OSError, ValueError) as e:
         return False, f"generation {sha} manifest corrupt: {e}"
+    if not isinstance(m, dict):
+        # valid JSON but not an object (null/true/42/"s"/[...]) — a typed refusal, never an
+        # uncaught AttributeError on m.get -> 500 + an un-witnessed verdict.
+        return False, f"generation {sha} manifest is not an object"
     try:
         with open(os.path.join(d, "reins"), "rb") as f:
             binary = f.read()

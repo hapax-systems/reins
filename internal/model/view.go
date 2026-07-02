@@ -8250,7 +8250,7 @@ func renderCapabilityClassPosture(rows []capabilityClassRollup, w int) string {
 			line += more
 		}
 	}
-	return ansi.Truncate(line, budget, "")
+	return ansi.Truncate(line, budget, grammar.OverflowMark) // disclose truncation, never a silent clip
 }
 
 func renderCapabilityClassRollups(b *strings.Builder, w int, rows []capabilityClassRollup) {

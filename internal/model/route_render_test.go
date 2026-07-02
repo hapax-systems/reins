@@ -87,6 +87,19 @@ func TestRenderRouteDriftWidthDeterministic(t *testing.T) {
 	}
 }
 
+// A fresh model (New) must render :route HONEST-DARK, not live-empty — paths that never FetchRoute
+// (--probe, driveLiveModel) would otherwise show a fabricated empty-but-live routing surface.
+func TestFreshModelRendersRouteDark(t *testing.T) {
+	m := New("REINS")
+	if !m.RouteDark {
+		t.Fatal("a fresh model must default RouteDark=true (un-fetched -> honest-dark)")
+	}
+	out := ansi.Strip(m.renderRoute(120))
+	if !strings.Contains(out, "route dark") || strings.Contains(out, "NO SPINE DECISION ON FILE") {
+		t.Fatalf("un-fetched route must render dark, not a live-empty posture:\n%s", out)
+	}
+}
+
 func TestRenderRouteHonestDark(t *testing.T) {
 	dark := Model{Width: 120}.FoldRoute(grammar.RoutePosture{Dark: true, Error: "feed unreachable"}, nil, true)
 	out := ansi.Strip(dark.renderRoute(120))

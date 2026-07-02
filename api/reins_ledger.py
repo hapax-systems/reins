@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,13 +61,19 @@ class CommandLedger:
 
     path: str
     clock: Any = None  # callable() -> iso ts; injected
-    _seen: dict[str, str] = field(default_factory=dict)  # event_id -> demand receipt_id
+    _seen: dict[str, str] = field(default_factory=dict)  # event_id -> demand receipt_id (any attempt)
+    # event_id -> the terminal-SUCCESS outcome (for idempotent replay). Idempotency dedups on SUCCESS,
+    # not on demand: a refused/failed attempt is RETRYABLE (its condition may since have changed — e.g.
+    # a generation that was absent is now staged); only a command that already SUCCEEDED is not re-run.
+    _succeeded: dict[str, dict] = field(default_factory=dict)
+    _lock: Any = field(default_factory=threading.Lock, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         self._reload()
 
     def _reload(self) -> None:
         self._seen = {}
+        self._succeeded = {}
         if not os.path.exists(self.path):
             return
         with open(self.path, encoding="utf-8") as f:
@@ -78,8 +85,14 @@ class CommandLedger:
                     row = json.loads(line)
                 except Exception:
                     continue  # honest-skip a corrupt line; never crash the ledger
-                if row.get("kind") == "demand" and row.get("event_id"):
-                    self._seen[row["event_id"]] = row.get("receipt_id", "")
+                if not isinstance(row, dict):
+                    continue  # valid JSON but non-object (null/true/42/"s"/[...]) — skip, never .get-crash
+                eid = row.get("event_id")
+                if row.get("kind") == "demand" and eid:
+                    self._seen[eid] = row.get("receipt_id", "")
+                elif row.get("kind") == "verdict" and eid and row.get("status") == "ok":
+                    # a terminal-success verdict marks the command completed (replayable outcome).
+                    self._succeeded[eid] = {"http": row.get("http", 200), "receipt_id": self._seen.get(eid, "")}
 
     def _ts(self) -> str:
         if callable(self.clock):
@@ -94,37 +107,44 @@ class CommandLedger:
     def record_demand(
         self, verb: str, target: str, idempotency_key: str, refs: CommandRefs | None = None
     ) -> dict[str, Any]:
-        """Append a demand row (or return the existing one for a replayed key — durable
-        idempotency). Returns the demand row dict incl. ``duplicate`` and ``event_id``."""
+        """Append a demand row, or — iff this event already reached a terminal SUCCESS — return the
+        replayable duplicate (carrying the ORIGINAL success http, never a fabricated 200). A first
+        attempt OR a retry after a non-success verdict is a FRESH demand (retryable). The check+append+
+        mark is a critical section (the /command/{verb} endpoint is a sync def on Starlette's threadpool,
+        so concurrent same-key requests genuinely interleave)."""
         event_id = canonical_event_id(verb, target, idempotency_key)
-        if event_id in self._seen:
-            return {
+        with self._lock:
+            prior = self._succeeded.get(event_id)
+            if prior is not None:
+                return {
+                    "kind": "demand",
+                    "event_id": event_id,
+                    "receipt_id": prior["receipt_id"],
+                    "duplicate": True,
+                    "prior_http": prior["http"],  # replay the original success outcome, not a synthesized 200
+                }
+            receipt_id = "demand-" + event_id[:16]
+            row = {
                 "kind": "demand",
                 "event_id": event_id,
-                "receipt_id": self._seen[event_id],
-                "duplicate": True,
+                "receipt_id": receipt_id,
+                "ts": self._ts(),
+                "verb": verb,
+                "target": target,
+                "idempotency_key": idempotency_key,
+                "refs": (refs or CommandRefs()).as_dict(),
+                "duplicate": False,
             }
-        receipt_id = "demand-" + event_id[:16]
-        row = {
-            "kind": "demand",
-            "event_id": event_id,
-            "receipt_id": receipt_id,
-            "ts": self._ts(),
-            "verb": verb,
-            "target": target,
-            "idempotency_key": idempotency_key,
-            "refs": (refs or CommandRefs()).as_dict(),
-            "duplicate": False,
-        }
-        self._append(row)
-        self._seen[event_id] = receipt_id
-        return row
+            self._append(row)
+            self._seen[event_id] = receipt_id
+            return row
 
     def record_verdict(
         self, event_id: str, status: str, http: int, reason: str = ""
     ) -> dict[str, Any]:
         """Append a verdict row for a prior demand. ``status`` is the router verdict
-        (ok/authority-rejected/preflight-failed/transport-failed/idempotent-replay)."""
+        (ok/authority-rejected/preflight-failed/transport-failed/not-wired/...). A terminal-success
+        verdict also arms idempotent replay for this event_id."""
         row = {
             "kind": "verdict",
             "event_id": event_id,
@@ -135,7 +155,10 @@ class CommandLedger:
             # witness stays pending until the spine echoes command_id back (SA-3, wired at U7).
             "witness": "pending",
         }
-        self._append(row)
+        with self._lock:
+            self._append(row)
+            if status == "ok":
+                self._succeeded[event_id] = {"http": http, "receipt_id": self._seen.get(event_id, "")}
         return row
 
     def rows(self) -> list[dict[str, Any]]:
@@ -149,9 +172,11 @@ class CommandLedger:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    obj = json.loads(line)
                 except Exception:
                     continue
+                if isinstance(obj, dict):  # skip valid-JSON-but-non-object lines (never .get-crash the fold)
+                    out.append(obj)
         return out
 
 
@@ -211,6 +236,12 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
         # generic facet allowlist happens to classify `target` (an EDGES facet) as ok, which would
         # leak a path on the derived channel; command targets are SENSITIVE. (never leak on air)
         air["target"] = "deny"
+        # the STRUCTURAL skeleton airs (closed, safe vocabulary — like routing_class on :route): verb,
+        # status, witness carry no path/PII. The generic allowlist denies them (not facet names), which
+        # would MISMATCH the renderer (RenderCommandRow shows the skeleton); classify them ok so the
+        # projection contract matches the rendered surface. Path/id-class refs stay denied below.
+        for structural in ("verb", "status", "witness"):
+            air[structural] = "ok"
         commands.append({**fields, "air": air})
 
     return {

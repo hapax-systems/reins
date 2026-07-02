@@ -1534,7 +1534,10 @@ func (m Model) openEpistemicsForIntakeFocus() Model {
 }
 
 func New(title string) Model {
-	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}}
+	// RouteDark defaults TRUE: an un-fetched ROUTE projection must render honest-dark, never live-empty.
+	// Paths that don't FetchRoute (--probe, driveLiveModel) would otherwise show a fabricated empty-but-live
+	// surface (RouteDark=false + zero posture); FoldRoute flips it on the first real fetch.
+	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true}
 }
 
 // toggleFilesZone flips the coordinator lens between task rows and the filebrowser. On entering the

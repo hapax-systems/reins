@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -121,6 +122,26 @@ func TestAPITreeHashCrossLanguageParity(t *testing.T) {
 	}
 	if got[:16] != "1cc45033fa146f2f" {
 		t.Fatal("the :16 prefix (the server's api_tree_sha witness) must match")
+	}
+}
+
+// Verify binds the manifest to the generation's NAME: a manifest whose declared sha differs from the
+// directory it is stored under must FAIL (else current->X could serve gen Y's manifest-attested bytes).
+func TestVerifyBindsManifestSHAToName(t *testing.T) {
+	s := NewStore(t.TempDir())
+	stageSample(t, s, "sha-a", "")
+	// rewrite the manifest to claim a different sha (self-consistent bytes, wrong name)
+	mp := filepath.Join(s.GenerationDir("sha-a"), "manifest.json")
+	b, _ := os.ReadFile(mp)
+	tampered := strings.Replace(string(b), `"sha": "sha-a"`, `"sha": "sha-IMPOSTER"`, 1)
+	if tampered == string(b) {
+		tampered = strings.Replace(string(b), `"sha":"sha-a"`, `"sha":"sha-IMPOSTER"`, 1)
+	}
+	if err := os.WriteFile(mp, []byte(tampered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify("sha-a"); err == nil {
+		t.Fatal("a manifest whose sha != the generation name MUST fail Verify")
 	}
 }
 

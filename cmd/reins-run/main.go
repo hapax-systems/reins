@@ -12,7 +12,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,10 +113,45 @@ func runStage(store *generation.Store, args []string) {
 	}
 	fmt.Printf("staged %s (binary_sha256=%s… api_tree_sha256=%s…)\n", sha, m.BinarySHA256[:12], m.APITreeSHA256[:12])
 	if _, ok := f["set-current"]; ok {
+		// A promotion must ride the WITNESSED rail (design pack A1.5): witness the stage through the live
+		// stage verb (the SSOT — no cross-language ledger-format duplication) BEFORE flipping current.
+		// If the API is unreachable (bootstrap / mid-swap), this is the modeled breakglass-manual path —
+		// it must be DISCLOSED loudly, never a silent out-of-rail promotion.
+		witnessStage(sha)
 		if err := store.SetCurrent(sha); err != nil {
 			die("stage: set-current: %v", err)
 		}
 		fmt.Printf("current -> %s (prev -> %s)\n", store.Current(), store.Prev())
+	}
+}
+
+// witnessStage POSTs the promotion to the live stage verb so it lands a demand+verdict on the durable
+// ledger (governed rail). Non-fatal: an unreachable API means BREAKGLASS-MANUAL, which is disclosed
+// loudly to stderr (the operator then knows the promotion was out-of-rail), never suppressed.
+func witnessStage(sha string) {
+	url := strings.TrimSpace(os.Getenv("REINS_API_URL"))
+	if url == "" {
+		url = "http://127.0.0.1:8799"
+	}
+	body, _ := json.Marshal(map[string]any{
+		"target":            sha,
+		"authority_packet":  map[string]any{"kind": "cli-stage"},
+		"preflight_receipt": map[string]any{},
+		"idempotency_key":   "clistage-" + sha + "-" + strconv.FormatInt(time.Now().UnixNano(), 36),
+	})
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Post(url+"/command/stage", "application/json", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reins-run: ⚠ BREAKGLASS-MANUAL stage — API unreachable (%v); promotion is OUT-OF-RAIL (unwitnessed). Re-witness when the API is up.\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 200 {
+		fmt.Fprintf(os.Stderr, "reins-run: stage WITNESSED via the governed rail (verb ok).\n")
+	} else {
+		// the verb refused (e.g. the store copy is not yet verifiable) — disclose; the operator decides.
+		fmt.Fprintf(os.Stderr, "reins-run: ⚠ stage verb returned %d: %s — promotion NOT cleanly witnessed.\n", resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
 }
 

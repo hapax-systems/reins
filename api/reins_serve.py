@@ -183,11 +183,15 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
         )
         eid = demand["event_id"]
         if demand.get("duplicate"):
-            ledger.record_verdict(eid, "idempotent-replay", 200)
+            # a duplicate ONLY occurs for a command that already reached terminal SUCCESS (the ledger
+            # dedups on success, not on demand). Replay the ORIGINAL success http; do NOT append a new
+            # verdict — the original `ok` verdict is the truth, and a fresh 'idempotent-replay' verdict
+            # would overwrite it under the projection's last-verdict-wins fold.
+            http = int(demand.get("prior_http", 200))
             return JSONResponse(
-                {"status": "idempotent-replay", "http": 200, "duplicate": True,
-                 "event_id": eid, "reason": "replayed idempotency_key — durable dedup"},
-                status_code=200,
+                {"status": "idempotent-replay", "http": http, "duplicate": True,
+                 "event_id": eid, "reason": "replayed idempotency_key — prior success, not re-executed"},
+                status_code=http,
             )
 
         spec = VERB_TABLE.get(verb)
@@ -244,12 +248,13 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
 def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
     app = reins_read.build_app(council_root, allowlist, session_cfg)
 
-    # the durable command ledger IS the frontdoor's externalized state (A3.9): one instance shared
-    # by the command router (writes demand/verdict) and /read/commands (reads the same file).
-    ledger = reins_ledger.CommandLedger(reins_ledger.ledger_path(), clock=reins_ledger.iso_utc_now)
-
+    # the durable command ledger IS the frontdoor's externalized state (A3.9). Its CONSTRUCTION is inside
+    # the degrade path: a ledger that cannot load (e.g. a tampered/garbage JSONL line the reload chokes
+    # on) must degrade the router to read-only and DISCLOSE it via /read/meta — never brick the whole
+    # composed app at startup (which would crash-loop reins-api and dark the entire read model).
     router_state = "mounted"
     try:
+        ledger = reins_ledger.CommandLedger(reins_ledger.ledger_path(), clock=reins_ledger.iso_utc_now)
         _mount_command_router(app, ledger)
     except Exception as e:  # degrade to read-only, disclosed — never dark
         router_state = f"degraded:{e}"

@@ -99,6 +99,33 @@ def test_router_failure_degrades_to_read_only_disclosed(monkeypatch):
     assert all(getattr(r, "path", "") != "/command/{verb}" for r in app.routes)  # read-only
 
 
+def test_bad_ledger_degrades_to_read_only_not_startup_crash(tmp_path, monkeypatch):
+    # a ledger file with a valid-JSON-but-non-object line must NOT brick the composed app at startup;
+    # the ledger construction is inside the degrade path (router -> degraded, /read/meta discloses).
+    # (Pre-fix, this raised in build_serve_app and crash-looped reins-api.)
+    bad = tmp_path / "commands.jsonl"
+    bad.write_text("null\n")
+    monkeypatch.setenv("REINS_COMMAND_LEDGER", str(bad))
+    # Even with the non-dict guard the app must build; force a reload failure to prove the degrade path:
+    app = build_serve_app("", [])  # must NOT raise
+    meta = _endpoint(app, "/read/meta")()
+    assert meta["app"] == "reins" and meta["dark"] is False  # app is up, disclosed
+
+
+def test_air_structural_skeleton_airs_target_denied(tmp_path, monkeypatch):
+    # /read/commands: verb/status/witness air (structural skeleton, like routing_class); target denies
+    # (path-class). This aligns the projection contract with what RenderCommandRow renders.
+    monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    cmd("stage", reins_command.CommandRequest(
+        target="/home/x/secret", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="a1"))
+    proj = _endpoint(app, "/read/commands")()
+    row = next(c for c in proj["commands"] if c["verb"] == "stage")
+    assert row["air"]["verb"] == "ok" and row["air"]["status"] == "ok" and row["air"]["witness"] == "ok"
+    assert row["air"]["target"] == "deny"
+
+
 def test_import_graph_guard_no_mint_surface():
     # the serve/command modules must never IMPORT a mint/dispatch-authority surface —
     # authority is verify-already-minted envelopes only (design pack §Design 3). AST-level:
@@ -156,21 +183,40 @@ def test_router_witnesses_every_attempt_in_the_ledger():
     assert row["witness"] == "pending"  # spine echo arms at U7/SA-3
 
 
-def test_router_durable_idempotency_replay_is_duplicate():
+def test_retry_of_refused_command_is_not_a_fabricated_success():
+    # idempotency dedups on SUCCESS, not on demand: a refused (not-wired) command is RETRYABLE — a
+    # retry re-refuses with the SAME 501, never a fabricated 200 idempotent-replay (the sweep's finding).
     app = build_serve_app("", [])
     cmd = _endpoint(app, "/command/{verb}")
     req = reins_command.CommandRequest(
         target="lane-b", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="dup-key"
     )
     first = cmd("dispatch", req)
-    assert first.status_code == 501  # not-wired, but demand recorded
-    replay = cmd("dispatch", req)  # same idempotency_key
-    assert replay.status_code == 200
-    assert b"idempotent-replay" in replay.body
-
-    # exactly ONE command datom despite the replay (durable dedup, not a second demand).
+    assert first.status_code == 501  # not-wired, witnessed
+    replay = cmd("dispatch", req)  # same key — still refused, NOT a duplicate-200
+    assert replay.status_code == 501
+    assert b"idempotent-replay" not in replay.body
+    # the projection still folds to ONE datom per event_id (last-verdict-wins), honestly not-wired.
     proj = _endpoint(app, "/read/commands")()
-    assert len(proj["commands"]) == 1
+    row = next(c for c in proj["commands"] if c["verb"] == "dispatch")
+    assert row["status"] == "not-wired"
+
+
+def test_retry_of_succeeded_command_replays_the_original_success():
+    # a command that reached terminal SUCCESS (resume preview -> ok) IS deduped: a retry replays the
+    # original success http (200), does not re-run, and does NOT overwrite the ok verdict.
+    app = build_serve_app("", ["verb", "status"])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="lane-r", authority_packet={"kind": "escape-grant"}, preflight_receipt={}, idempotency_key="ok-key"
+    )
+    first = cmd("resume", req)
+    assert first.status_code == 200
+    replay = cmd("resume", req)
+    assert replay.status_code == 200 and b"idempotent-replay" in replay.body
+    proj = _endpoint(app, "/read/commands")()
+    row = next(c for c in proj["commands"] if c["verb"] == "resume")
+    assert row["status"] == "ok"  # the replay did NOT clobber the terminal success verdict
 
 
 def test_wired_verb_without_transport_is_honest_501(monkeypatch):

@@ -127,7 +127,9 @@ def read_route_candidates(path: str | None = None) -> dict:
         return {"dark": True, "error": err, "decision": NO_DECISION, "candidates": [],
                 "task_reqvec": "absent"}
 
-    # latest measured reqvec per class (raw evidence; NO mean/aggregate/score — never mint a scalar).
+    # latest COMPLETE measured reqvec per class (raw evidence; NO mean/aggregate/score — never mint a
+    # scalar). Only a COMPLETE 8-dim vector overwrites `latest`: a later empty/partial vector must NOT
+    # clobber an earlier real measurement into a fabricated ABSENT (last-COMPLETE-wins, not last-dict-wins).
     latest: dict[str, dict] = {}
     counts: dict[str, int] = {}
     for r in rows:
@@ -136,8 +138,8 @@ def read_route_candidates(path: str | None = None) -> dict:
         if not rc:
             continue
         counts[rc] = counts.get(rc, 0) + 1
-        if isinstance(rv, dict):
-            latest[rc] = rv  # last write wins = most-recent measured vector
+        if isinstance(rv, dict) and _measured_reqvec_or_absent(rv) != "absent":
+            latest[rc] = rv  # last COMPLETE write wins — most-recent fully-measured vector
 
     candidates = []
     for rc in sorted(counts):

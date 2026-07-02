@@ -179,6 +179,12 @@ func (s *Store) Verify(sha string) error {
 	if err != nil {
 		return err
 	}
+	// bind the manifest to the generation's NAME: a manifest.json swapped in from a DIFFERENT generation
+	// (its own bytes self-consistent) must not pass Verify for this sha — else `current`->X could serve
+	// generation Y's manifest-attested bytes.
+	if m.SHA != sha {
+		return fmt.Errorf("generation %s: manifest sha mismatch (manifest claims %q)", sha, m.SHA)
+	}
 	bin, err := os.ReadFile(filepath.Join(s.GenerationDir(sha), "reins"))
 	if err != nil {
 		return fmt.Errorf("generation %s: binary unreadable: %w", sha, err)

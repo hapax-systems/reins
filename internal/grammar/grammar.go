@@ -82,24 +82,31 @@ type Command struct {
 }
 
 // commandStatusGlyph: monochrome-safe class marker for a command verdict (color is a redundant
-// amplifier over the glyph). ok ✓ · refused/rejected/failed ✖ · not-wired/unregistered ⊘ · pending ▸.
+// amplifier over the glyph). ok/idempotent-replay ✓ · not-wired/unregistered/no-transport ⊘ ·
+// pending ▸ · refused/rejected/failed ✖.
 func commandStatusGlyph(status string) string {
 	switch {
-	case status == "ok":
+	case status == "ok", status == "idempotent-replay":
+		// idempotent-replay is SUCCESS-class (http 200 — a prior success re-served, not re-run);
+		// it must not read as a failure ✖.
 		return "✓"
 	case status == "pending":
 		return "▸"
-	case strings.Contains(status, "not-wired"), strings.Contains(status, "unregistered"):
+	case strings.Contains(status, "not-wired"), strings.Contains(status, "unregistered"),
+		strings.Contains(status, "no-transport"):
 		return "⊘"
-	default: // authority-rejected / preflight-failed / transport-failed / not-implemented
+	default: // authority-rejected / preflight-failed / transport-failed / stage-rejected / not-implemented
 		return "✖"
 	}
 }
 
-// RenderCommandRow renders one witnessed command datom as a width-stable row. Target is AIR-redacted
-// (a target can carry a name/id); verb + status + witness are structural. No score/scalar is rendered.
+// RenderCommandRow renders one witnessed command datom as a width-stable row. Target + task_id +
+// session_role are AIR-redacted (path/id-class); verb is a structural closed-vocab skeleton but the
+// renderer still HONORS its air classification (Redact) so it can never diverge from the projection's
+// contract. No score/scalar is rendered.
 func RenderCommandRow(c Command, on bool) string {
 	glyph := commandStatusGlyph(c.Status)
+	verb := Redact(c.AIR, "verb", c.Verb, on)
 	target := Redact(c.AIR, "target", c.Target, on)
 	status := c.Status
 	if status == "" {
@@ -115,7 +122,7 @@ func RenderCommandRow(c Command, on bool) string {
 	} else if r := strings.TrimSpace(c.SessionRole); r != "" {
 		ref = " · " + Redact(c.AIR, "session_role", r, on)
 	}
-	return C("mut", glyph) + " " + C("pri", fmt.Sprintf("%-9s", c.Verb)) +
+	return C("mut", glyph) + " " + C("pri", fmt.Sprintf("%-9s", verb)) +
 		C("2nd", " "+target) + C("mut", " · ") + C("brt", status) +
 		C("mut", " · witness ") + C("mut", witness) + C("2nd", ref)
 }

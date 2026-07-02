@@ -15,5 +15,6 @@ func BroadcastStreamFrame(partial string, tokens int, air bool, maxw int) string
 		return fmt.Sprintf("▸ generating… [%d tok]", tokens)
 	}
 
-	return ansi.Truncate("▸ "+partial, maxw, "")
+	// off air: disclose truncation of the live partial with the overflow marker — never a silent clip.
+	return ansi.Truncate("▸ "+partial, maxw, OverflowMark)
 }

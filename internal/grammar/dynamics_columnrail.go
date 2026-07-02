@@ -2,7 +2,14 @@ package grammar
 
 import (
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
+
+// OverflowMark is the single-cell right-edge glyph that discloses a horizontally TRUNCATED row (matches
+// layout.OverflowMark — kept in sync; grammar cannot import layout without a cycle). A glyph, not a
+// color, carries the signal.
+const OverflowMark = "›"
 
 const columnRailLaneW = 28
 const columnRailMaxFlowMarks = 6
@@ -475,13 +482,16 @@ func emitColumnRailRow(row []rune, colors []string, w int) string {
 	return b.String()
 }
 
+// clipRunes clips a (possibly COLORIZED) string to w VISIBLE columns, disclosing truncation with the
+// overflow marker. It is ansi-aware: it measures visible width (not raw rune count, which counts escape
+// bytes) and truncates without cutting mid-escape-sequence — several call sites (RenderAxisRow,
+// RenderIdentityRow, RenderConsentFacetRow) pass already-colorized rows. A dropped tail is NEVER silent.
 func clipRunes(s string, w int) string {
 	if w <= 0 {
 		return s
 	}
-	r := []rune(s)
-	if len(r) <= w {
+	if ansi.StringWidth(s) <= w {
 		return s
 	}
-	return string(r[:w])
+	return ansi.Truncate(s, w, OverflowMark)
 }
