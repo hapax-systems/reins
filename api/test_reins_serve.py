@@ -20,6 +20,22 @@ def _endpoint(app, path):
     return next(r.endpoint for r in app.routes if getattr(r, "path", "") == path)
 
 
+def test_api_tree_sha_framing_matches_go_generation_hash():
+    # cross-language parity: reins_serve's framed construction must produce the SAME digest as the Go
+    # internal/generation.APITreeHash for the same tree (that test pins the identical constant). If either
+    # drifts, GEN-SKEW (U6b) false-positives. This is the shared byte-binding contract.
+    import hashlib
+
+    tree = {"reins_read.py": b"READ-BODY", "reins_serve.py": b"SERVE-BODY"}
+    h = hashlib.sha256()
+    for name in sorted(tree):
+        reins_serve._framed(h, name.encode())
+        reins_serve._framed(h, tree[name])
+    full = h.hexdigest()
+    assert full == "1cc45033fa146f2fbbef2a1bdb0d9e0f651e5a9949d63a6ea0bb1d77ebd9e540"
+    assert full[:16] == "1cc45033fa146f2f"  # the :16 prefix api_tree_sha reports as the witness
+
+
 def test_read_meta_identity_handshake():
     # the serving-identity handshake: a port is only trusted when it answers app:"reins"
     # with a serving sha — the 8799 foreign-server class becomes a rendered state.

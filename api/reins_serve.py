@@ -71,9 +71,19 @@ def serving_sha() -> str:
         return "unknown"
 
 
+def _framed(h, b: bytes) -> None:
+    # 8-byte big-endian length prefix + bytes — domain separation so adjacent name/content fields
+    # cannot collide across a boundary. MUST match internal/generation.writeFramed (Go), so the
+    # cockpit's byte-binding and this witness compute the same construction (GEN-SKEW, U6b).
+    h.update(len(b).to_bytes(8, "big"))
+    h.update(b)
+
+
 def api_tree_sha() -> str:
-    """Byte-hash of the served api/*.py tree — the staleness witness (a running
-    server whose tree hash differs from disk is the 8780 class, rendered)."""
+    """Byte-hash of the served api/*.py tree — the staleness witness. Canonical set = {top-level *.py}
+    (non-recursive; __pycache__/.pyc/lockfiles excluded), length-framed, sorted by name. This is the
+    :16 PREFIX of the same full digest internal/generation.APITreeHash stores in a generation manifest,
+    so GEN-SKEW can compare server[:16] == manifest.api_tree_sha256[:16]."""
     try:
         api_dir = os.path.dirname(os.path.abspath(__file__))
         h = hashlib.sha256()
@@ -81,8 +91,8 @@ def api_tree_sha() -> str:
             if not name.endswith(".py"):
                 continue
             with open(os.path.join(api_dir, name), "rb") as f:
-                h.update(name.encode())
-                h.update(f.read())
+                _framed(h, name.encode())
+                _framed(h, f.read())
         return h.hexdigest()[:16]
     except Exception:
         return "unknown"

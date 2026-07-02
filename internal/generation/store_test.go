@@ -3,6 +3,7 @@ package generation
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -80,6 +81,58 @@ func TestAPITreeHashDeterministic(t *testing.T) {
 	}
 }
 
+// Verify must IGNORE __pycache__/*.pyc and non-.py files a running interpreter or build drops into a
+// served generation's api/ — the canonical set is {top-level *.py}, so pollution must not spuriously
+// quarantine a valid generation (the U6 review MEDIUM).
+func TestVerifyIgnoresPycachePollution(t *testing.T) {
+	s := NewStore(t.TempDir())
+	stageSample(t, s, "sha-a", "")
+	apiDir := filepath.Join(s.GenerationDir("sha-a"), "api")
+	// a running python interpreter writes bytecode + a cache dir into the served tree
+	if err := os.MkdirAll(filepath.Join(apiDir, "__pycache__"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(apiDir, "__pycache__", "reins_serve.cpython-312.pyc"), []byte("BYTECODE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(apiDir, "uv.lock"), []byte("lock"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify("sha-a"); err != nil {
+		t.Fatalf("pycache/lockfile pollution must NOT fail Verify (only top-level .py is byte-bound): %v", err)
+	}
+	// but a tampered .py in the SAME dir still fails (the canonical set is still checked)
+	if err := os.WriteFile(filepath.Join(apiDir, "reins_serve.py"), []byte("mutated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify("sha-a"); err == nil {
+		t.Fatal("a tampered .py must still fail Verify despite the ignored pollution")
+	}
+}
+
+// Cross-language parity: APITreeHash must equal the digest reins_serve._framed/api_tree_sha computes
+// for the SAME tree (test_reins_serve.py pins the identical constant). If either side's construction
+// drifts, GEN-SKEW (U6b) would false-positive; this constant is the shared contract.
+func TestAPITreeHashCrossLanguageParity(t *testing.T) {
+	const want = "1cc45033fa146f2fbbef2a1bdb0d9e0f651e5a9949d63a6ea0bb1d77ebd9e540"
+	got := APITreeHash(map[string][]byte{"reins_read.py": []byte("READ-BODY"), "reins_serve.py": []byte("SERVE-BODY")})
+	if got != want {
+		t.Fatalf("APITreeHash drifted from the cross-language contract:\n got  %s\n want %s", got, want)
+	}
+	if got[:16] != "1cc45033fa146f2f" {
+		t.Fatal("the :16 prefix (the server's api_tree_sha witness) must match")
+	}
+}
+
+// APITreeHash length-framing: a boundary shift between name and content must NOT collide.
+func TestAPITreeHashLengthFramed(t *testing.T) {
+	a := APITreeHash(map[string][]byte{"ab": []byte("c")})
+	b := APITreeHash(map[string][]byte{"a": []byte("bc")})
+	if a == b {
+		t.Fatal("length-framing must prevent name/content boundary-shift collisions")
+	}
+}
+
 // Three-tier rollback: verified current wins; a quarantined/broken current falls to a verified prev;
 // neither verified => breakglass.
 func TestThreeTierRollbackResolver(t *testing.T) {
@@ -140,12 +193,19 @@ func TestHandoffConsumeOnce(t *testing.T) {
 	}
 }
 
-// no-display-scalar: the resolver's verdict is a tier label + sha + reason — never a minted score.
+// no-display-scalar: the resolver's verdict + the manifest carry NO numeric goodness/readiness scalar.
+// Enforced by reflection so a future numeric field is actually REJECTED (not silently compiled past).
 func TestResolutionHasNoScalar(t *testing.T) {
-	r := Resolution{SHA: "x", Tier: TierCurrent, Reason: "current verified"}
-	// structural: the only exported fields are strings; there is no numeric goodness/readiness field.
-	_ = r.SHA
-	_ = r.Tier
-	_ = r.Reason
-	// (compile-time guarantee — if a future scalar field is added this test is the place to reject it.)
+	for _, typ := range []reflect.Type{reflect.TypeOf(Resolution{}), reflect.TypeOf(Manifest{})} {
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			switch f.Type.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+				reflect.Float32, reflect.Float64:
+				t.Fatalf("%s.%s is numeric (%s) — the generation surface must mint no scalar",
+					typ.Name(), f.Name, f.Type.Kind())
+			}
+		}
+	}
 }

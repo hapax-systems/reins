@@ -13,12 +13,15 @@ package generation
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Manifest binds a generation's bytes (A1.10). BinarySHA256 + APITreeSHA256 are verified before the
@@ -73,9 +76,14 @@ func hashBytes(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// APITreeHash is the DETERMINISTIC hash of an api/ tree: files hashed in sorted-name order, each as
-// name-bytes then content-bytes (same construction as reins_serve.api_tree_sha, full digest here — the
-// server truncates to :16 for the display witness). Independent of map iteration order.
+// APITreeHash is the DETERMINISTIC hash of an api/ tree over the CANONICAL set {top-level *.py} — the
+// exact set reins_serve.api_tree_sha hashes, so the cockpit's byte-binding and the server's staleness
+// witness agree (GEN-SKEW, U6b). Files are hashed in sorted-name order, each LENGTH-FRAMED (len|bytes for
+// both name and content) so {"ab":"c"} and {"a":"bc"} cannot collide. Full digest here; the server shows
+// the :16 prefix of the same construction. Independent of map iteration order.
+//
+// The caller passes the .py set (Stage's tree); non-.py files a generation may also carry (pyproject,
+// lockfiles) are NOT byte-bound — consistent with the server, whose witness covers only served code.
 func APITreeHash(tree map[string][]byte) string {
 	names := make([]string, 0, len(tree))
 	for n := range tree {
@@ -84,10 +92,19 @@ func APITreeHash(tree map[string][]byte) string {
 	sort.Strings(names)
 	h := sha256.New()
 	for _, n := range names {
-		h.Write([]byte(n))
-		h.Write(tree[n])
+		writeFramed(h, []byte(n))
+		writeFramed(h, tree[n])
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeFramed writes an 8-byte big-endian length prefix then the bytes — domain separation so adjacent
+// name/content fields cannot be confused across a boundary.
+func writeFramed(h hash.Hash, b []byte) {
+	var lb [8]byte
+	binary.BigEndian.PutUint64(lb[:], uint64(len(b)))
+	h.Write(lb[:])
+	h.Write(b)
 }
 
 // writeAtomic writes data to path via a temp file + rename (no torn writes / partial pointers).
@@ -176,28 +193,28 @@ func (s *Store) Verify(sha string) error {
 	return nil
 }
 
+// readAPITree reads the CANONICAL {top-level *.py} set — non-recursive, .py-only, mirroring
+// reins_serve.api_tree_sha's os.listdir. This is deliberately NOT a recursive walk: a running Python
+// interpreter writing __pycache__/*.pyc INTO a served generation's api/ must NOT change the recomputed
+// hash and spuriously quarantine an otherwise-valid generation.
 func (s *Store) readAPITree(sha string) (map[string][]byte, error) {
 	apiDir := filepath.Join(s.GenerationDir(sha), "api")
+	entries, err := os.ReadDir(apiDir)
+	if err != nil {
+		return nil, err
+	}
 	tree := map[string][]byte{}
-	err := filepath.Walk(apiDir, func(p string, info os.FileInfo, err error) error {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".py") {
+			continue // ignore __pycache__/, .pyc, lockfiles — only served .py code is byte-bound
+		}
+		b, err := os.ReadFile(filepath.Join(apiDir, e.Name()))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(apiDir, p)
-		if err != nil {
-			return err
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		tree[rel] = b
-		return nil
-	})
-	return tree, err
+		tree[e.Name()] = b
+	}
+	return tree, nil
 }
 
 // Quarantine marks a generation as unsafe-to-exec (byte mismatch or a failed probation). A quarantined
