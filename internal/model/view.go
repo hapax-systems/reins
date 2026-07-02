@@ -9874,18 +9874,19 @@ func intentArg(label string) *Candidate {
 	return nil
 }
 
+// clipRunes clips a string to n VISIBLE columns with an ellipsis, ansi-aware. It MUST be ansi-aware
+// because live call sites feed it already-COLORIZED input (e.g. renderCommandCatalog pipes
+// grammar.RenderCommandRow — 8 lipgloss segments — through it): raw []rune counting would treat escape
+// bytes as budget (garbling the row + bleeding SGR state), whereas ansi.StringWidth/ansi.Truncate count
+// only visible cells and never cut mid-escape. On plain input this is identical to the old rune clip.
 func clipRunes(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= n {
+	if ansi.StringWidth(s) <= n {
 		return s
 	}
-	if n == 1 {
-		return "…"
-	}
-	return string(r[:n-1]) + "…"
+	return ansi.Truncate(s, n, "…")
 }
 
 func wrapRunes(s string, n int) []string {
