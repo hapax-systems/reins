@@ -28,7 +28,9 @@ func focusBar(text string, w int) string {
 	if vw := ansi.StringWidth(plain); vw < w {
 		plain += strings.Repeat(" ", w-vw)
 	} else if vw > w {
-		plain = ansi.Truncate(plain, w, "")
+		// the SELECTED row is the most-visible one — it must disclose truncation too, never a silent
+		// clip at narrow widths (the honest-when-starved floor; same fix as fitLine/fitWidth).
+		plain = ansi.Truncate(plain, w, layout.OverflowMark)
 	}
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color(grammar.Hex("focus"))).
