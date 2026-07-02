@@ -874,8 +874,20 @@ func (m Model) specCoordinator() *layout.Spec {
 	// coordinator layout, before the expanded-cell real-estate reallocation) — the preview renders
 	// in the middle COORD pane, the chat keeps its column.
 	chat := &layout.Pane{MinW: 20, Render: func(pw, ph int) string { return m.coordinatorChatPane(pw, ph) }}
-	inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
-	return layout.Split(layout.Leaf(lens), inner, 0.4, m.verdictConnector(m.coordinatorEmergentRelation()))
+	// RESPONSIVE collapse — the operator's cramping was here: three panes packed into ~50-col thirds on a
+	// handheld. Now the pane count fits the device (min of the class cap and the width budget).
+	pc := m.paneCap()
+	if pc >= 3 && m.Width >= lens.MinW+coord.MinW+chat.MinW+2 {
+		inner := layout.Split(layout.Leaf(coord), layout.Leaf(chat), 0.5, layout.Connector{Glyph: div})
+		return layout.Split(layout.Leaf(lens), inner, 0.4, m.verdictConnector(m.coordinatorEmergentRelation()))
+	}
+	if pc >= 2 && m.Width >= lens.MinW+chat.MinW+1 {
+		// handheld: LENS (nav) | CHAT (the operator's primary steer surface — voice→chat lands here). The
+		// middle coord-context drops on the small screen (reachable via the lens zones).
+		return layout.Split(layout.Leaf(lens), layout.Leaf(chat), 0.42, m.verdictConnector(m.coordinatorEmergentRelation()))
+	}
+	// compact/mobile: CHAT alone (single column) — steer is primary; navigate via page/zone switch.
+	return layout.Leaf(chat)
 }
 
 // coordinatorRelation derives the lens selection's emergent relationship to the rest of the visible
@@ -988,7 +1000,14 @@ func sessionEntity(s grammar.Session, airOn bool) relate.Entity {
 // secondary, joined by the EMERGENT connector relation. Every self-anchored cohort page composes
 // through this — the generalization of specCoordinator's split.
 func (m Model) specListContext(primary, secondary *layout.Pane, ratio float64, relation string) *layout.Spec {
-	return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio, m.verdictConnector(relation))
+	// RESPONSIVE: keep the 2-pane list|context only if the device allows >=2 panes AND the width can give
+	// both their MinW; otherwise collapse to the single list column (context reachable via the page's own
+	// affordances / a drill-in). Compact/mobile always single-columns. Fixes the handheld cramping where
+	// panes used to shrink below legibility instead of dropping.
+	if m.paneCap() >= 2 && m.Width >= primary.MinW+secondary.MinW+1 {
+		return layout.Split(layout.Leaf(primary), layout.Leaf(secondary), ratio, m.verdictConnector(relation))
+	}
+	return layout.Leaf(primary)
 }
 
 // verdictConnector stamps the connector with the PAGE'S typed-join verdict — pageVerdict, the tested

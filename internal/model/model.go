@@ -61,6 +61,58 @@ const (
 
 const splitContextMinWidth = 160
 
+// DeviceClass drives the RESPONSIVE layout strategy — ONE reins across display devices, no boutique forks.
+// The operator's cramping report: at a handheld's ~164-col fullscreen the monitor-tuned split packs three
+// panes into unreadable thirds. The class caps the pane count (Monitor 3 / Handheld 2 / Compact 1) so the
+// composition COLLAPSES to fit the device rather than shrinking panes into cramping. Mobile (portrait) is
+// the Compact class, designed-for now even though the device ships later.
+type DeviceClass int
+
+const (
+	DeviceAuto     DeviceClass = iota // infer from the viewport
+	DeviceMonitor                     // wide + physically large: full multi-pane
+	DeviceHandheld                    // deck-class: moderate cols but small / arm's-length — at most 2 panes
+	DeviceCompact                     // mobile / portrait: single-column stacked
+)
+
+func parseDeviceClass(s string) DeviceClass {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "monitor", "desktop", "wide":
+		return DeviceMonitor
+	case "handheld", "deck", "steamdeck":
+		return DeviceHandheld
+	case "compact", "mobile", "phone", "portrait":
+		return DeviceCompact
+	default:
+		return DeviceAuto
+	}
+}
+
+// deviceClass resolves the effective class: an explicit REINS_DEVICE override, else inferred from the
+// viewport (a very narrow terminal is compact/mobile; otherwise monitor — a handheld can't be inferred
+// from column count alone, so the deck launcher exports REINS_DEVICE=handheld).
+func (m Model) deviceClass() DeviceClass {
+	if m.DeviceOverride != DeviceAuto {
+		return m.DeviceOverride
+	}
+	if m.Width > 0 && m.Width < 96 {
+		return DeviceCompact
+	}
+	return DeviceMonitor
+}
+
+// paneCap is the maximum simultaneous panes for the device class — the responsive collapse ceiling.
+func (m Model) paneCap() int {
+	switch m.deviceClass() {
+	case DeviceCompact:
+		return 1
+	case DeviceHandheld:
+		return 2
+	default:
+		return 3
+	}
+}
+
 // hintAlphabet: home-row-first labels for hint teleport (one key per visible row; choose by sight).
 const hintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
@@ -432,6 +484,7 @@ type Model struct {
 	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
 	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
 	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
+	DeviceOverride      DeviceClass         // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
 	PendingCommand      *CommandRequest     // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
 	LastVerdict         string              // apply-seam: the last witnessed command verdict (rendered)
 	Commands            []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
@@ -1540,7 +1593,7 @@ func New(title string) Model {
 	// RouteDark defaults TRUE: an un-fetched ROUTE projection must render honest-dark, never live-empty.
 	// Paths that don't FetchRoute (--probe, driveLiveModel) would otherwise show a fabricated empty-but-live
 	// surface (RouteDark=false + zero posture); FoldRoute flips it on the first real fetch.
-	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true}
+	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true, DeviceOverride: parseDeviceClass(os.Getenv("REINS_DEVICE"))}
 }
 
 // toggleFilesZone flips the coordinator lens between task rows and the filebrowser. On entering the
