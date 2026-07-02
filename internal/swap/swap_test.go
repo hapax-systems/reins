@@ -59,6 +59,38 @@ func TestResolveExecPlanUnknownTierNeverExecs(t *testing.T) {
 	}
 }
 
+// The API resolver execs the resolved generation's api under the given python + reports its serving sha.
+func TestResolveAPIExecPlanVerified(t *testing.T) {
+	store := generation.NewStore("/store")
+	plan := ResolveAPIExecPlan(store, generation.Resolution{SHA: "genX", Tier: generation.TierCurrent}, "/venv/bin/python")
+	if !plan.ShouldExec {
+		t.Fatal("a verified resolution must serve")
+	}
+	if len(plan.Argv) != 2 || plan.Argv[0] != "/venv/bin/python" || !strings.HasSuffix(plan.Argv[1], "/store/generations/genX/api/reins_serve.py") {
+		t.Fatalf("api argv should be [python <genX>/api/reins_serve.py], got %v", plan.Argv)
+	}
+	if !strings.HasSuffix(plan.APIDir, "/store/generations/genX/api") || plan.ServingSHA != "genX" {
+		t.Fatalf("apiDir/servingSHA wrong: %+v", plan)
+	}
+}
+
+// A breakglass/unknown-tier resolution must NOT serve (allowlist gate; systemd StartLimit -> API: FAILED).
+func TestResolveAPIExecPlanBreakglassNeverServes(t *testing.T) {
+	store := generation.NewStore("/store")
+	for _, res := range []generation.Resolution{
+		{SHA: "", Tier: generation.TierBreakglass, Reason: "no verified generation"},
+		{SHA: "x", Tier: "garbage"},
+	} {
+		plan := ResolveAPIExecPlan(store, res, "/venv/bin/python")
+		if plan.ShouldExec {
+			t.Fatalf("must not serve for %+v", res)
+		}
+		if plan.BreakglassReason == "" {
+			t.Fatal("must surface a reason")
+		}
+	}
+}
+
 // The ONLY rollback trigger is a probation failure: nonzero exit, before confirm, within probation.
 func TestSupervisorProbationFailureRollsBack(t *testing.T) {
 	a := DecideSupervisorAction(SupervisorState{

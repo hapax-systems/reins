@@ -59,6 +59,38 @@ func ResolveExecPlan(store *generation.Store, res generation.Resolution, posture
 	}
 }
 
+// APIExecPlan is the resolved hand-over for the reins-api.service (design pack A1.3: the service
+// ExecStart resolves through the SAME generation `current` pointer the cockpit uses). ShouldExec is
+// false for a breakglass/unverified resolution — systemd's StartLimit then stops the loop and the meta
+// facet renders API: FAILED, never a silent wrong-generation serve.
+type APIExecPlan struct {
+	ShouldExec       bool
+	Argv             []string // [python, <apiDir>/reins_serve.py]
+	APIDir           string   // cwd for the exec (mirrors the old WorkingDirectory)
+	ServingSHA       string   // exported as REINS_SERVING_SHA so /read/meta reports the generation (pointer-fact)
+	BreakglassReason string
+}
+
+// ResolveAPIExecPlan turns a store Resolution into the API's exec plan: serve the resolved generation's
+// api/reins_serve.py under the given python interpreter. Same allowlist gate as ResolveExecPlan — an
+// unrecognized/empty resolution execs nothing (breakglass), so a bad generation can never be served.
+func ResolveAPIExecPlan(store *generation.Store, res generation.Resolution, python string) APIExecPlan {
+	if res.SHA == "" || (res.Tier != generation.TierCurrent && res.Tier != generation.TierPrev) {
+		reason := res.Reason
+		if reason == "" {
+			reason = "unrecognized resolution tier " + strconv.Quote(res.Tier) + " — refusing to serve"
+		}
+		return APIExecPlan{ShouldExec: false, BreakglassReason: reason}
+	}
+	apiDir := filepath.Join(store.GenerationDir(res.SHA), "api")
+	return APIExecPlan{
+		ShouldExec: true,
+		Argv:       []string{python, filepath.Join(apiDir, "reins_serve.py")},
+		APIDir:     apiDir,
+		ServingSHA: res.SHA,
+	}
+}
+
 // SupervisorState is what the reins-run crash-backstop observes about a finished child run.
 type SupervisorState struct {
 	ChildExitCode   int    // the cockpit child's exit code (0 = clean)

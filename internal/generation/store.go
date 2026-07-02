@@ -62,6 +62,9 @@ type Store struct{ root string }
 
 func NewStore(root string) *Store { return &Store{root: root} }
 
+// Root is the store's root directory (for callers that must pass it to a child process).
+func (s *Store) Root() string { return s.root }
+
 func (s *Store) genRoot() string          { return filepath.Join(s.root, "generations") }
 func (s *Store) GenerationDir(sha string) string { return filepath.Join(s.genRoot(), sha) }
 func (s *Store) manifestPath(sha string) string  { return filepath.Join(s.GenerationDir(sha), "manifest.json") }
