@@ -207,6 +207,44 @@ class CommandLedger:
                 self._succeeded[event_id] = {"http": http, "receipt_id": self._seen.get(event_id, "")}
         return row
 
+    def find_event_id_by_receipt(self, receipt_id: str) -> str | None:
+        """Find the event_id of the verdict whose ``effect.receipt_id == receipt_id`` (a dispatch
+        verdict's receipt_id is the MQ message_id). Used by the witness-echo to match a coord_dispatch
+        launch event back to the originating demand."""
+        for row in self.rows():
+            if row.get("kind") == "verdict":
+                if (row.get("effect") or {}).get("receipt_id") == receipt_id:
+                    return row.get("event_id")
+        return None
+
+    def apply_witness_echo(
+        self, message_id: str, launch_succeeded: bool, reason: str = ""
+    ) -> dict[str, Any] | None:
+        """U7 (SA-3): the spine echoed a ``coord_dispatch`` launch event for ``message_id``. Append a NEW
+        verdict row for the matching demand (found via the dispatch verdict's effect.receipt_id) with
+        ``witness='echoed'`` + ``applied=launch_succeeded`` — the real lane launch is the estate write that
+        arms ``applied`` (the enqueue alone left it pending). The projection's last-verdict-wins fold picks
+        up the echoed verdict. Returns the row, or None if no matching dispatch verdict (the echo arrived
+        without a demand — an honest no-op, never a fabricated echo)."""
+        event_id = self.find_event_id_by_receipt(message_id)
+        if event_id is None:
+            return None
+        row = {
+            "kind": "verdict",
+            "event_id": event_id,
+            "ts": self._ts(),
+            "status": "ok" if launch_succeeded else "launch-failed",
+            "http": 200 if launch_succeeded else 502,
+            "reason": reason,
+            "effect": {"receipt_id": message_id, "applied": launch_succeeded},
+            "witness": "echoed",  # the spine confirmed the downstream launch — the U7 echo
+        }
+        with self._lock:
+            self._append(row)
+            if launch_succeeded:
+                self._succeeded[event_id] = {"http": 200, "receipt_id": self._seen.get(event_id, "")}
+        return row
+
     def rows(self) -> list[dict[str, Any]]:
         """Read the full ledger back (oldest -> newest). Missing file = empty."""
         out: list[dict[str, Any]] = []

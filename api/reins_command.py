@@ -273,8 +273,12 @@ def dispatch_app(*, submit_dispatch: Callable[[Any], str] | None = None) -> Fast
     )
 
 
-def _default_submit_dispatch(_req: Any) -> str:
-    raise NotImplementedError(
-        "dispatch MQ producer not wired — inject submit_dispatch (Inc 2 proves composition "
-        "+ routing; the real enqueue + lane-launch e2e is a confirmed step)"
-    )
+def _default_submit_dispatch(req: Any) -> str:
+    # The REAL producer: a pure sqlite INSERT into the relay MQ (api/reins_dispatch_mq.send_dispatch_message).
+    # NO SPAWN — the lane-launch is downstream (hapax-methodology-dispatch --launch, via the coordinator's
+    # tick on a matching cc-task). Tests inject a temp-db submit_dispatch; production writes the live MQ
+    # (~/.cache/hapax/relay/messages.db) the dispatcher reads. The enqueue is a real governed write; the
+    # verdict's applied=True is armed later by the witness-echo (U7) on coord_dispatch.launch_succeeded.
+    from reins_dispatch_mq import send_dispatch_message  # local import: keep the command layer import-light
+
+    return send_dispatch_message(req)
