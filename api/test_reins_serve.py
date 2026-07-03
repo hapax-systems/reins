@@ -50,8 +50,9 @@ def test_read_meta_identity_handshake():
     assert set(meta["verbs"]) == set(VERB_TABLE)
     wired = sorted(v for v, s in meta["verbs"].items() if s["wired"])
     # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor
-    # inflections (reins-local, NOT spine dispatch): focus (prioritization) + breakglass (sanctioned exit).
-    assert wired == ["breakglass", "focus", "resume", "stage"]
+    # inflections (reins-local) — focus (prioritization) + breakglass (sanctioned exit) — plus dispatch (the
+    # real apply transport: a sqlite enqueue to the relay MQ; the lane-launch is downstream, no spawn).
+    assert wired == ["breakglass", "dispatch", "focus", "resume", "stage"]
     # every wired verb projects its mode so the cockpit renders preview honestly (never-false-green)
     assert all("mode" in s for s in meta["verbs"].values())
 
@@ -62,7 +63,7 @@ def test_unwired_verb_refuses_typed_501():
     req = reins_command.CommandRequest(
         target="t1", authority_packet={"kind": "x"}, preflight_receipt={}, idempotency_key="k1"
     )
-    resp = cmd("dispatch", req)
+    resp = cmd("claim", req)  # a still-unwired verb (dispatch is now wired — the real apply transport)
     assert resp.status_code == 501
     body = resp.body.decode()
     assert "not-wired" in body and "no ungated path" in body
@@ -135,9 +136,9 @@ def test_focus_rejects_non_attestation_packet():
     r = cmd("focus", reins_command.CommandRequest(
         target="t", authority_packet={"kind": "nonsense"}, preflight_receipt={}, idempotency_key="focus-bad"))
     assert r.status_code != 200  # authority-rejected + witnessed (not applied)
-    d = cmd("dispatch", reins_command.CommandRequest(
+    d = cmd("claim", reins_command.CommandRequest(
         target="x", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="d1"))
-    assert d.status_code == 501  # dispatch remains spine-gated
+    assert d.status_code == 501  # a still-unwired verb (dispatch is now the wired apply transport)
 
 
 def test_router_failure_degrades_to_read_only_disclosed(monkeypatch):
@@ -224,14 +225,14 @@ def test_router_witnesses_every_attempt_in_the_ledger():
     req = reins_command.CommandRequest(
         target="lane-a", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="w1"
     )
-    resp = cmd("dispatch", req)  # unwired -> 501, but witnessed
+    resp = cmd("claim", req)  # a still-unwired verb (dispatch is now wired) -> 501, but witnessed
     assert resp.status_code == 501
     assert b"event_id" in resp.body
 
     proj = _endpoint(app, "/read/commands")()
     assert len(proj["commands"]) == 1
     row = proj["commands"][0]
-    assert row["verb"] == "dispatch" and row["status"] == "not-wired"
+    assert row["verb"] == "claim" and row["status"] == "not-wired"
     assert row["witness"] == "pending"  # spine echo arms at U7/SA-3
 
 
@@ -243,14 +244,14 @@ def test_retry_of_refused_command_is_not_a_fabricated_success():
     req = reins_command.CommandRequest(
         target="lane-b", authority_packet={"k": 1}, preflight_receipt={}, idempotency_key="dup-key"
     )
-    first = cmd("dispatch", req)
-    assert first.status_code == 501  # not-wired, witnessed
-    replay = cmd("dispatch", req)  # same key — still refused, NOT a duplicate-200
+    first = cmd("claim", req)
+    assert first.status_code == 501  # not-wired, witnessed (dispatch is now wired)
+    replay = cmd("claim", req)  # same key — still refused, NOT a duplicate-200
     assert replay.status_code == 501
     assert b"idempotent-replay" not in replay.body
     # the projection still folds to ONE datom per event_id (last-verdict-wins), honestly not-wired.
     proj = _endpoint(app, "/read/commands")()
-    row = next(c for c in proj["commands"] if c["verb"] == "dispatch")
+    row = next(c for c in proj["commands"] if c["verb"] == "claim")
     assert row["status"] == "not-wired"
 
 

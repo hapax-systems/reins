@@ -42,7 +42,7 @@ import reins_route
 # transport is forbidden — the rail (U3+) injects transports, this table only
 # declares surface shape.
 VERB_TABLE: dict[str, dict[str, Any]] = {
-    "dispatch": {"wired": False},
+    "dispatch": {"wired": True},  # the real apply transport (sqlite enqueue; the lane-launch is downstream)
     "claim": {"wired": False},
     "close": {"wired": False},
     "approve": {"wired": False},
@@ -249,7 +249,62 @@ def _breakglass_closures():
     return verify, preflight, transport
 
 
-def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> None:
+def _dispatch_closures(submit: Any = None) -> tuple:
+    """The dispatch verb's verify/preflight/transport (mirrors reins_command.dispatch_app). The transport
+    calls the REAL producer (reins_dispatch_mq.send_dispatch_message) — a pure sqlite enqueue, NO SPAWN;
+    the lane-launch is downstream (hapax-methodology-dispatch --launch, via the coordinator). ``applied``
+    stays False at enqueue (the launch is async); the witness-echo (U7) arms applied=True on a
+    coord_dispatch.launch_succeeded event. ``submit`` is injectable so the serve-layer test uses a temp MQ
+    (no live write); production passes None -> the real producer (the live relay MQ the dispatcher reads)."""
+    from reins_dispatch_mq import send_dispatch_message  # local import: keep the serve layer import-light
+
+    submit_dispatch = submit if submit is not None else send_dispatch_message
+
+    def verify(packet: Any, target: str) -> bool:
+        # authority triple (methodology-dispatch's model): route-not-mint.
+        return bool(target) and all(packet.get(k) for k in ("authority_case", "parent_spec", "message_id"))
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        if env.preflight_receipt.get("blocked"):
+            return False
+        pkt = env.authority_packet
+        return all(pkt.get(k) for k in ("lane", "platform", "mode", "profile"))
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response | None:
+        pkt = env.authority_packet
+        req = reins_command.DispatchIntent(
+            task_id=env.target,
+            lane=pkt["lane"],
+            platform=pkt["platform"],
+            mode=pkt["mode"],
+            profile=pkt["profile"],
+            authority_case=pkt["authority_case"],
+            parent_spec=pkt["parent_spec"],
+            message_id=pkt["message_id"],
+            idempotency_key=env.idempotency_key,
+        )
+        try:
+            message_id = submit_dispatch(req)
+        except Exception as exc:
+            return reins_command.Response(status="transport-failed", http=502, reason=str(exc))
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=message_id,
+            event_seq=None,  # spine event lands async via the daemon
+            fold_delta=(
+                f"dispatch enqueued (message {message_id}); lane launch is async via "
+                "hapax-methodology-dispatch — the coord_dispatch event lands on the next fold"
+            ),
+            spooled=False,
+        )
+
+    return (verify, preflight, transport)
+
+
+def _mount_command_router(
+    app: FastAPI, ledger: reins_ledger.CommandLedger, submit_dispatch: Any = None
+) -> None:
     """The verb-table router. Raises on construction failure — the caller degrades
     to read-only and discloses (never a half-mounted write surface).
 
@@ -265,6 +320,7 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
         "stage": _stage_closures(),
         "focus": _focus_closures(),
         "breakglass": _breakglass_closures(),
+        "dispatch": _dispatch_closures(submit_dispatch),
     }
 
     @app.post("/command/{verb}")
@@ -364,7 +420,9 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
         return JSONResponse(out, status_code=resp.http)
 
 
-def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
+def build_serve_app(
+    council_root: str, allowlist: list[str], session_cfg: dict | None = None, submit_dispatch: Any = None
+) -> FastAPI:
     app = reins_read.build_app(council_root, allowlist, session_cfg)
 
     # the durable command ledger IS the frontdoor's externalized state (A3.9). Its CONSTRUCTION is inside
@@ -374,7 +432,7 @@ def build_serve_app(council_root: str, allowlist: list[str], session_cfg: dict |
     router_state = "mounted"
     try:
         ledger = reins_ledger.CommandLedger(reins_ledger.ledger_path(), clock=reins_ledger.iso_utc_now)
-        _mount_command_router(app, ledger)
+        _mount_command_router(app, ledger, submit_dispatch=submit_dispatch)
     except Exception as e:  # degrade to read-only, disclosed — never dark
         router_state = f"degraded:{e}"
 
