@@ -7,11 +7,16 @@ CommandResult path.
 
 Authority note: the ledger records demand INTENT + verdict; it mints NO authority (the real transport
 lands at U7 against the spine verify surfaces). Trust boundary (design pack A3.2): the ledger is a
-filesystem-permission-guarded JSONL. Rows are now HASH-CHAINED + HMAC-SIGNED (A3.x / avsdlc-receipt-
-integrity), so alteration/insert/delete/reorder is tamper-EVIDENT and forging a row requires the 0600
-signing key — which a SECOND PRINCIPAL (the exact boundary this note named as "reopens on a second
-principal / non-loopback bind") cannot read. Detection is via ``verify_chain()``; the key protects the
-signature, not the JSONL's readability.
+filesystem-permission-guarded JSONL. Rows are HASH-CHAINED + HMAC-SIGNED (A3.x / avsdlc-receipt-
+integrity). HONEST SCOPE (adversarial review, 2026-07-03): ``verify_chain()`` detects in-place
+ALTERATION, INSERTION, REORDER, and mid-chain DELETION of retained rows, and reports a chain-less
+ledger as ``unsigned`` (never ``verified``) — so a no-key attacker cannot FORGE a ``verified`` verdict.
+It does NOT, by itself, detect TAIL TRUNCATION (hiding the most recent rows leaves a valid prefix) or
+KEY SUBSTITUTION: those need an OUT-OF-BAND anchor (``chain_head()`` + row count published where the
+ledger's writer cannot rewrite it), because a second principal with write on the ledger DIRECTORY can
+unlink/replace a same-dir key or anchor (dir-write governs unlink, so the 0600 mode protects READ, not
+replacement). Full defense of the "second principal / non-loopback bind" boundary requires the key +
+anchor in an operator-only directory or out-of-band.
 
 event_id = sha256(canonical_json({verb, target, idempotency_key})) — canonical JSON (sorted keys, no
 whitespace), NEVER delimiter concatenation, so there is no id-collision class (A3.11). Durable
@@ -25,6 +30,7 @@ import hashlib
 import hmac
 import json
 import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -220,19 +226,31 @@ class CommandLedger:
         return out
 
     def verify_chain(self) -> tuple[bool, int, str]:
-        """Walk the ledger and verify tamper-evidence: each hashed row's content-hash, its HMAC
-        signature, and its prev-link to the row before it. Returns ``(ok, first_broken_index, reason)``
-        — reason in {ok, hash-mismatch, bad-signature, broken-link, unhashed-row-in-chain}. Pre-chain
-        rows (written before signing, no ``hash``) are a legal leading prefix and are skipped; once the
-        chain has begun, a subsequent unhashed row is itself evidence of tampering."""
-        prev = ""
-        started = False
-        for i, row in enumerate(self.rows()):
+        """Verify the signed hash-chain. Returns ``(ok, first_signed_index, reason)`` with reason in
+        {ok, empty, unsigned, hash-mismatch, bad-signature, broken-link, unhashed-row-in-chain}.
+
+        HONEST SCOPE (post-review): detects in-place ALTERATION, INSERTION, REORDER, and mid-chain
+        DELETION of retained rows, and reports a chain-less ledger as ``unsigned`` / an empty file as
+        ``empty`` — NEVER ``verified``. So a no-key attacker CANNOT forge a ``verified`` verdict by
+        stripping every ``hash`` (that reads ``unsigned``) or by content edits. The first signed row
+        must be genesis-anchored (``prev == ""``), so stripping the leading signed rows breaks the link.
+        RESIDUAL — NOT defended here: TAIL TRUNCATION (hiding the most recent rows still leaves a valid
+        prefix that reads ``ok``) and KEY SUBSTITUTION require an OUT-OF-BAND anchor — publish
+        ``chain_head()`` + the row count where the ledger's writer cannot rewrite them; a second
+        principal with write on the ledger DIRECTORY defeats any same-dir anchor (dir-write ⇒ unlink)."""
+        rows = self.rows()
+        if not rows:
+            return (False, -1, "empty")  # no witnessed history — honest, NOT "verified"
+        first_signed = next((i for i, r in enumerate(rows) if "hash" in r), None)
+        if first_signed is None:
+            # no signed rows at all: a genuine pre-signing legacy ledger OR a strip-all-hashes forgery —
+            # indistinguishable, so NEVER "verified". An honest consumer treats "unsigned" as untrusted.
+            return (False, -1, "unsigned")
+        prev = ""  # the first signed row must be genesis (prev == "") — leading-strip breaks here
+        for i in range(first_signed, len(rows)):
+            row = rows[i]
             if "hash" not in row:
-                if started:
-                    return (False, i, "unhashed-row-in-chain")
-                continue  # legal pre-chain prefix
-            started = True
+                return (False, i, "unhashed-row-in-chain")  # a gap after signing began = tampering
             stored = row.get("hash", "")
             body = {k: v for k, v in row.items() if k not in ("hash", "sig")}
             recomputed = hashlib.sha256(
@@ -246,11 +264,12 @@ class CommandLedger:
             if row.get("prev", "") != prev:
                 return (False, i, "broken-link")
             prev = stored
-        return (True, -1, "ok")
+        return (True, first_signed, "ok")
 
     def chain_head(self) -> str:
-        """The current chain head (the last row's hash) — an anchor a caller can publish externally so
-        even a full-chain rewrite by a key-holder becomes detectable against the published head."""
+        """The current chain head (the last row's hash). Publish this + ``len(rows())`` OUT-OF-BAND (a
+        location the ledger's writer cannot rewrite) to detect the residual tail-truncation / whole-
+        replacement that ``verify_chain`` alone cannot (a valid prefix of a valid chain still verifies)."""
         return self._head
 
 
@@ -273,26 +292,47 @@ def ledger_key_path(led_path: str | None = None) -> str:
 
 
 def load_ledger_key(path: str) -> bytes:
-    """Load — or first-time create, mode 0600 — the HMAC key that signs ledger rows. Created atomically
-    with ``O_EXCL`` so a concurrent first-run cannot race two keys; a loser re-reads the winner's key.
-    A second principal without the operator's uid cannot read a 0600 key, so the signature is tamper-
-    evidence exactly at the trust boundary the ledger names."""
+    """Load — or first-time create, mode 0600 — the HMAC key that signs ledger rows.
+
+    Fail-CLOSED on any weak/ambiguous key rather than silently downgrading to a forgeable one (the
+    review found ``b""`` from a 0-byte file made the HMAC a no-op). A key shorter than 32 bytes is a
+    HARD error — a missing/empty/short key raises, which degrades the command router to read-only-and-
+    disclosed (never a silent public-key signer). The read uses ``O_NOFOLLOW`` (a pre-planted symlink
+    key is refused, not followed); creation writes a temp file + fsync + atomic hard-link so a crash
+    between create and write can never leave a 0-byte key. NOTE (honest): the 0600 mode protects READ,
+    but if the ledger DIRECTORY is writable by a second principal, dir-write governs unlink — they can
+    replace the key. Full protection needs the key in an operator-only directory or out-of-band."""
     try:
-        with open(path, "rb") as f:
-            existing = f.read()
-        if existing:
-            return existing
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
-        pass
+        fd = None
+    except OSError as e:  # ELOOP (symlink) / not-a-regular-file — refuse, never follow
+        raise RuntimeError(f"ledger key {path!r} is not a regular file (refusing to follow): {e}") from e
+    if fd is not None:
+        with os.fdopen(fd, "rb") as f:
+            existing = f.read()
+        if len(existing) >= 32:
+            return existing
+        raise RuntimeError(
+            f"ledger key {path!r} is {len(existing)}B (<32) — refusing a weak/empty key; "
+            "remove it to regenerate (a truncated key would make row signatures forgeable)"
+        )
     key = os.urandom(32)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".ledger-key.", dir=d)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.fchmod(fd, 0o600)
+        os.write(fd, key)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.link(tmp, path)  # atomic; FileExistsError if another instance won the create race
     except FileExistsError:
-        with open(path, "rb") as f:
-            return f.read()
-    with os.fdopen(fd, "wb") as f:
-        f.write(key)
+        os.unlink(tmp)
+        return load_ledger_key(path)  # re-read the winner's key, with the same validation
+    os.unlink(tmp)
     return key
 
 
@@ -364,6 +404,16 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
         "commands": commands,
         # enforcement is ABSENT, not dark: the dispatch-gate observably does not exist until U13/CP-E.
         "enforcement": "absent",
-        # tamper-evidence of the witness itself: "verified" or a break reason — honest, never faked green.
-        "integrity": "verified" if chain_ok else f"broken:{chain_reason}",
+        # tamper-evidence of the witness itself — honest, never faked green. "verified" ONLY for an intact
+        # signed chain; "empty"/"unsigned" for no signed history (a strip-all-hashes forgery reads
+        # "unsigned", NOT "verified"); "broken:<reason>" for detected in-place tampering. RESIDUAL: tail
+        # truncation reads "verified" for the surviving prefix — detect it with an out-of-band chain_head
+        # + row-count anchor (verify_chain's docstring). A consumer must treat non-"verified" as untrusted.
+        "integrity": (
+            "verified"
+            if chain_ok
+            else chain_reason
+            if chain_reason in ("empty", "unsigned")
+            else f"broken:{chain_reason}"
+        ),
     }

@@ -155,7 +155,7 @@ def test_chain_verifies_and_rows_are_linked_and_signed(tmp_path):
     assert rows[0]["prev"] == ""  # genesis
     assert rows[1]["prev"] == rows[0]["hash"]  # linked to the prior row
     ok, idx, reason = led.verify_chain()
-    assert ok and idx == -1 and reason == "ok"
+    assert ok and idx == 0 and reason == "ok"  # idx = first-signed index (genesis at 0)
 
 
 def test_chain_detects_content_tampering(tmp_path):
@@ -256,3 +256,66 @@ def test_rejected_verdict_applies_nothing(tmp_path):
     verdict = [r for r in led.rows() if r["kind"] == "verdict"][0]
     assert verdict["effect"] == {}  # honest empty effect, never fabricated
     assert read_commands(p, allowlist=[])["commands"][0]["applied"] == ""
+
+
+# --- bypass regressions (the adversarial review found these shipped green in slice 1) ---
+
+
+def test_strip_all_hashes_reads_unsigned_not_verified(tmp_path):
+    # B1: an attacker who strips every `hash` field forges arbitrary history. It must NOT read verified —
+    # a chain-less ledger is "unsigned" (untrusted), never green.
+    p = str(tmp_path / "commands.jsonl")
+    forged = [
+        {"kind": "demand", "event_id": "x", "verb": "dispatch", "target": "/etc/shadow"},
+        {"kind": "verdict", "event_id": "x", "status": "ok", "http": 200},
+    ]
+    with open(p, "w") as f:
+        for r in forged:
+            f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
+    ok, _i, reason = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok and reason == "unsigned"
+    assert read_commands(p, allowlist=[])["integrity"] == "unsigned"  # never "verified"
+
+
+def test_empty_ledger_reads_empty_not_verified(tmp_path):
+    # B5: an absent/emptied ledger must not read "verified" ("never green by default").
+    p = str(tmp_path / "commands.jsonl")
+    open(p, "w").close()
+    ok, _i, reason = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok and reason == "empty"
+    assert read_commands(p, allowlist=[])["integrity"] == "empty"
+
+
+def test_short_or_empty_key_is_refused(tmp_path):
+    # B2: a 0-byte / short key must HARD-error, never a silent b"" (a forgeable no-op HMAC).
+    import pytest
+
+    from reins_ledger import load_ledger_key
+
+    kp = str(tmp_path / "ledger-key")
+    open(kp, "w").close()  # 0-byte key
+    with pytest.raises(RuntimeError):
+        load_ledger_key(kp)
+    with open(kp, "wb") as f:
+        f.write(b"short")  # < 32 bytes
+    with pytest.raises(RuntimeError):
+        load_ledger_key(kp)
+
+
+def test_tail_truncation_is_a_documented_residual(tmp_path):
+    # B3: verify_chain alone does NOT detect tail truncation (a valid prefix still verifies). This PINS
+    # that honest limitation — the mitigation is chain_head() + row-count published OUT-OF-BAND.
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    d1 = led.record_demand("claim", "a", "i1")
+    led.record_verdict(d1["event_id"], "ok", 200)
+    led.record_demand("claim", "b", "i2")  # the row an attacker will hide
+    full_head, full_len = led.chain_head(), len(led.rows())
+    rows = [json.loads(line) for line in open(p) if line.strip()]
+    with open(p, "w") as f:  # drop the last row (tail truncation)
+        for r in rows[:-1]:
+            f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
+    truncated = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    ok, _i, reason = truncated.verify_chain()
+    assert ok and reason == "ok"  # RESIDUAL: truncation is NOT caught by the chain alone
+    assert truncated.chain_head() != full_head and len(truncated.rows()) != full_len  # out-of-band anchor catches it
