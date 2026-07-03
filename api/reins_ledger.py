@@ -176,11 +176,14 @@ class CommandLedger:
             return row
 
     def record_verdict(
-        self, event_id: str, status: str, http: int, reason: str = ""
+        self, event_id: str, status: str, http: int, reason: str = "", effect: dict | None = None
     ) -> dict[str, Any]:
         """Append a verdict row for a prior demand. ``status`` is the router verdict
         (ok/authority-rejected/preflight-failed/transport-failed/not-wired/...). A terminal-success
-        verdict also arms idempotent replay for this event_id."""
+        verdict also arms idempotent replay for this event_id. ``effect`` is the APPLIED effect the
+        transport produced (receipt_id / event_seq / fold_delta / spooled) — so the signed ledger
+        carries preview→gate→APPLY, not just the gate verdict. Empty on a rejected/failed attempt
+        (nothing was applied — an honest empty effect, never a fabricated one)."""
         row = {
             "kind": "verdict",
             "event_id": event_id,
@@ -188,6 +191,7 @@ class CommandLedger:
             "status": status,
             "http": http,
             "reason": reason,
+            "effect": effect or {},  # what the transport actually did — the APPLY half of the record
             # witness stays pending until the spine echoes command_id back (SA-3, wired at U7).
             "witness": "pending",
         }
@@ -332,6 +336,10 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
             "target": d.get("target", ""),
             "status": v.get("status", "pending"),  # no verdict yet -> honest pending
             "witness": v.get("witness", "pending"),  # spine echo pending until U7/SA-3
+            # the APPLY indicator: did the transport produce an effect? (a receipt landed). Structural
+            # boolean-ish — the effect CONTENT (fold_delta/receipt_id) stays in the signed ledger, never
+            # surfaced raw here. Empty for a rejected/failed attempt (nothing applied) — honest.
+            "applied": "yes" if (v.get("effect") or {}).get("receipt_id") else "",
             "task_id": refs.get("task_id", ""),
             "session_role": refs.get("session_role", ""),
             "route_id": refs.get("route_id", ""),
@@ -347,7 +355,7 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
         # status, witness carry no path/PII. The generic allowlist denies them (not facet names), which
         # would MISMATCH the renderer (RenderCommandRow shows the skeleton); classify them ok so the
         # projection contract matches the rendered surface. Path/id-class refs stay denied below.
-        for structural in ("verb", "status", "witness"):
+        for structural in ("verb", "status", "witness", "applied"):
             air[structural] = "ok"
         commands.append({**fields, "air": air})
 

@@ -342,7 +342,22 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
                  "reason": f"{verb} transport raised: {e!r} (witnessed; nothing applied)"},
                 status_code=500,
             )
-        ledger.record_verdict(eid, resp.status, resp.http, resp.reason or "")
+        ledger.record_verdict(
+            eid, resp.status, resp.http, resp.reason or "",
+            # record the APPLIED effect on success — what the transport produced (receipt/effect), so the
+            # signed ledger carries preview→gate→APPLY, not just the gate verdict. Nothing applied on a
+            # non-ok verdict (an honest empty effect, never fabricated).
+            effect=(
+                {
+                    "receipt_id": resp.receipt_id,
+                    "event_seq": resp.event_seq,
+                    "fold_delta": resp.fold_delta,
+                    "spooled": resp.spooled,
+                }
+                if resp.status == "ok"
+                else None
+            ),
+        )
         out = reins_command._resp_to_dict(resp)
         out["event_id"] = eid
         return JSONResponse(out, status_code=resp.http)
