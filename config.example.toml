@@ -1,29 +1,44 @@
-# config.example.toml — INSTANCE config (copy to ~/.config/reins/config.toml; never commit real paths)
+# config.example.toml — reins INSTANCE config.
+# Copy to ~/.config/reins/config.toml (or point $REINS_CONFIG at it) and fill in your own paths.
+# The reins binary bakes NO paths; everything here is your instance. Placeholders read /path/to/... —
+# replace them. `--demo` needs none of this.
+
+# The read API endpoint the cockpit talks to.
 api_url = "http://127.0.0.1:8799"
-council_root = "~/projects/hapax-spine"
+
+# Your SUBSTRATE root — the estate reins reads from (its event ledger + registries).
+# (The config key is currently `council_root`; it is being generalized to `substrate_root`.)
+council_root = "/path/to/your/substrate"
+
+# The coordination event ledger (SQLite). Default lives under the tool's cache namespace.
 ledger_path = "~/.cache/hapax/coord/ledger.db"
-# Optional READ-side metadata roots for :sessions detail. The API stats/refers to artifacts only;
-# it does not read raw transcript contents.
-cc_tasks_active = "~/Documents/Personal/20-projects/hapax-cc-tasks/active"
+
+# --- Optional READ-side metadata roots (uncomment/adjust as needed; metadata only, never bodies) ---
+# cc_tasks_active = "/path/to/your/tasks"          # task registry for :tasks/:sessions detail
 session_transcript_roots = []
 orchestration_ledger_dir = "~/.cache/hapax/orchestration"  # route decision/dispatch receipts
-lifecycle_registry_paths = ["~/projects/reins/docs/lifecycle-registries/hapax-lifecycle-registry-20260625.json"]  # optional authority-aware SDLC/RDLC/n-DLC lifecycle contracts
-domain_pack_paths = ["~/projects/reins/docs/domain-packs/hapax-domain-pack-20260625.json"]  # optional source-backed SDLC/RDLC/n-DLC domain packs
-capability_surface_pack_paths = ["~/projects/reins/docs/capability-surface-packs/hapax-capability-surface-pack-20260625.json"]  # optional source-backed capability-surface discovery packs
-# Optional HKP cache-only metadata. Reins reads only _hkp manifest/policy/snapshot/index/report
-# metadata; it does not read concept bodies, prompt context text, provider logs, or raw paths.
+
+# Optional lifecycle / domain / capability packs. The shipped example packs live in this repo's docs/ —
+# point these at your checkout (or your own packs).
+lifecycle_registry_paths = ["/path/to/reins/docs/lifecycle-registries/hapax-lifecycle-registry-20260625.json"]
+domain_pack_paths = ["/path/to/reins/docs/domain-packs/hapax-domain-pack-20260625.json"]
+capability_surface_pack_paths = ["/path/to/reins/docs/capability-surface-packs/hapax-capability-surface-pack-20260625.json"]
+
+# Optional caches (tool namespace; created on demand).
 hkp_shadow_root = "~/.cache/hapax/hkp-shadow"
 hkp_index_root = "~/.cache/hapax/hkp-shadow-index"
 hkp_report_root = "~/.cache/hapax/hkp-reports"
 hkp_bundles = ["sdlc"]
-# Optional READ-side intake snapshots. The API reads bounded metadata/counts from these files;
-# it does not read Obsidian note bodies, desktop notification bodies, or raw security URLs.
+
+# Optional READ-side intake snapshots (bounded metadata/counts only; no note/notification bodies).
 request_intake_state = "~/.cache/hapax/request-intake-state.json"
 planning_feed_state = "~/.cache/hapax/planning-feed-state.json"
 p0_incident_state = "~/.cache/hapax/p0-incident-intake/state.json"
 p0_incident_events = "~/.cache/hapax/p0-incident-intake/events.jsonl"
 security_signal_state = "~/.cache/hapax/security-signal-intake-state.json"
+
 palette = "gruvbox"           # gruvbox (R&D) | solarized (Research)
+
 # default-deny: every field NOT listed renders ▒▒▒ under the AIR (on-air) lens.
-# includes structural event/task/session/dynamics fields so topology stays legible on air.
+# Includes structural event/task/session/dynamics fields so topology stays legible on air.
 air_allowlist = ["kind", "score", "ts", "task_id", "stage", "no_go", "id", "layer", "status", "source", "target", "relation", "res", "role", "platform", "state", "alive", "idle", "stalled", "output_age_s", "relay_age_s", "readiness", "blocker", "attention", "evidence_count", "resume_ready", "evidence_summary", "by_kind", "transcript_roots_observed", "transcript_roots_missing", "truncated", "count", "age_bucket", "coverage", "task_link_state", "severity", "privacy", "raw_access", "exists", "capability_id", "capability_class", "surface_family", "spend_model", "egress_class", "receipt_requirement", "route_count", "ok_count", "blocked_count", "hkp_posture", "source_refs", "source_ref_labels", "route_id", "mode", "profile", "model_id", "effort", "context_mode", "fast_mode", "quantization", "capacity_pool", "demand_vector", "hardening", "eval_plane", "review_obligation", "learning_eligibility", "benchmark_coverage", "fixed_overhead", "route_state", "authority_ceiling", "freshness_ok", "quota_state", "receipt_count", "blockers", "authority", "route_binding_state", "tool_id", "available", "authority_use", "observed_at", "stale_after", "gate_id", "domain", "evidence", "missing", "action", "detail", "generated_at", "package_hash", "default_lens", "domain_id", "lifecycle", "terrain", "depth", "scope", "claim_ceiling", "windows", "surfaces", "parity", "source_refs", "lifecycle_id", "owner", "plant", "posture", "maturity", "adapter_id", "claim_surface", "mutation_surface", "dark_policy", "freshness_policy", "air_class", "commands", "receipt_contracts", "next_evidence"]
