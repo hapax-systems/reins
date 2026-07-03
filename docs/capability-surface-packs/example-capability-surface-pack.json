@@ -1,0 +1,59 @@
+{
+  "pack_id": "example-capability-surface-pack",
+  "generated_at": "2026-07-03T00:00:00Z",
+  "authority_case": "support_non_authoritative",
+  "default_lens": "capability-readiness",
+  "description": "Neutral example capability-surface pack demonstrating the discovery row format. Entries are illustrative discovery evidence, not route authority; replace with your own capability inventory.",
+  "capability_classes": [
+    {
+      "capability_id": "example_source_acquisition",
+      "status": "admission-incomplete",
+      "authority": "sub-router",
+      "route_count": 1,
+      "ok_count": 0,
+      "blocked_count": 1,
+      "evidence_count": 1,
+      "blocker": "example: usage-telemetry schema, API-credit receipt, and connector egress policy pending",
+      "source_refs": ["example-handoff.md#source_acquisition"],
+      "capability_class": "source_acquisition",
+      "surface_family": "source_acquisition",
+      "spend_model": "mixed_api_connector",
+      "egress_class": "source_query",
+      "receipt_requirement": "source, egress, quota, and route receipt"
+    },
+    {
+      "capability_id": "example_verifier_floor_checker",
+      "status": "preview-only",
+      "authority": "verifier",
+      "route_count": 1,
+      "ok_count": 1,
+      "blocked_count": 0,
+      "evidence_count": 1,
+      "blocker": "example: verifier-floor receipts not yet unified",
+      "source_refs": ["example-handoff.md#verifier_floor_checker"],
+      "capability_class": "verifier_floor_checker",
+      "surface_family": "verifier_floor_checker",
+      "spend_model": "ci_or_local",
+      "egress_class": "verifier_signal",
+      "receipt_requirement": "floor-check/verifier receipt"
+    }
+  ],
+  "surfaces": [
+    {
+      "capability_id": "example_docs_connector",
+      "status": "observed",
+      "authority": "docs support",
+      "route_count": 1,
+      "ok_count": 1,
+      "blocked_count": 0,
+      "evidence_count": 1,
+      "blocker": "example: docs-currentness support only; not repo-mutation authority",
+      "source_refs": ["example-handoff.md#docs_connector"],
+      "capability_class": "source_acquisition",
+      "surface_family": "docs_currentness",
+      "spend_model": "connector_or_mcp",
+      "egress_class": "docs_query",
+      "receipt_requirement": "docs-source receipt"
+    }
+  ]
+}

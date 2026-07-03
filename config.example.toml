@@ -22,7 +22,7 @@ orchestration_ledger_dir = "~/.cache/hapax/orchestration"  # route decision/disp
 # point these at your checkout (or your own packs).
 lifecycle_registry_paths = ["/path/to/reins/docs/lifecycle-registries/hapax-lifecycle-registry-20260625.json"]
 domain_pack_paths = ["/path/to/reins/docs/domain-packs/hapax-domain-pack-20260625.json"]
-capability_surface_pack_paths = ["/path/to/reins/docs/capability-surface-packs/hapax-capability-surface-pack-20260625.json"]
+capability_surface_pack_paths = ["/path/to/reins/docs/capability-surface-packs/example-capability-surface-pack.json"]
 
 # Optional caches (tool namespace; created on demand).
 hkp_shadow_root = "~/.cache/hapax/hkp-shadow"

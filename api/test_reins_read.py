@@ -1180,7 +1180,9 @@ def test_capability_surface_pack_rows_are_source_backed(tmp_path):
 
 
 def test_checked_in_capability_surface_pack_carries_explicit_ontology():
-    pack = Path(__file__).resolve().parents[1] / "docs" / "capability-surface-packs" / "hapax-capability-surface-pack-20260625.json"
+    # the checked-in EXAMPLE pack demos the capability-surface format with neutral entries (no
+    # operator-specific toolchain). Every row carries the full ontology so the format is self-describing.
+    pack = Path(__file__).resolve().parents[1] / "docs" / "capability-surface-packs" / "example-capability-surface-pack.json"
     doc = json.loads(pack.read_text())
     rows = [*doc["capability_classes"], *doc["surfaces"]]
     required = ["capability_class", "surface_family", "spend_model", "egress_class", "receipt_requirement"]
@@ -1193,19 +1195,9 @@ def test_checked_in_capability_surface_pack_carries_explicit_ontology():
     assert missing == []
 
     by_id = {row["capability_id"]: row for row in rows}
-    assert by_id["source_acquisition"]["capability_class"] == "source_acquisition"
-    assert by_id["tavily_source_acquisition"]["surface_family"] == "tavily"
-    assert by_id["github_repo_ci"]["capability_class"] == "verifier_floor_checker"
-    assert by_id["google_workspace_youtube_connector"]["egress_class"] == "public_or_workspace"
-    assert by_id["network_admin_tailscale"]["capability_class"] == "infrastructure_control"
-    assert by_id["glm_coding_plan_tool_surface"]["status"] == "manual-bakeoff"
-    assert "S15 proves invocation" in by_id["glm_coding_plan_tool_surface"]["blocker"]
-    assert "example-ref.yaml#note" in by_id["glm_coding_plan_tool_surface"]["source_refs"]
-    assert by_id["fugu_raw_codex"]["status"] == "raw-manual"
-    assert by_id["fugu_raw_codex"]["authority"] == "not dispatchable"
-    assert by_id["fugu_raw_codex"]["route_count"] == 0
-    assert by_id["fugu_ultra_raw_codex"]["status"] == "raw-manual"
-    assert by_id["fugu_ultra_raw_codex"]["route_count"] == 0
+    # neutral example ids demo each capability class
+    assert by_id["example_source_acquisition"]["capability_class"] == "source_acquisition"
+    assert by_id["example_verifier_floor_checker"]["capability_class"] == "verifier_floor_checker"
 
 
 def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, tmp_path):
