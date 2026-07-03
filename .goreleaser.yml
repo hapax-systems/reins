@@ -1,0 +1,51 @@
+# GoReleaser — prebuilt cross-platform reins binaries + a GitHub release (the 5-min, no-compiler path).
+# `goreleaser release --clean` on a tag; `goreleaser build --snapshot --clean` locally.
+version: 2
+
+project_name: reins
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: reins
+    main: ./cmd/reins
+    binary: reins
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # main.version is the ONE semver source (VERSION file / ldflag) — stamp the release tag.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: reins
+    formats: [tar.gz]
+    name_template: "reins_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - config.example.toml
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: hapax-systems
+    name: reins
+  # reins fronts an n-DLC automation system; the demo needs no estate. Honest, declare-and-navigate framing.
+  header: |
+    ## reins {{ .Version }}
+    The governed cockpit for the Hapax n-DLC automation system. Try it estate-free:
+    `reins --demo`. Source-available under BSL-1.1 (converts to Apache-2.0 on the change date).
+  footer: |
+    Not axiom/taxonomy-agnostic yet — declare-and-navigate today; the governed-automation-for-any-n-DLC
+    generality is on the roadmap. See the README.
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
