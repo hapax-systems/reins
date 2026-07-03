@@ -396,10 +396,11 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
             "target": d.get("target", ""),
             "status": v.get("status", "pending"),  # no verdict yet -> honest pending
             "witness": v.get("witness", "pending"),  # spine echo pending until U7/SA-3
-            # the APPLY indicator: did the transport produce an effect? (a receipt landed). Structural
-            # boolean-ish — the effect CONTENT (fold_delta/receipt_id) stays in the signed ledger, never
-            # surfaced raw here. Empty for a rejected/failed attempt (nothing applied) — honest.
-            "applied": "yes" if (v.get("effect") or {}).get("receipt_id") else "",
+            # the APPLY indicator: did a REAL estate write occur? Derived from the effect's explicit
+            # `applied` flag (the transport asserts it) — NOT from receipt-presence, because a PREVIEW
+            # returns a receipt but writes nothing (that inference was a false-green). Empty for a
+            # preview/witness-only verb OR a rejected/failed attempt — honest.
+            "applied": "yes" if (v.get("effect") or {}).get("applied") else "",
             "task_id": refs.get("task_id", ""),
             "session_role": refs.get("session_role", ""),
             "route_id": refs.get("route_id", ""),

@@ -75,7 +75,7 @@ func (m ServingMeta) VerbModes() map[string]string {
 type CommandResult struct {
 	Status    string `json:"status"`
 	HTTP      int    `json:"http"`
-	EventID   string `json:"event_id"`  // the witnessed ledger event id (demand+verdict)
+	EventID   string `json:"event_id"` // the witnessed ledger event id (demand+verdict)
 	Reason    string `json:"reason"`
 	FoldDelta string `json:"fold_delta"` // the transport's own honest phrasing (preview: "would emit …")
 	Duplicate bool   `json:"duplicate"`
@@ -483,7 +483,7 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 
 type ctxProjection struct {
 	Affordances []struct {
-		Subject     string                     `json:"subject_ref"`
+		Subject     string                      `json:"subject_ref"`
 		Affordances []grammar.ContextAffordance `json:"affordances"`
 	} `json:"affordances"`
 	FactCount int `json:"fact_count"`
@@ -553,6 +553,7 @@ type commandsResp struct {
 	Error       string       `json:"error"`
 	Commands    []commandRow `json:"commands"`
 	Enforcement string       `json:"enforcement"`
+	Integrity   string       `json:"integrity"` // tamper-evidence verdict: verified|empty|unsigned|broken:<reason>
 }
 
 type routeCandidateRow struct {
@@ -641,19 +642,19 @@ func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, 
 
 // FetchCommands reads the witnessed command ledger projection (/read/commands): demand+verdict datoms
 // with an honest witness state + the enforcement cell. Returns (commands, enforcement, dark, err).
-func FetchCommands(apiURL string) ([]grammar.Command, string, bool, error) {
+func FetchCommands(apiURL string) ([]grammar.Command, string, string, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/commands")
 	if err != nil {
-		return nil, "dark", true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, "dark", "unknown", true, fmt.Errorf("reins: READ api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/commands"); err != nil {
-		return nil, "dark", true, err
+		return nil, "dark", "unknown", true, err
 	}
 	var r commandsResp
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, "dark", true, err
+		return nil, "dark", "unknown", true, err
 	}
 	out := make([]grammar.Command, 0, len(r.Commands))
 	for _, cr := range r.Commands {
@@ -666,10 +667,14 @@ func FetchCommands(apiURL string) ([]grammar.Command, string, bool, error) {
 	if enf == "" {
 		enf = "absent"
 	}
-	if r.Error != "" {
-		return out, enf, true, fmt.Errorf("%s", r.Error)
+	integ := r.Integrity
+	if integ == "" {
+		integ = "unknown" // never assume verified when the projection omits it
 	}
-	return out, enf, r.Dark, nil
+	if r.Error != "" {
+		return out, enf, integ, true, fmt.Errorf("%s", r.Error)
+	}
+	return out, enf, integ, r.Dark, nil
 }
 
 // FetchObserve reads the whole-system awareness aggregate (/read/observe) — per-dimension live/dark, raw

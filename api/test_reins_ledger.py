@@ -230,14 +230,14 @@ def test_read_commands_surfaces_integrity(tmp_path):
 
 
 def test_verdict_records_applied_effect_in_the_signed_record(tmp_path):
-    # the APPLY half: a success verdict carries the transport's effect, covered by the hash/sig, and
-    # /read/commands surfaces only a safe `applied` indicator (never the effect CONTENT).
+    # the APPLY half: a REAL-write verdict (effect.applied True) carries the transport's effect, covered
+    # by the hash/sig; /read/commands surfaces only a safe `applied` indicator (never the effect CONTENT).
     p = str(tmp_path / "commands.jsonl")
     led = CommandLedger(p, clock=lambda: "t", key=_KEY)
-    d = led.record_demand("stage", "cc-task-x", "idem-1")
+    d = led.record_demand("dispatch", "lane-a", "idem-1")
     led.record_verdict(
         d["event_id"], "ok", 200,
-        effect={"receipt_id": "r-123", "event_seq": None, "fold_delta": "staged -> S6", "spooled": False},
+        effect={"receipt_id": "r-123", "event_seq": 7, "fold_delta": "dispatched", "spooled": False, "applied": True},
     )
     verdict = [r for r in led.rows() if r["kind"] == "verdict"][0]
     assert verdict["effect"]["receipt_id"] == "r-123"  # the applied effect IS in the record
@@ -246,6 +246,19 @@ def test_verdict_records_applied_effect_in_the_signed_record(tmp_path):
     cmd = read_commands(p, allowlist=[])["commands"][0]
     assert cmd["applied"] == "yes"
     assert "fold_delta" not in cmd and "receipt_id" not in cmd  # content stays in the ledger, not the datom
+
+
+def test_preview_receipt_never_reads_applied(tmp_path):
+    # a preview returns a receipt but writes NOTHING (effect.applied False) — it must NEVER read applied.
+    # The old receipt-presence inference was a false-green; applied is the writer's assertion, not implied.
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    d = led.record_demand("resume", "lane-a", "idem-2")
+    led.record_verdict(
+        d["event_id"], "ok", 200,
+        effect={"receipt_id": "preview-idem-2", "fold_delta": "would emit ...", "applied": False},
+    )
+    assert read_commands(p, allowlist=[])["commands"][0]["applied"] == ""  # preview never false-greens
 
 
 def test_rejected_verdict_applies_nothing(tmp_path):

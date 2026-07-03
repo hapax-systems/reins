@@ -353,6 +353,7 @@ def _mount_command_router(app: FastAPI, ledger: reins_ledger.CommandLedger) -> N
                     "event_seq": resp.event_seq,
                     "fold_delta": resp.fold_delta,
                     "spooled": resp.spooled,
+                    "applied": resp.applied,  # True only for a real estate write — previews stay False
                 }
                 if resp.status == "ok"
                 else None

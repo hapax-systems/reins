@@ -53,6 +53,10 @@ class Response:
     spooled: bool = False
     duplicate: bool = False
     reason: str | None = None
+    # applied = a REAL estate write occurred (NOT a preview). A preview/witness-only transport returns a
+    # receipt but leaves this False, so `applied` never false-greens a preview (the mode is the writer's
+    # to assert, not inferable from receipt-presence). Only a governed real-write transport sets True.
+    applied: bool = False
 
 
 def route_command(

@@ -5266,8 +5266,19 @@ func (m Model) renderCommandCatalog(w int) string {
 	if strings.TrimSpace(enf) == "" {
 		enf = "absent"
 	}
+	integ := m.CommandsIntegrity
+	if strings.TrimSpace(integ) == "" {
+		integ = "unknown"
+	}
+	// honest coloring: ONLY "verified" reads affirmative (pri); unsigned/empty/unknown/broken:* all read
+	// alert (fch), never green — the point of the signed chain is that its verdict cannot be faked green.
+	integTok := "fch"
+	if integ == "verified" {
+		integTok = "pri"
+	}
 	b.WriteString(" " + grammar.C("brt", "WITNESSED LEDGER") +
-		grammar.C("mut", " — enforcement ") + grammar.C("brt", enf) + "\n")
+		grammar.C("mut", " — enforcement ") + grammar.C("brt", enf) +
+		grammar.C("mut", " · integrity ") + grammar.C(integTok, integ) + "\n")
 	switch {
 	case m.CommandsDark:
 		reason := strings.TrimSpace(m.CommandsError)

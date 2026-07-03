@@ -478,21 +478,22 @@ type Model struct {
 	DispatchRecords     []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
 	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (live FetchTurns; fixture fallback when the feed is dark)
 	TurnBlocks          map[string][]grammar.TurnBlock
-	TurnRole            string // the session role whose turns the chat-pane streams (set on entry from the focused lane)
-	TurnsDark           bool   // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
-	TurnsFixture        bool   // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
-	PortForeign         bool   // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
-	Demo                bool   // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
-	CockpitVersion      string // the binary's compiled semver (main.version); compared to APIVersion → GEN-SKEW
-	APIVersion          string // the API's /read/meta version; a mismatch means the two halves shipped out of sync
-	ServingSHA          string // U1: the serving generation sha from /read/meta (staleness/identity witness)
-	WiredVerbs          map[string]bool     // apply-seam: the router's live wired-set from /read/meta.verbs
-	VerbModes           map[string]string   // apply-seam: per-verb mode (preview verbs must not read as applied)
-	DeviceOverride      DeviceClass         // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
-	PendingCommand      *CommandRequest     // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
-	LastVerdict         string              // apply-seam: the last witnessed command verdict (rendered)
+	TurnRole            string            // the session role whose turns the chat-pane streams (set on entry from the focused lane)
+	TurnsDark           bool              // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
+	TurnsFixture        bool              // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
+	PortForeign         bool              // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
+	Demo                bool              // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
+	CockpitVersion      string            // the binary's compiled semver (main.version); compared to APIVersion → GEN-SKEW
+	APIVersion          string            // the API's /read/meta version; a mismatch means the two halves shipped out of sync
+	ServingSHA          string            // U1: the serving generation sha from /read/meta (staleness/identity witness)
+	WiredVerbs          map[string]bool   // apply-seam: the router's live wired-set from /read/meta.verbs
+	VerbModes           map[string]string // apply-seam: per-verb mode (preview verbs must not read as applied)
+	DeviceOverride      DeviceClass       // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
+	PendingCommand      *CommandRequest   // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
+	LastVerdict         string            // apply-seam: the last witnessed command verdict (rendered)
 	Commands            []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
 	CommandsEnforcement string            // U3b: the enforcement cell — armed|breakglass|absent|dark (absent until CP-E)
+	CommandsIntegrity   string            // tamper-evidence of the witnessed ledger — verified|empty|unsigned|broken:<reason>|unknown
 	CommandsDark        bool
 	CommandsError       string
 	pending             *pendingReanchor // U2: identity anchors from --resume awaiting the first non-dark fold (unexported: never serialized)
@@ -518,7 +519,7 @@ type Model struct {
 	VaultDark           bool
 	Observe             []grammar.ObserveDimension // E11.7 whole-system awareness (live /read/observe)
 	ObserveDark         bool
-	RoutePosture        grammar.RoutePosture   // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
+	RoutePosture        grammar.RoutePosture     // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
 	RouteCandidates     []grammar.RouteCandidate // U5 — measured demand per routing_class
 	RouteDark           bool
 	DynamicsDark        bool
@@ -2683,18 +2684,23 @@ func (m Model) FoldCommandVerdict(v CommandVerdictMsg) Model {
 type CommandsMsg struct {
 	Commands    []grammar.Command
 	Enforcement string
+	Integrity   string
 	Dark        bool
 	Error       string
 }
 
 // FoldCommands folds the witnessed command ledger. Honest-dark on an unreachable/error feed (the render
 // discloses it); enforcement defaults to "absent" (the gate observably does not exist yet — never dark).
-func (m Model) FoldCommands(cmds []grammar.Command, enforcement string, dark bool) Model {
+func (m Model) FoldCommands(cmds []grammar.Command, enforcement, integrity string, dark bool) Model {
 	m.Commands = cmds
 	if strings.TrimSpace(enforcement) == "" {
 		enforcement = "absent"
 	}
 	m.CommandsEnforcement = enforcement
+	if strings.TrimSpace(integrity) == "" {
+		integrity = "unknown" // never render a blank as verified — honest default
+	}
+	m.CommandsIntegrity = integrity
 	m.CommandsDark = dark
 	return m
 }
@@ -2758,7 +2764,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.LastFold = "command-verdict"
 		return m, nil
 	case CommandsMsg:
-		m = m.FoldCommands(v.Commands, v.Enforcement, v.Dark)
+		m = m.FoldCommands(v.Commands, v.Enforcement, v.Integrity, v.Dark)
 		m.CommandsError = v.Error
 		m.LastFold = "commands"
 		return m, nil
@@ -3963,12 +3969,12 @@ func (m Model) updateField(v tea.KeyMsg) (tea.Model, tea.Cmd) {
 // each WOULD emit, the authority it requires, its preflight + receipt contract + UI delta. One table
 // so the preview is consistent everywhere and the never-mint shape is legible (vs scattered strings).
 var governedVerbSpecs = map[string]struct{ payload, authority, preflight, receipt, uiDelta string }{
-	"arm":    {"sdlc.authorization_flip(release_authorized=true)", "operator + governed COMMAND route (release-arm)", "target + authority-packet + release gate", "armed receipt → spine", "task arms; gate re-evaluates"},
-	"rework": {"sdlc.stage_transition(→rework)", "governed COMMAND route", "target + stage-legality", "stage receipt → spine", "stage → rework"},
-	"refute": {"review.fail(target)", "governed COMMAND route", "target + open review thread", "review receipt → spine", "review recorded as fail"},
-	"close":  {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
-	"resume": {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
-	"focus":  {"sdlc.focus_inflection(target)", "operator_attestation (loopback) — reins-local frontdoor primitive", "target + operator attention", "witnessed focus-inflection → ledger (route + spine consume)", "focus witnessed; the operator's prioritization is durable"},
+	"arm":        {"sdlc.authorization_flip(release_authorized=true)", "operator + governed COMMAND route (release-arm)", "target + authority-packet + release gate", "armed receipt → spine", "task arms; gate re-evaluates"},
+	"rework":     {"sdlc.stage_transition(→rework)", "governed COMMAND route", "target + stage-legality", "stage receipt → spine", "stage → rework"},
+	"refute":     {"review.fail(target)", "governed COMMAND route", "target + open review thread", "review receipt → spine", "review recorded as fail"},
+	"close":      {"task.closed(target)", "governed COMMAND route", "target + close preconditions (receipt contract)", "close receipt → spine", "task closes"},
+	"resume":     {"session.resume(ref)", "governed COMMAND route", "target + transcript/PTY/stdin bridge", "resume receipt → spine", "lane resumes"},
+	"focus":      {"sdlc.focus_inflection(target)", "operator_attestation (loopback) — reins-local frontdoor primitive", "target + operator attention", "witnessed focus-inflection → ledger (route + spine consume)", "focus witnessed; the operator's prioritization is durable"},
 	"breakglass": {"sdlc.breakglass(reason)", "operator_attestation (loopback) — the sanctioned frontdoor exit", "reason for outside-reins engagement", "witnessed sanctioned-exit → ledger", "breakglass witnessed; outside-reins engagement is on the record"},
 }
 

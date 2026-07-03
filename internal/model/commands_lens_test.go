@@ -15,7 +15,7 @@ func TestCommandsLensRendersWitnessedLedger(t *testing.T) {
 	m = m.FoldCommands([]grammar.Command{
 		{Verb: "claim", Target: "cc-task-x", Status: "not-wired", Witness: "pending", TaskID: "cc-task-x"},
 		{Verb: "resume", Target: "lane-a", Status: "ok", Witness: "pending"},
-	}, "absent", false)
+	}, "absent", "verified", false)
 	out := ansi.Strip(m.renderCommandCatalog(120))
 	if !strings.Contains(out, "WITNESSED LEDGER") || !strings.Contains(out, "enforcement absent") {
 		t.Fatalf("ledger header/enforcement missing:\n%s", out)
@@ -29,13 +29,13 @@ func TestCommandsLensRendersWitnessedLedger(t *testing.T) {
 }
 
 func TestCommandsLensHonestDarkAndEmpty(t *testing.T) {
-	dark := Model{Width: 120}.FoldCommands(nil, "", true)
+	dark := Model{Width: 120}.FoldCommands(nil, "", "unknown", true)
 	dark.CommandsError = "command ledger unreachable"
 	if !strings.Contains(ansi.Strip(dark.renderCommandCatalog(120)), "dark") {
 		t.Fatal("dark ledger must disclose, not render empty-as-fine")
 	}
 	// default enforcement is absent, never dark, on an empty-but-reachable ledger
-	empty := Model{Width: 120}.FoldCommands(nil, "", false)
+	empty := Model{Width: 120}.FoldCommands(nil, "", "empty", false)
 	out := ansi.Strip(empty.renderCommandCatalog(120))
 	if !strings.Contains(out, "enforcement absent") || !strings.Contains(out, "no commands witnessed yet") {
 		t.Fatalf("empty-reachable ledger not honest:\n%s", out)
@@ -60,11 +60,38 @@ func TestCommandRowRedactsTargetOnAir(t *testing.T) {
 	}
 }
 
+// The witnessed ledger's INTEGRITY (the signed hash-chain verdict) renders in the header and is honest:
+// "verified" reads affirmative, but a "broken:*"/"unsigned" verdict must SHOW (disclosed, never hidden)
+// and must NOT read as verified — tamper-evidence you can't fake green (avsdlc-receipt-integrity).
+func TestCommandsLensIntegrityBannerHonest(t *testing.T) {
+	verified := Model{Width: 120}.FoldCommands([]grammar.Command{
+		{Verb: "resume", Target: "lane-a", Status: "ok", Witness: "pending"},
+	}, "absent", "verified", false)
+	if !strings.Contains(ansi.Strip(verified.renderCommandCatalog(120)), "integrity verified") {
+		t.Fatalf("verified integrity not surfaced in the ledger header")
+	}
+	// a broken chain must be disclosed and must NOT read verified
+	broken := Model{Width: 120}.FoldCommands([]grammar.Command{
+		{Verb: "resume", Target: "lane-a", Status: "ok", Witness: "pending"},
+	}, "absent", "broken:hash-mismatch", false)
+	bout := ansi.Strip(broken.renderCommandCatalog(120))
+	if !strings.Contains(bout, "integrity broken:hash-mismatch") {
+		t.Fatalf("broken integrity not disclosed:\n%s", bout)
+	}
+	if strings.Contains(bout, "integrity verified") {
+		t.Fatalf("a broken chain must never read verified:\n%s", bout)
+	}
+	// a blank integrity defaults to "unknown", never verified
+	if !strings.Contains(ansi.Strip(Model{Width: 120}.FoldCommands(nil, "absent", "", false).renderCommandCatalog(120)), "integrity unknown") {
+		t.Fatalf("blank integrity must default to unknown, not verified")
+	}
+}
+
 // no-display-scalar: the command lens must not render a fabricated numeric ranking/score for a command.
 func TestCommandsLensNoScalar(t *testing.T) {
 	m := Model{Width: 120}.FoldCommands([]grammar.Command{
 		{Verb: "dispatch", Target: "lane", Status: "ok", Witness: "pending"},
-	}, "absent", false)
+	}, "absent", "verified", false)
 	row := ansi.Strip(grammar.RenderCommandRow(m.Commands[0], false))
 	// the row carries verb/target/status/witness — no bare 0..1 score token.
 	for _, scalar := range []string{"0.", "score", "rank "} {

@@ -231,8 +231,8 @@ func metaTick(url string) tea.Cmd { // identity is near-static; a slow re-check 
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchMetaOnce(url) })
 }
 func fetchCommandsOnce(url string) tea.Msg { // U3b: the witnessed command-ledger projection
-	cmds, enf, dark, err := api.FetchCommands(url)
-	msg := model.CommandsMsg{Commands: cmds, Enforcement: enf, Dark: dark}
+	cmds, enf, integ, dark, err := api.FetchCommands(url)
+	msg := model.CommandsMsg{Commands: cmds, Enforcement: enf, Integrity: integ, Dark: dark}
 	if err != nil {
 		msg.Error = err.Error()
 	}
