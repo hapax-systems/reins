@@ -69,6 +69,15 @@ func SeedModel(w, h int) model.Model {
 		{RowID: "e4", Family: "source", Subject: "the representational framework", Status: "fresh", Authority: "cc-gamma"},
 	}}, false)
 
+	// the WITNESSED LEDGER (U3/CP-A): representative demand+verdict datoms so `reins --demo` shows real
+	// signed receipts on :commands, with the tamper-evidence banner reading "verified" (the signed
+	// hash-chain intact). A tampered ledger would read "broken:<reason>" here — never faked green.
+	commandAIR := map[string]string{"verb": "ok", "status": "ok", "witness": "ok", "task_id": "ok"}
+	m = m.FoldCommands([]grammar.Command{
+		{Verb: "dispatch", Target: "lane-beta", Status: "not-wired", Witness: "pending", AIR: commandAIR},
+		{Verb: "resume", Target: "cc-alpha", Status: "ok", Witness: "pending", TaskID: "reform-fix-eventlog-ssot-ledger", AIR: commandAIR},
+	}, "absent", "verified", false)
+
 	// turns populate the chat-pane + the A6 authorship provenance distribution
 	m.TurnLadder = []grammar.Turn{
 		{Role: "operator", Kind: "user", Summary: "fix the flaky trace test", Prov: "operator"},

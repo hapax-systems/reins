@@ -28,6 +28,22 @@ func min(a, b int) int {
 	return b
 }
 
+// reins --demo shows the WITNESSED LEDGER on :commands — real signed receipts with the tamper-evidence
+// banner reading "verified" (the seed's signed hash-chain intact), so a stranger literally watches the
+// receipt appear (keystone acceptance). Honest: the banner is never green unless the chain verifies.
+func TestDemoCommandsShowVerifiedWitnessedLedger(t *testing.T) {
+	m := SeedModel(180, 44)
+	m.Demo = true
+	frames := Drive(m, []string{":commands"})
+	last := frames[len(frames)-1].Plain()
+	if !strings.Contains(last, "WITNESSED LEDGER") || !strings.Contains(last, "integrity verified") {
+		t.Fatalf("demo :commands must show the witnessed ledger with integrity verified, got:\n%s", last)
+	}
+	if !strings.Contains(last, "dispatch") || !strings.Contains(last, "not-wired") {
+		t.Fatalf("demo :commands must render the seeded witnessed rows, got:\n%s", last)
+	}
+}
+
 // The cockpit must navigate to EVERY page without panicking and render a non-empty frame — the
 // automated half of "smoke-test navigation without a human". A panic on any page is a hard finding.
 func TestNavigateEveryPageNoPanic(t *testing.T) {
