@@ -7,8 +7,11 @@ CommandResult path.
 
 Authority note: the ledger records demand INTENT + verdict; it mints NO authority (the real transport
 lands at U7 against the spine verify surfaces). Trust boundary (design pack A3.2): the ledger is a
-filesystem-permission-guarded JSONL — anything with local write access can fabricate demand evidence;
-accepted on this single-operator loopback box, reopens on non-loopback bind or a second principal.
+filesystem-permission-guarded JSONL. Rows are now HASH-CHAINED + HMAC-SIGNED (A3.x / avsdlc-receipt-
+integrity), so alteration/insert/delete/reorder is tamper-EVIDENT and forging a row requires the 0600
+signing key — which a SECOND PRINCIPAL (the exact boundary this note named as "reopens on a second
+principal / non-loopback bind") cannot read. Detection is via ``verify_chain()``; the key protects the
+signature, not the JSONL's readability.
 
 event_id = sha256(canonical_json({verb, target, idempotency_key})) — canonical JSON (sorted keys, no
 whitespace), NEVER delimiter concatenation, so there is no id-collision class (A3.11). Durable
@@ -19,6 +22,7 @@ rebuilds the seen-set, so a retried command across a restart is a duplicate, nev
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import threading
@@ -57,23 +61,31 @@ class CommandRefs:
 class CommandLedger:
     """An append-only command ledger. ``path`` is a JSONL file; ``clock`` returns an ISO-8601
     timestamp string (injected so tests are deterministic). Reloads rebuild the seen-set so
-    idempotency survives a restart (the frontdoor's externalized state, design pack A3.9)."""
+    idempotency survives a restart (the frontdoor's externalized state, design pack A3.9).
+
+    Rows are hash-chained + HMAC-signed for tamper-evidence (``key`` injected for deterministic tests;
+    loaded from the sibling 0600 key file when empty). ``verify_chain()`` walks the chain."""
 
     path: str
     clock: Any = None  # callable() -> iso ts; injected
+    key: bytes = b""  # HMAC key signing each row; loaded from the sibling 0600 key file if empty
     _seen: dict[str, str] = field(default_factory=dict)  # event_id -> demand receipt_id (any attempt)
     # event_id -> the terminal-SUCCESS outcome (for idempotent replay). Idempotency dedups on SUCCESS,
     # not on demand: a refused/failed attempt is RETRYABLE (its condition may since have changed — e.g.
     # a generation that was absent is now staged); only a command that already SUCCEEDED is not re-run.
     _succeeded: dict[str, dict] = field(default_factory=dict)
+    _head: str = field(default="", compare=False)  # chain head — the last row's hash (prev-link source)
     _lock: Any = field(default_factory=threading.Lock, compare=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.key:
+            self.key = load_ledger_key(ledger_key_path(self.path))
         self._reload()
 
     def _reload(self) -> None:
         self._seen = {}
         self._succeeded = {}
+        self._head = ""
         if not os.path.exists(self.path):
             return
         with open(self.path, encoding="utf-8") as f:
@@ -93,6 +105,9 @@ class CommandLedger:
                 elif row.get("kind") == "verdict" and eid and row.get("status") == "ok":
                     # a terminal-success verdict marks the command completed (replayable outcome).
                     self._succeeded[eid] = {"http": row.get("http", 200), "receipt_id": self._seen.get(eid, "")}
+                h = row.get("hash")
+                if h:
+                    self._head = h  # chain head advances to the last hashed row (restart-durable link)
 
     def _ts(self) -> str:
         if callable(self.clock):
@@ -105,14 +120,25 @@ class CommandLedger:
         # (2026-06-08 UPS trip) AND a disarmed hardware watchdog, so "durable" must mean on-disk, not
         # in-cache. Per-row fsync is trivially cheap at the command write rate. Best-effort: an fsync that
         # raises (e.g. a filesystem without fsync) must not lose the write already flushed to the OS.
+        #
+        # Tamper-evidence (closes G8): link each row to the prior head, hash the {content+prev} body, and
+        # HMAC-sign the hash. Any alteration/insert/delete/reorder breaks the recomputed hash or the
+        # prev-link; forging needs the 0600 key a second principal cannot read (the named trust boundary).
+        chained = {**row, "prev": self._head}
+        row_hash = hashlib.sha256(
+            json.dumps(chained, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        chained["hash"] = row_hash
+        chained["sig"] = hmac.new(self.key, row_hash.encode(), hashlib.sha256).hexdigest()
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+            f.write(json.dumps(chained, sort_keys=True, separators=(",", ":")) + "\n")
             f.flush()
             try:
                 os.fsync(f.fileno())
             except OSError:
                 pass
+        self._head = row_hash
 
     def record_demand(
         self, verb: str, target: str, idempotency_key: str, refs: CommandRefs | None = None
@@ -189,6 +215,40 @@ class CommandLedger:
                     out.append(obj)
         return out
 
+    def verify_chain(self) -> tuple[bool, int, str]:
+        """Walk the ledger and verify tamper-evidence: each hashed row's content-hash, its HMAC
+        signature, and its prev-link to the row before it. Returns ``(ok, first_broken_index, reason)``
+        — reason in {ok, hash-mismatch, bad-signature, broken-link, unhashed-row-in-chain}. Pre-chain
+        rows (written before signing, no ``hash``) are a legal leading prefix and are skipped; once the
+        chain has begun, a subsequent unhashed row is itself evidence of tampering."""
+        prev = ""
+        started = False
+        for i, row in enumerate(self.rows()):
+            if "hash" not in row:
+                if started:
+                    return (False, i, "unhashed-row-in-chain")
+                continue  # legal pre-chain prefix
+            started = True
+            stored = row.get("hash", "")
+            body = {k: v for k, v in row.items() if k not in ("hash", "sig")}
+            recomputed = hashlib.sha256(
+                json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if recomputed != stored:
+                return (False, i, "hash-mismatch")
+            expected_sig = hmac.new(self.key, stored.encode(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(str(row.get("sig", "")), expected_sig):
+                return (False, i, "bad-signature")
+            if row.get("prev", "") != prev:
+                return (False, i, "broken-link")
+            prev = stored
+        return (True, -1, "ok")
+
+    def chain_head(self) -> str:
+        """The current chain head (the last row's hash) — an anchor a caller can publish externally so
+        even a full-chain rewrite by a key-holder becomes detectable against the published head."""
+        return self._head
+
 
 def ledger_path() -> str:
     env = os.environ.get("REINS_COMMAND_LEDGER", "").strip()
@@ -196,6 +256,40 @@ def ledger_path() -> str:
         return env
     home = os.path.expanduser("~")
     return os.path.join(home, ".cache", "hapax", "reins", "commands.jsonl")
+
+
+def ledger_key_path(led_path: str | None = None) -> str:
+    """The signing-key path — a sibling ``ledger-key`` next to the ledger JSONL (or overridden by
+    ``REINS_COMMAND_LEDGER_KEY``)."""
+    env = os.environ.get("REINS_COMMAND_LEDGER_KEY", "").strip()
+    if env:
+        return env
+    base = os.path.dirname(led_path or ledger_path())
+    return os.path.join(base or ".", "ledger-key")
+
+
+def load_ledger_key(path: str) -> bytes:
+    """Load — or first-time create, mode 0600 — the HMAC key that signs ledger rows. Created atomically
+    with ``O_EXCL`` so a concurrent first-run cannot race two keys; a loser re-reads the winner's key.
+    A second principal without the operator's uid cannot read a 0600 key, so the signature is tamper-
+    evidence exactly at the trust boundary the ledger names."""
+    try:
+        with open(path, "rb") as f:
+            existing = f.read()
+        if existing:
+            return existing
+    except FileNotFoundError:
+        pass
+    key = os.urandom(32)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        with open(path, "rb") as f:
+            return f.read()
+    with os.fdopen(fd, "wb") as f:
+        f.write(key)
+    return key
 
 
 def iso_utc_now() -> str:
@@ -208,13 +302,16 @@ def iso_utc_now() -> str:
 def read_commands(path: str | None, allowlist: list[str] | None = None, limit: int = 80) -> dict:
     """The /read/commands projection: demand+verdict datoms with an honest witness state and an
     `absent` enforcement cell (the gate observably does not exist yet — NEVER dark-conflated,
-    design pack A3.8). AIR-classified default-deny like every other row kind."""
+    design pack A3.8). AIR-classified default-deny like every other row kind. ``integrity`` reports the
+    tamper-evidence verdict of the ledger's hash-chain (verified / a break reason) — honest, never green
+    by default."""
     from reins_read import classify_air  # local import: avoid a cycle at module load
 
     p = path or ledger_path()
     allow = allowlist or []
     led = CommandLedger(p, clock=None)
     raw = led.rows()
+    chain_ok, _broken_at, chain_reason = led.verify_chain()
 
     # fold demand+verdict pairs into command datoms keyed by event_id.
     demands: dict[str, dict] = {}
@@ -259,4 +356,6 @@ def read_commands(path: str | None, allowlist: list[str] | None = None, limit: i
         "commands": commands,
         # enforcement is ABSENT, not dark: the dispatch-gate observably does not exist until U13/CP-E.
         "enforcement": "absent",
+        # tamper-evidence of the witness itself: "verified" or a break reason — honest, never faked green.
+        "integrity": "verified" if chain_ok else f"broken:{chain_reason}",
     }

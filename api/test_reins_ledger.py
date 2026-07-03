@@ -138,3 +138,92 @@ def test_command_target_denied_on_air_under_production_allowlist(tmp_path):
     proj = read_commands(p, allowlist=facet_registry.air_allowlist())
     cmd = proj["commands"][0]
     assert cmd["air"]["target"] == "deny", "command target must NEVER air (path-class §9)"
+
+
+# --- tamper-evidence: the signed hash-chain (avsdlc-receipt-integrity / closes G8) ---
+
+_KEY = b"deterministic-test-key-for-hmac!"
+
+
+def test_chain_verifies_and_rows_are_linked_and_signed(tmp_path):
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    d = led.record_demand("claim", "cc-task-x", "idem-1")
+    led.record_verdict(d["event_id"], "ok", 200)
+    rows = led.rows()
+    assert all({"prev", "hash", "sig"} <= set(r) for r in rows)  # every row is chained + signed
+    assert rows[0]["prev"] == ""  # genesis
+    assert rows[1]["prev"] == rows[0]["hash"]  # linked to the prior row
+    ok, idx, reason = led.verify_chain()
+    assert ok and idx == -1 and reason == "ok"
+
+
+def test_chain_detects_content_tampering(tmp_path):
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    d = led.record_demand("claim", "cc-task-x", "idem-1")
+    led.record_verdict(d["event_id"], "ok", 200)
+    rows = [json.loads(line) for line in open(p) if line.strip()]
+    rows[0]["target"] = "cc-task-EVIL"  # alter content, keep the now-stale hash/sig
+    with open(p, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
+    ok, idx, reason = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok and idx == 0 and reason == "hash-mismatch"
+
+
+def test_chain_detects_deletion(tmp_path):
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)
+    d1 = led.record_demand("claim", "a", "i1")
+    led.record_verdict(d1["event_id"], "ok", 200)
+    led.record_demand("claim", "b", "i2")
+    rows = [json.loads(line) for line in open(p) if line.strip()]
+    del rows[1]  # excise the middle row -> the next row's prev-link no longer matches
+    with open(p, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
+    ok, _idx, reason = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok and reason == "broken-link"
+
+
+def test_chain_detects_forgery_without_key(tmp_path):
+    import hashlib
+
+    p = str(tmp_path / "commands.jsonl")
+    CommandLedger(p, clock=lambda: "t", key=_KEY).record_demand("claim", "a", "i1")
+    rows = [json.loads(line) for line in open(p) if line.strip()]
+    forged = {"kind": "demand", "event_id": "x", "target": "evil", "prev": rows[-1]["hash"]}
+    forged["hash"] = hashlib.sha256(
+        json.dumps(forged, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    forged["sig"] = "0" * 64  # a forger with write access but not the key cannot compute a valid HMAC
+    with open(p, "a") as f:
+        f.write(json.dumps(forged, sort_keys=True, separators=(",", ":")) + "\n")
+    ok, _idx, reason = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok and reason == "bad-signature"
+
+
+def test_prechain_prefix_legal_but_gap_after_start_is_tampering(tmp_path):
+    # backward-compat: rows written before signing (no hash) are a legal LEADING prefix.
+    p = str(tmp_path / "commands.jsonl")
+    with open(p, "w") as f:
+        f.write(json.dumps({"kind": "demand", "event_id": "old"}, sort_keys=True, separators=(",", ":")) + "\n")
+    led = CommandLedger(p, clock=lambda: "t", key=_KEY)  # head stays "" over the pre-chain prefix
+    led.record_demand("claim", "a", "i1")  # first hashed row: genesis prev == ""
+    ok, _idx, reason = led.verify_chain()
+    assert ok and reason == "ok"
+    with open(p, "a") as f:  # an UNhashed row injected AFTER the chain began is tampering
+        f.write(json.dumps({"kind": "demand", "event_id": "sneak"}, sort_keys=True, separators=(",", ":")) + "\n")
+    ok2, _i2, reason2 = CommandLedger(p, clock=lambda: "t", key=_KEY).verify_chain()
+    assert not ok2 and reason2 == "unhashed-row-in-chain"
+
+
+def test_read_commands_surfaces_integrity(tmp_path):
+    # no injected key -> the ledger creates the sibling 0600 key; read_commands re-opens with the SAME
+    # key, so a clean chain reports verified (honest integrity, never faked green).
+    p = str(tmp_path / "commands.jsonl")
+    led = CommandLedger(p, clock=lambda: "t")
+    d = led.record_demand("claim", "cc-task-x", "idem-1")
+    led.record_verdict(d["event_id"], "ok", 200)
+    assert read_commands(p, allowlist=[])["integrity"] == "verified"
