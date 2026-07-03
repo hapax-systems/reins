@@ -96,14 +96,62 @@ var PageContracts = map[int]PaneContract{
 		Provenance: "the signed hash-chain ledger + the out-of-band anchor",
 		BlindSpot:  "tail-truncation/whole-replacement/key-substitution (need the out-of-band anchor)",
 	},
+	PageLifecycles: {
+		Question:   "what lifecycle contracts are declared (the DLC taxonomy + per-lifecycle schema)",
+		State:      "the registered lifecycles + their posture/maturity",
+		Controls:   "inspect a lifecycle contract",
+		Provenance: "the lifecycle registry",
+		BlindSpot:  "the lifecycle MODEL M (posture/maturity are declared, not source-backed, until M exists)",
+	},
+	PageDynamics: {
+		Question:   "how is the system causally structured (the system-dynamics graph)",
+		State:      "the dynamics graph (nodes/edges/layers)",
+		Controls:   "navigate the graph / drill a node",
+		Provenance: "the system-dynamics-map (Tier-1, honestly hand-seeded-labeled)",
+		BlindSpot:  "Tier-2 live-dominance (pending the relate producer); simulated/inferred signs",
+	},
+	PageLoops: {
+		Question:   "what are the causal feedback loops",
+		State:      "the computed causal loops (Tarjan SCC + sign parity)",
+		Controls:   "inspect a loop",
+		Provenance: "the dynamics graph + the loop computation",
+		BlindSpot:  "loops over unbuilt edges; the live-dominance Tier-2",
+	},
+	PageTraces: {
+		Question:   "what did the LLM calls cost / how long did they take",
+		State:      "the LLM trace rows (model/tokens/cost/latency)",
+		Controls:   "inspect a trace",
+		Provenance: "the Langfuse trace fold",
+		BlindSpot:  "the trace BODIES (input/output = operator content, never enter the row); the routing decision (A4)",
+	},
+	PageEpistemics: {
+		Question:   "what is the evidence/provenance posture",
+		State:      "the epistemic rows (provenance/freshness/authority per subject)",
+		Controls:   "inspect an epistemic row",
+		Provenance: "the epistemic engine over the sources",
+		BlindSpot:  "raw source bodies; the DOI ranking (that's the fold, not a row)",
+	},
+	PageIntake: {
+		Question:   "what is the intake (requests / P0 / security signals)",
+		State:      "the intake summaries (bounded metadata/counts only)",
+		Controls:   "triage an intake item",
+		Provenance: "the request/p0/security intake snapshots",
+		BlindSpot:  "intake BODIES (notification/message text = default-deny); the DOI priority",
+	},
 }
 
-// undeclaredPanes: pages not yet contracted (tracked debt). A page here MUST be contracted (moved to
-// PageContracts) before it earns a steady-state screen in the rethought cockpit. pane_contract_test.go
-// fails if a page is in NEITHER PageContracts NOR undeclaredPanes (a new page must be accounted for).
+// doorPanes: self-describing registries DEMOTED TO DOORS (the decoder-in-band — Latour immutable-mobile).
+// These earn NO steady-state projection contract: they are full-screen drill-ins on demand (Gate-13
+// cold-read recovery depends on the decoder traveling WITH the artifact). They are neither contracted nor
+// debt — a door is a deliberate non-projection.
+var doorPanes = map[int]bool{
+	PageHelp: true, PageLegend: true, PageWindows: true, PageSurfaces: true,
+}
+
+// undeclaredPanes: projection pages not yet contracted (tracked debt). A page here MUST be contracted
+// (moved to PageContracts) before it earns a steady-state screen in the rethought cockpit.
+// pane_contract_test.go fails if a navigable page is in NONE of PageContracts / doorPanes / undeclaredPanes.
 var undeclaredPanes = map[int]bool{
-	PageTasks: true, PageSessions: true, PageDynamics: true, PageHelp: true, PageLegend: true,
-	PageWindows: true, PageIntent: true, PageSurfaces: true, PageDomains: true, PageYard: true,
-	PageIntake: true, PageEpistemics: true, PageLifecycles: true, PageTraces: true, PageSessionTurns: true,
-	PageLoops: true, PageRdlc: true, PagePresence: true, PageDeck: true,
+	PageTasks: true, PageSessions: true, PageIntent: true, PageDomains: true, PageYard: true,
+	PageSessionTurns: true, PageRdlc: true, PagePresence: true, PageDeck: true,
 }

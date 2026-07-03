@@ -31,8 +31,11 @@ func TestPaneContractRegistryIsComplete(t *testing.T) {
 		}
 	}
 
-	// 2. NO page in BOTH (overlap is an error — contract a page exactly once).
+	// 2. NO page in ANY TWO of {registered, doors, debt} — each navigable page is exactly one.
 	for page := range PageContracts {
+		if doorPanes[page] {
+			t.Errorf("page %d is in BOTH PageContracts and doorPanes — a page is exactly one of the three", page)
+		}
 		if undeclaredPanes[page] {
 			t.Errorf(
 				"page %d is in BOTH PageContracts and undeclaredPanes — contract it once (remove it from "+
@@ -41,24 +44,29 @@ func TestPaneContractRegistryIsComplete(t *testing.T) {
 			)
 		}
 	}
+	for page := range doorPanes {
+		if undeclaredPanes[page] {
+			t.Errorf("page %d is in BOTH doorPanes and undeclaredPanes — a page is exactly one of the three", page)
+		}
+	}
 
-	// 3. EVERY navigable page (0..PageDeck) is accounted for (registered OR declared debt) — regression
-	//    prevention: a new page added to the iota is auto-caught here (it must be contracted or declared
-	//    debt; it cannot silently accrete without a contract).
+	// 3. EVERY navigable page (0..PageDeck) is accounted for (registered, a door, or declared debt) —
+	//    regression prevention: a new page added to the iota is auto-caught here (it cannot silently
+	//    accrete without being contracted, demoted to a door, or declared debt).
 	for page := 0; page <= PageDeck; page++ {
 		_, registered := PageContracts[page]
-		if !registered && !undeclaredPanes[page] {
+		if !registered && !doorPanes[page] && !undeclaredPanes[page] {
 			t.Errorf(
-				"page %d is in NEITHER PageContracts nor undeclaredPanes — a navigable page must declare its "+
-					"five-tuple contract (add it to PageContracts) or be declared debt (undeclaredPanes)",
+				"page %d is in NONE of PageContracts / doorPanes / undeclaredPanes — a navigable page must "+
+					"declare its five-tuple contract (PageContracts), be a door (doorPanes), or be declared debt",
 				page,
 			)
 		}
 	}
 
 	t.Logf(
-		"pane-contract registry: %d contracted / %d undeclared debt / %d total — the registry may only grow, "+
-			"the debt only shrink",
-		len(PageContracts), len(undeclaredPanes), PageDeck+1,
+		"pane-contract registry: %d contracted / %d doors / %d undeclared debt / %d total — the registry "+
+			"may only grow, the debt only shrink",
+		len(PageContracts), len(doorPanes), len(undeclaredPanes), PageDeck+1,
 	)
 }
