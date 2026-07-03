@@ -267,10 +267,30 @@ class CommandLedger:
         return (True, first_signed, "ok")
 
     def chain_head(self) -> str:
-        """The current chain head (the last row's hash). Publish this + ``len(rows())`` OUT-OF-BAND (a
+        """The current chain head (the last row's hash). Publish this + ``chain_length()`` OUT-OF-BAND (a
         location the ledger's writer cannot rewrite) to detect the residual tail-truncation / whole-
         replacement that ``verify_chain`` alone cannot (a valid prefix of a valid chain still verifies)."""
         return self._head
+
+    def chain_length(self) -> int:
+        """The number of signed rows — the count half of the out-of-band anchor pair (with chain_head())."""
+        return sum(1 for r in self.rows() if "hash" in r)
+
+    def verify_against_anchor(self, expected_head: str, expected_count: int) -> tuple[bool, str]:
+        """Detect the residual ``verify_chain`` cannot — TAIL-TRUNCATION and WHOLE-REPLACEMENT — by
+        comparing the live chain head + signed-row count against an anchor the caller stored OUT-OF-BAND.
+        Returns ``(ok, reason)``. This is the ONLY defense against a writer who can rewrite same-dir
+        state: reins provides the MECHANISM; the caller must provide tamper-proof STORAGE (an operator-
+        only directory / a second host / append-only log), which reins cannot guarantee on-box. Verifies
+        the in-place chain first (a mismatch there is reported as its own reason), then the anchor."""
+        chain_ok, _i, chain_reason = self.verify_chain()
+        if not chain_ok:
+            return (False, chain_reason)
+        if self._head != expected_head:
+            return (False, "anchor-head-mismatch")
+        if self.chain_length() != expected_count:
+            return (False, "anchor-count-mismatch")
+        return (True, "ok")
 
 
 def ledger_path() -> str:

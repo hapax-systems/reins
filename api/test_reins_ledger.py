@@ -310,12 +310,16 @@ def test_tail_truncation_is_a_documented_residual(tmp_path):
     d1 = led.record_demand("claim", "a", "i1")
     led.record_verdict(d1["event_id"], "ok", 200)
     led.record_demand("claim", "b", "i2")  # the row an attacker will hide
-    full_head, full_len = led.chain_head(), len(led.rows())
+    full_head, full_count = led.chain_head(), led.chain_length()  # the out-of-band anchor pair
     rows = [json.loads(line) for line in open(p) if line.strip()]
     with open(p, "w") as f:  # drop the last row (tail truncation)
         for r in rows[:-1]:
             f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
     truncated = CommandLedger(p, clock=lambda: "t", key=_KEY)
     ok, _i, reason = truncated.verify_chain()
-    assert ok and reason == "ok"  # RESIDUAL: truncation is NOT caught by the chain alone
-    assert truncated.chain_head() != full_head and len(truncated.rows()) != full_len  # out-of-band anchor catches it
+    assert ok and reason == "ok"  # RESIDUAL: the chain alone does NOT catch truncation
+    # ...but the OUT-OF-BAND anchor (pre-truncation head + count) catches it:
+    aok, areason = truncated.verify_against_anchor(full_head, full_count)
+    assert not aok and areason in ("anchor-head-mismatch", "anchor-count-mismatch")
+    # a ledger verifies clean against its own current anchor:
+    assert truncated.verify_against_anchor(truncated.chain_head(), truncated.chain_length()) == (True, "ok")
