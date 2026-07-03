@@ -65,13 +65,15 @@ func NewStore(root string) *Store { return &Store{root: root} }
 // Root is the store's root directory (for callers that must pass it to a child process).
 func (s *Store) Root() string { return s.root }
 
-func (s *Store) genRoot() string          { return filepath.Join(s.root, "generations") }
+func (s *Store) genRoot() string                 { return filepath.Join(s.root, "generations") }
 func (s *Store) GenerationDir(sha string) string { return filepath.Join(s.genRoot(), sha) }
-func (s *Store) manifestPath(sha string) string  { return filepath.Join(s.GenerationDir(sha), "manifest.json") }
+func (s *Store) manifestPath(sha string) string {
+	return filepath.Join(s.GenerationDir(sha), "manifest.json")
+}
 func (s *Store) quarantinePath(sha string) string { return filepath.Join(s.root, "quarantine", sha) }
-func (s *Store) currentPtr() string       { return filepath.Join(s.root, "current") }
-func (s *Store) prevPtr() string          { return filepath.Join(s.root, "prev") }
-func (s *Store) handoffPath() string      { return filepath.Join(s.root, "handoff.json") }
+func (s *Store) currentPtr() string               { return filepath.Join(s.root, "current") }
+func (s *Store) prevPtr() string                  { return filepath.Join(s.root, "prev") }
+func (s *Store) handoffPath() string              { return filepath.Join(s.root, "handoff.json") }
 
 // hashBytes is the sha256 hex of a byte slice.
 func hashBytes(b []byte) string {

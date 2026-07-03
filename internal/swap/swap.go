@@ -102,9 +102,9 @@ type SupervisorState struct {
 
 // Supervisor action kinds.
 const (
-	ActionRelaunchCurrent      = "relaunch-current"       // normal: relaunch current with --resume
+	ActionRelaunchCurrent       = "relaunch-current"        // normal: relaunch current with --resume
 	ActionQuarantineAndRollback = "quarantine-and-rollback" // bad new generation: quarantine + relaunch prev
-	ActionBreakglass           = "breakglass"              // nothing safe to relaunch — manual recovery
+	ActionBreakglass            = "breakglass"              // nothing safe to relaunch — manual recovery
 )
 
 // SupervisorAction is the crash-backstop's decision. It NEVER initiates an upgrade (the supervisor is a

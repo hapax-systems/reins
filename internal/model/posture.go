@@ -31,16 +31,16 @@ type PostureSnapshot struct {
 
 	Deck []string `json:"deck"` // E8.3 non-evicting operator-readout history — its "no-loss" property must survive the swap
 
-	IntentTarget  string `json:"intent_target"`  // a swap intent staged during the swap survives it (A1.8)
+	IntentTarget  string `json:"intent_target"` // a swap intent staged during the swap survives it (A1.8)
 	IntentSubject string `json:"intent_subject"`
 }
 
 // PostureAnchors holds the stable identities the restore re-resolves against the live fold.
 type PostureAnchors struct {
-	FocusedTaskID     string   `json:"focused_task_id"`
-	FocusedSessionRole string  `json:"focused_session_role"`
-	TurnRole          string   `json:"turn_role"`
-	SelMemberIDs      []string `json:"sel_member_ids"` // task ids, NOT indices
+	FocusedTaskID      string   `json:"focused_task_id"`
+	FocusedSessionRole string   `json:"focused_session_role"`
+	TurnRole           string   `json:"turn_role"`
+	SelMemberIDs       []string `json:"sel_member_ids"` // task ids, NOT indices
 }
 
 const postureSchemaMajor = 2
