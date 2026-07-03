@@ -53,6 +53,29 @@ def test_engine_carries_no_baked_home_paths():
     assert not leaks, "engine/instance leak — baked home path(s) in engine source:\n" + "\n".join(leaks)
 
 
+def test_engine_carries_no_baked_axiom_vocabulary():
+    """Invariant I5 (engine/instance clean + axiom-agnostic): the ENGINE carries ZERO hardcoded axiom
+    vocabulary. ``single_user`` is the hapax axiom — it belongs to INSTANCE config, not the engine. A
+    hardcoded ``single_user`` couples the engine to one axiom-set + breaks the axiom-agnostic / kit telos
+    (the engine must render whatever the instance declares; officium/Alliant stand up their own instance).
+    Docs/fixtures/tests are exempt (they may cite the axiom by name); engine SOURCE must not branch on it.
+    Fail-closed on any new leak — the engine is clean today; this LOCKS it."""
+    AXIOM = re.compile(r"single[_-]user", re.IGNORECASE)
+    leaks = []
+    for p in _engine_files():
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if AXIOM.search(line):
+                leaks.append(f"{p.relative_to(REPO)}:{i}: {line.strip()[:100]}")
+    assert not leaks, (
+        "engine/instance leak — hardcoded axiom vocabulary (single_user) in engine source. The engine must "
+        "be axiom-agnostic; single_user belongs to instance config:\n" + "\n".join(leaks)
+    )
+
+
 def test_reins_api_is_decoupled_from_council_substrate():
     """RESOLVED (was the coupling-debt ledger): reins/api now imports the SDLC-runtime mechanism from the
     published `hapax-spine` WHEEL (`from hapax.spine.*`), NOT council's `shared.*` in-process. The
