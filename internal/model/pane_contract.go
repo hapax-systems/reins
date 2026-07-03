@@ -138,6 +138,69 @@ var PageContracts = map[int]PaneContract{
 		Provenance: "the request/p0/security intake snapshots",
 		BlindSpot:  "intake BODIES (notification/message text = default-deny); the DOI priority",
 	},
+	PageTasks: {
+		Question:   "what are the governed tasks + their stage",
+		State:      "the tasks (id / stage / no_go)",
+		Controls:   "inspect a task",
+		Provenance: "the cc-task projection",
+		BlindSpot:  "the task BODIES (default-deny); the routing decision (A4)",
+	},
+	PageSessions: {
+		Question:   "what lanes/sessions are active + their state",
+		State:      "the lanes (role / platform / state / output_age)",
+		Controls:   "inspect a lane",
+		Provenance: "the coordinator state",
+		BlindSpot:  "the session transcripts (default-deny); the lane's claimed-task body",
+	},
+	PageIntent: {
+		Question:   "the operator intent (the dispatch request shape)",
+		State:      "the intent + its reqvec",
+		Controls:   "compose an intent",
+		Provenance: "the demand vector",
+		BlindSpot:  "the routing decision (A4); a priority scalar (I12 — deliberately excised)",
+	},
+	PageDomains: {
+		Question:   "the domain/lifecycle demand shape",
+		State:      "the domain-pack rows (terrain/depth/scope)",
+		Controls:   "inspect a domain",
+		Provenance: "the domain pack",
+		BlindSpot:  "the demand VECTOR (A3/PageDispatch); raw domain bodies",
+	},
+	PageYard: {
+		Question:   "the yard (the lifecycle topology metro-map)",
+		State:      "the yard rails + lanes",
+		Controls:   "navigate the yard",
+		Provenance: "the yard rails-map + the lifecycle registry",
+		BlindSpot:  "non-yard lifecycles; the gate decisions (A2 readiness)",
+	},
+	PageSessionTurns: {
+		Question:   "the steering conversation turns (the Helm chat-pane)",
+		State:      "the turn-ladder (fixture-fed until CapabilityIO capture-output)",
+		Controls:   "steer the conversation; {{basket}} structured context",
+		Provenance: "the session transcript (metadata-only)",
+		BlindSpot:  "live turn-stream until CapabilityIO; the turn BODIES (default-deny)",
+	},
+	PageRdlc: {
+		Question:   "the research development lifecycle (Labrack)",
+		State:      "honest-DARK (the RDLC model M does not exist)",
+		Controls:   "(none until M)",
+		Provenance: "(none — a declared future lifecycle)",
+		BlindSpot:  "everything — RDLC is declare-and-navigate, not source-backed",
+	},
+	PagePresence: {
+		Question:   "the presence plane (figure/control vs ground/presence)",
+		State:      "honest-DARK (design-stage, pending the agy modeling)",
+		Controls:   "(none)",
+		Provenance: "(none)",
+		BlindSpot:  "everything — presence is design-stage",
+	},
+	PageDeck: {
+		Question:   "the non-evicting operator-readout history",
+		State:      "the deck (operator readouts, persistent across /clear)",
+		Controls:   "scroll the deck",
+		Provenance: "operator-issued readouts",
+		BlindSpot:  "the live event STREAM (Attention/PageEvents); system events",
+	},
 }
 
 // doorPanes: self-describing registries DEMOTED TO DOORS (the decoder-in-band — Latour immutable-mobile).
@@ -151,7 +214,9 @@ var doorPanes = map[int]bool{
 // undeclaredPanes: projection pages not yet contracted (tracked debt). A page here MUST be contracted
 // (moved to PageContracts) before it earns a steady-state screen in the rethought cockpit.
 // pane_contract_test.go fails if a navigable page is in NONE of PageContracts / doorPanes / undeclaredPanes.
-var undeclaredPanes = map[int]bool{
-	PageTasks: true, PageSessions: true, PageIntent: true, PageDomains: true, PageYard: true,
-	PageSessionTurns: true, PageRdlc: true, PagePresence: true, PageDeck: true,
-}
+// All projection panes are now contracted — undeclaredPanes is the EMPTY debt set (the I7 hard gate:
+// every projection pane declares its five-tuple; the 4 registries are doors). A new navigable page added to
+// the iota MUST be contracted (PageContracts) or demoted to a door (doorPanes) — pane_contract_test.go
+// fails otherwise (it cannot silently accrete). Kept as an empty map so the gate's three-category check
+// (contracted / doors / debt) + the future-debt path stay structural.
+var undeclaredPanes = map[int]bool{}
