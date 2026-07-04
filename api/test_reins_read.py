@@ -25,6 +25,7 @@ from reins_read import (
     read_intake_summary,
     read_capability_summary,
     _capability_surface_pack_rows,
+    _capability_inventory_rows,
     read_dynamics_package,
     read_epistemics,
     read_lifecycle_registry_summary,
@@ -1177,6 +1178,48 @@ def test_capability_surface_pack_rows_are_source_backed(tmp_path):
     dumped = json.dumps(rows)
     assert "read-missing doctrine" not in dumped
     assert "/tmp/" not in dumped
+
+
+def test_capability_inventory_consumer_ingests_live_inventory(tmp_path):
+    # 1e convergence: mirrors the spine's `hapax-capability-inventory --json` (#4401 inventory_report)
+    report = {
+        "total": 2,
+        "with_validation_gaps": 1,
+        "freshness_counts": {"fresh": 1, "dark": 1},
+        "shape_counts": {"provider_gateway": 1, "verifier_floor_checker": 1},
+        "rows": [
+            {"capability_id": "litellm_provider_gateway", "shape": "provider_gateway",
+             "domain": "inference", "freshness_state": "fresh", "authority_ceiling": "route_defined", "gaps": []},
+            {"capability_id": "semgrep_static_analysis", "shape": "verifier_floor_checker",
+             "domain": "verify", "freshness_state": "dark", "authority_ceiling": "ci", "gaps": ["no_receipt"]},
+        ],
+    }
+    inv = tmp_path / "capability-inventory.json"
+    inv.write_text(json.dumps(report))
+    sources, rows = _capability_inventory_rows({"capability_inventory_path": str(inv)}, EXPECTED_DEFAULT_ALLOW)
+    assert len(rows) == 2
+    by_id = {r["capability_id"]: r for r in rows}
+    # freshness-honest status: a DARK descriptor renders read-missing, never a fabricated observed/green
+    assert by_id["litellm_provider_gateway"]["status"] == "observed"
+    assert by_id["semgrep_static_analysis"]["status"] == "read-missing"
+    # validation gaps -> blocked_count + blocker (never a fake ok/100%)
+    assert by_id["semgrep_static_analysis"]["blocked_count"] == 1
+    assert "no_receipt" in by_id["semgrep_static_analysis"]["blocker"]
+    assert by_id["litellm_provider_gateway"]["blocked_count"] == 0
+    assert by_id["litellm_provider_gateway"]["ok_count"] == 1
+    # inventory-native facets carried; source-backed + counts total (the live surface, not the static pack)
+    assert by_id["litellm_provider_gateway"]["shape"] == "provider_gateway"
+    src = next(s for s in sources if s["id"] == "capability_inventory")
+    assert src["status"] == "observed" and src["count"] == 2
+    assert "/tmp/" not in json.dumps(rows)  # no operator paths leak into rendered rows
+
+
+def test_capability_inventory_absent_is_honest_dark_not_fabricated():
+    # unset -> honest-DARK marker + zero rows so the caller falls back to the static pack (never a fake live surface)
+    sources, rows = _capability_inventory_rows({}, EXPECTED_DEFAULT_ALLOW)
+    assert rows == []
+    marker = next(s for s in sources if s["id"] == "capability_inventory")
+    assert marker["status"] == "missing"
 
 
 def test_checked_in_capability_surface_pack_carries_explicit_ontology():

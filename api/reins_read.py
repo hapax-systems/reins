@@ -1612,6 +1612,87 @@ def _compiled_capability_surface_rows(allowlist: list[str]) -> list[dict]:
     return rows
 
 
+def _capability_inventory_path(cfg: dict | None = None) -> Path | None:
+    """Resolve the LIVE capability-inventory JSON — the spine's ``hapax-capability-inventory --json``
+    (the CapabilityHarnessDescriptor ``inventory_report``) emitted to
+    ``REINS_CAPABILITY_INVENTORY`` / ``cfg[capability_inventory_path]``. Unset -> None (honest-DARK;
+    the caller keeps the static example pack). reins consumes; the spine owns the producer."""
+    cfg = cfg or {}
+    raw = os.environ.get("REINS_CAPABILITY_INVENTORY") or cfg.get("capability_inventory_path") or ""
+    raw = str(raw).strip()
+    return Path(os.path.expanduser(raw)) if raw else None
+
+
+def _capability_inventory_rows(cfg: dict | None, allowlist: list[str]) -> tuple[list[dict], list[dict]]:
+    """1e convergence consumer: ingest the spine's live capability inventory (the #4401
+    ``inventory_report``: total/with_validation_gaps/freshness_counts/shape_counts/rows[] with
+    capability_id/shape/domain/freshness_state/authority_ceiling/gaps) as the P(B) capability
+    surface, superseding the static example pack when present. Absent/empty/unreadable -> honest-DARK
+    (no rows; the caller keeps the static pack). Never fabricates a descriptor, never a fake 0/100%."""
+    path = _capability_inventory_path(cfg)
+    if path is None:
+        return [_capability_source(
+            "capability_inventory", Path(""), 0, "missing", allowlist,
+            "no REINS_CAPABILITY_INVENTORY configured — capability surface reads the static pack (honest-DARK on the live producer)",
+        )], []
+    if not path.exists():
+        return [_capability_source(
+            "capability_inventory", path, 0, "missing", allowlist,
+            "live capability inventory absent (producer not emitted here yet) — honest-DARK, static pack fallback",
+        )], []
+    try:
+        report = _read_json(path)
+    except Exception as e:
+        return [_capability_source("capability_inventory", path, 0, "dark", allowlist, f"capability inventory unreadable: {e}")], []
+    raw_rows = report.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return [_capability_source(
+            "capability_inventory", path, 0, "empty", allowlist,
+            "capability inventory present but carries no descriptor rows — honest-DARK",
+        )], []
+    rows: list[dict] = []
+    for r in raw_rows:
+        if not isinstance(r, dict):
+            continue
+        capability_id = str(r.get("capability_id") or "")
+        if not capability_id:
+            continue
+        raw_gaps = r.get("gaps") or []
+        gaps = [str(g) for g in (raw_gaps if isinstance(raw_gaps, (list, tuple)) else [raw_gaps]) if str(g).strip()]
+        freshness_state = str(r.get("freshness_state") or "")
+        # honesty: a freshness-unmeasured (DARK) descriptor renders read-missing, never observed
+        observed = freshness_state not in {"", "dark", "unmeasured", "unknown"}
+        out = _capability_row(
+            capability_id,
+            "observed" if observed else "read-missing",
+            str(r.get("authority_ceiling") or "metadata-only"),
+            1,                                    # route_count: one descriptor
+            1 if (observed and not gaps) else 0,  # ok_count
+            len(gaps),                            # blocked_count = validation gaps
+            0,                                    # evidence_count: the descriptor is the fact (no separate refs)
+            "; ".join(gaps),                      # blocker = the validation gaps
+            "not_applicable",
+            allowlist,
+            "capability_inventory:1 refs",
+            [],
+        )
+        # inventory-native facets (mirror _capability_pack_row's extra-field pattern), re-classify air
+        for key, val in (("shape", r.get("shape")), ("domain", r.get("domain")), ("freshness_state", freshness_state)):
+            if val:
+                out[key] = str(val)
+        out["air"] = classify_air({k: v for k, v in out.items() if k != "air"}, allowlist)
+        rows.append(out)
+    total = _safe_int(report.get("total")) or len(rows)
+    with_gaps = _safe_int(report.get("with_validation_gaps"))
+    fresh_counts = report.get("freshness_counts")
+    dark_n = _safe_int(fresh_counts.get("dark")) if isinstance(fresh_counts, dict) else 0
+    detail = (
+        f"live capability inventory (hapax-capability-inventory --json): "
+        f"{total} descriptors, {with_gaps} with validation gaps, {dark_n} DARK (freshness unmeasured)"
+    )
+    return [_capability_source("capability_inventory", path, total, "observed", allowlist, detail)], rows
+
+
 def _capability_surface_pack_rows(cfg: dict | None, allowlist: list[str]) -> tuple[list[dict], list[dict]]:
     paths = _capability_surface_pack_paths(cfg)
     sources: list[dict] = []
@@ -2201,7 +2282,13 @@ def read_capability_summary(council_root: str, allowlist: list[str], cfg: dict |
     freshness_by_route = {r.route_id: r for r in (getattr(freshness, "routes", ()) or [])}
     route_auth_dir = receipt_dir / ROUTE_AUTHORITY_RECEIPT_DIRNAME
 
-    pack_sources, pack_rows = _capability_surface_pack_rows(cfg, allowlist)
+    inv_sources, inv_rows = _capability_inventory_rows(cfg, allowlist)
+    if inv_rows:
+        # 1e convergence: the LIVE capability inventory (#4401) supersedes the static example pack
+        pack_sources, pack_rows = inv_sources, inv_rows
+    else:
+        pack_sources, pack_rows = _capability_surface_pack_rows(cfg, allowlist)
+        pack_sources = inv_sources + pack_sources  # keep the inventory-absent marker honest (DARK visibility)
     hkp_sources, hkp_evidence_count, hkp_source_refs, hkp_blocker = _hkp_support_summary(cfg, allowlist)
     sources = [
         _capability_source("platform_registry", registry_path, len(routes), "observed" if registry is not None else "error", allowlist, sources_obj.registry_error or "typed platform capability registry"),
