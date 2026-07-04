@@ -2,8 +2,8 @@
 
 The dispatch verb's `submit_dispatch` enqueues a ``DispatchIntent`` to the methodology-dispatch relay MQ
 (a sqlite db shared with ``hapax-methodology-dispatch``). This module re-implements the small producer
-contract from hapax-council's ``shared/relay_mq.send_message`` so reins stays DECOUPLED (it imports the
-hapax-spine wheel for the SDLC-runtime mechanism, NOT council's relay substrate). The contract is stable
+contract from the upstream coordinator's ``relay_mq.send_message`` so reins stays DECOUPLED (it imports the
+hapax-spine wheel for the SDLC-runtime mechanism, NOT the coordinator's relay substrate). The contract is stable
 + fully specified; the follow-up is to canonize ``relay_mq`` in hapax-spine so both consume one SSOT.
 
 SPAWN BOUNDARY (load-bearing): this producer is a PURE SQLITE INSERT. It does NOT spawn a process, call
@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# P0 freshness (mirrors hapax-council/shared/relay_mq_envelope.PRIORITY_FRESHNESS[0]).
+# P0 freshness (mirrors the upstream relay_mq_envelope.PRIORITY_FRESHNESS[0]).
 _P0_STALE_AFTER_S = 600
 _P0_EXPIRES_AFTER_S = 3600
 
@@ -94,7 +94,7 @@ def default_mq_db_path() -> str:
 def _uuid7() -> str:
     """A UUIDv7 string (time-ordered, lexicographically sortable). Python 3.12 lacks uuid.uuid7().
 
-    Verbatim from hapax-council/shared/relay_mq_envelope._uuid7 so reins-minted ids are
+    Verbatim from the upstream relay_mq_envelope._uuid7 so reins-minted ids are
     indistinguishable from coordinator-minted ones (the dispatcher accepts either)."""
     timestamp_ms = int(time.time() * 1000)
     rand_a = int.from_bytes(os.urandom(2), "big") & 0x0FFF
@@ -144,7 +144,7 @@ def send_dispatch_message(req: Any, db_path: str | None = None) -> str:
 
     Returns the envelope's ``message_id`` (the receipt_id reins records). ``db_path`` injects a temp db
     for tests; production resolves ``default_mq_db_path()``. Field-for-field mirrors the coordinator's
-    ``send_message`` call (hapax-council/agents/coordinator/core.py:1279) so the dispatcher consumes it."""
+    ``send_message`` call (the upstream coordinator's send path) so the dispatcher consumes it."""
     db = Path(db_path or default_mq_db_path())
     db.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(

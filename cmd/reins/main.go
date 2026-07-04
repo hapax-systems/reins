@@ -745,7 +745,7 @@ func main() {
 				samples := map[string]grammar.CellValue{
 					"identity":   {Text: "task-4284", Width: 12},
 					"ownership":  {Text: "alpha", Width: 8},
-					"place":      {Text: "podium", Width: 8},
+					"place":      {Text: "host-a", Width: 8},
 					"action":     {Text: "implement", Width: 10},
 					"posture":    {Text: "crit", Width: 6},
 					"variant":    {Text: "opus·fast", Width: 10},
