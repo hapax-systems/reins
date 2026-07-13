@@ -1345,6 +1345,12 @@ func (m Model) coordinatorChatPane(w, h int) string {
 	// the chat STEERS DIRECTION only (priority · hold · scope · accept/reject) — never speed/provider/
 	// fanout; those are DERIVED by the routing/admission calculation (the throughput-governed doctrine).
 	b.WriteString(" " + grammar.C("brt", "CHAT") + grammar.C("mut", " · steer direction — not speed/provider") + "\n")
+	contextLines := 0
+	if m.paneCap() < 3 {
+		compact := m.renderContextCarrierCompact(w)
+		b.WriteString(compact + "\n")
+		contextLines = strings.Count(compact, "\n") + 1
+	}
 	b.WriteString(" " + grammar.C("border", strings.Repeat("─", maxVisible(10, w-2))) + "\n")
 
 	// FOOTER first (bottom-anchored): the prompt/hint/send-gate must NEVER be pushed off-screen by a long
@@ -1409,8 +1415,8 @@ func (m Model) coordinatorChatPane(w, h int) string {
 		groundingLines = 1
 	}
 
-	// budget for the CONVERSATION turns = h − header(2) − footer − grounding − witness block.
-	budget := h - 2 - len(footer) - groundingLines - witnessLines
+	// budget for the CONVERSATION turns = h − header/context − footer − grounding − witness block.
+	budget := h - 2 - contextLines - len(footer) - groundingLines - witnessLines
 	if budget < 1 {
 		budget = 1
 	}
@@ -1832,7 +1838,6 @@ func (m Model) coordinatorSelectionContext(w int) string {
 // each eval token redacts per-field via the proven sessionFieldValueForAir+airHue pattern; honest-dark
 // when no lane is bound (or the binding is withheld on air).
 func (m Model) coordContextReadout(t grammar.Task, w int) string {
-	ctxSuffix := m.contextSuffix(t.TaskID)
 	var sess grammar.Session
 	found := false
 	for _, s := range m.Sessions {
@@ -1846,7 +1851,7 @@ func (m Model) coordContextReadout(t grammar.Task, w int) string {
 		break
 	}
 	if !found {
-		return " " + grammar.C("mut", "   coord ctx  no lane bound (or binding withheld on air)") + ctxSuffix + "\n"
+		return " " + grammar.C("mut", "   coord ctx  no lane bound (or binding withheld on air)") + "\n"
 	}
 	role := sessionFieldValueForAir(sess, "role", m.AIR)
 	seg := grammar.C("2nd", "   coord ctx  ") +
@@ -1859,16 +1864,11 @@ func (m Model) coordContextReadout(t grammar.Task, w int) string {
 		seg += grammar.C(airHue(blockerToken(sess.Blocker), sess.AIR, "blocker", m.AIR), " · blocker "+blk)
 	}
 	seg += grammar.C(airHue(attentionToken(sess.Attention), sess.AIR, "attention", m.AIR), " · attn "+sessionFieldValueForAir(sess, "attention", m.AIR))
-	return " " + seg + ctxSuffix + "\n"
+	return " " + seg + "\n"
 }
 
-// contextSuffix renders the highest-signal affordance the tri-audience /read/context substrate OFFERS on
-// the focused work-unit (matched by subject) as a compact " · ctx kind:state" — or "" when the producer is
-// dark or offers nothing (honest, no clutter). Readout only: the affordance is a WHY signal the operator
-// acts on THROUGH the governed apply seam — the cockpit never injects (the dig ruling).
-// coordChatInputDisplay redacts a "/"-directive's TARGET on air, mirroring commandInputDisplay: the Crow
-// chat is the single dispatch point AND airs on the livestream, so a governed verb's sensitive target id
-// is sealed in the on-air RENDERING (the executable CoordChatInput buffer is unchanged).
+// coordChatInputDisplay redacts a "/"-directive's target on air. The executable input buffer
+// remains unchanged; only the broadcast rendering is sealed.
 func (m Model) coordChatInputDisplay() string {
 	if !m.AIR {
 		return m.CoordChatInput
@@ -1885,39 +1885,6 @@ func (m Model) coordChatInputDisplay() string {
 		return "/" + fields[0] + " ▒▒▒"
 	}
 	return m.CoordChatInput
-}
-
-func (m Model) contextSuffix(taskID string) string {
-	// AIR guard: the ctx suffix is derived from the OPERATOR_PRIVATE projection (FetchContext hardcodes it),
-	// which is off-air by definition — showing an affordance kind on air would disclose that a (possibly
-	// redacted) subject carries operator-private context. Suppress on air (the derived-channel seal).
-	if m.AIR {
-		return ""
-	}
-	if m.ContextDark || len(m.ContextAffordances) == 0 || strings.TrimSpace(taskID) == "" {
-		return ""
-	}
-	// deterministic, boundary-aware subject match: exact first, then the closed prefixed form
-	// ("task:"+id) — never a bare Contains (cc-a must not match cc-a-extended; map order must not decide).
-	var affs []grammar.ContextAffordance
-	if v, ok := m.ContextAffordances[taskID]; ok {
-		affs = v
-	} else if v, ok := m.ContextAffordances["task:"+taskID]; ok {
-		affs = v
-	}
-	best := ""
-	for _, a := range affs {
-		if a.State == "present" { // an EARNED affordance — the strongest WHY signal
-			return grammar.C("2nd", " · ctx "+a.Kind)
-		}
-		if best == "" {
-			best = a.Kind + ":" + a.State // else the first (e.g. a HOLD — still informative)
-		}
-	}
-	if best == "" {
-		return ""
-	}
-	return grammar.C("mut", " · ctx "+best)
 }
 
 func (m Model) bodyForPage(w, h int) string {
@@ -5568,11 +5535,859 @@ func (m Model) renderWindowCatalog(w int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m Model) contextCarrierCompactState() string {
+	if m.AIR {
+		return strings.ToUpper(string(grammar.ContextReadDark))
+	}
+	switch m.ContextReadout.State {
+	case grammar.ContextReadDark, grammar.ContextReadHold:
+		return strings.ToUpper(string(m.ContextReadout.State))
+	default:
+		return strings.ToUpper(string(grammar.ContextReadDark))
+	}
+}
+
+func (m Model) renderContextCarrier(w int) string {
+	state := m.ContextReadout.State
+	reasons := append([]string(nil), m.ContextReadout.ReasonCodes...)
+	if m.AIR {
+		state = grammar.ContextReadDark
+		reasons = []string{"operator_private_withheld_on_air"}
+	}
+	if state != grammar.ContextReadDark && state != grammar.ContextReadHold {
+		state = grammar.ContextReadDark
+		reasons = []string{"context_read_invalid"}
+	}
+	if len(reasons) == 0 {
+		reasons = []string{"context_read_invalid"}
+	}
+
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("brt", "CONTEXT CARRIER") +
+		grammar.C("mut", " — operator-private readout; carrier admission dominates") + "\n")
+	writer := newContextRenderWriter(&b, w)
+	token := "mut"
+	if state == grammar.ContextReadHold {
+		token = "yel"
+	}
+	writer.writeKV("state", strings.ToUpper(string(state)), token)
+	for _, reason := range reasons {
+		writer.writeKV("reason", reason, "mut")
+	}
+	if state != grammar.ContextReadHold || m.AIR {
+		writer.finish("retained carrier readout")
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	index, semanticState := m.contextProjectionForRender()
+	if semanticState != "ready" {
+		switch semanticState {
+		case "opaque":
+			writer.writeHoldKV("projection", "OPAQUE compatibility HOLD", "yel")
+			writer.writeHoldKV("context", "locked v1 semantic loss remains explicit", "mut")
+		case "stale":
+			writer.writeHoldKV("projection", "STALE semantic view", "yel")
+			writer.writeHoldKV("context", "projection expired; no projected actions shown", "mut")
+		default:
+			writer.writeHoldKV("projection", "DARK semantic view", "mut")
+			writer.writeHoldKV("context", "raw HOLD retained; contextual index unavailable", "mut")
+		}
+		writer.finish("retained carrier readout")
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	writer.writeHoldKV(
+		"verification",
+		"structure/content addressed; source frame and producer receipt unverified",
+		"yel",
+	)
+	writer.writeHoldKV("task", index.Position.TaskRef, "yel")
+	writer.writeHoldKV(
+		"position",
+		index.Position.StageToken+" -> "+writer.join(index.Position.LegalSuccessors, ", "),
+		"2nd",
+	)
+	writer.writeHoldKV(
+		"canon",
+		fmt.Sprintf(
+			"%s v%d %s · image %s",
+			index.Position.CanonID,
+			index.Position.CanonVersion,
+			index.Position.CanonLevel,
+			index.Position.CanonImageHash,
+		),
+		"2nd",
+	)
+	writer.writeHoldKV("position ref", index.Position.PositionRef, "mut")
+	writer.writeHoldKV("receipts", writer.join(index.Position.ReceiptLineage, ", "), "mut")
+	writeContextPurposeFacet(writer, index)
+	writeContextCanon(writer, index)
+
+	visibleFacts := index.Facts
+	if len(visibleFacts) > contextRenderEntityLimit {
+		visibleFacts = visibleFacts[:contextRenderEntityLimit]
+	}
+	for _, fact := range visibleFacts {
+		writeContextProjectionFact(writer, fact, index.ProjectionRef)
+	}
+	writeContextOmission(
+		writer,
+		"visible facts",
+		len(index.Facts)-len(visibleFacts),
+		index.ProjectionRef,
+	)
+	redactedFacts := index.RedactedFacts
+	if len(redactedFacts) > contextRenderEntityLimit {
+		redactedFacts = redactedFacts[:contextRenderEntityLimit]
+	}
+	for _, fact := range redactedFacts {
+		writer.writeHoldKV(
+			"redacted fact",
+			fact.FactID+" [DARK] · no data",
+			"mut",
+		)
+	}
+	writeContextOmission(
+		writer,
+		"redacted facts",
+		len(index.RedactedFacts)-len(redactedFacts),
+		index.ProjectionRef,
+	)
+	redactedObjects := index.RedactedObjects
+	if len(redactedObjects) > contextRenderEntityLimit {
+		redactedObjects = redactedObjects[:contextRenderEntityLimit]
+	}
+	for _, object := range redactedObjects {
+		writer.writeHoldKV(
+			"redacted "+object.ObjectKind,
+			object.ObjectID+" [DARK] · no data",
+			"mut",
+		)
+	}
+	writeContextOmission(
+		writer,
+		"redacted objects",
+		len(index.RedactedObjects)-len(redactedObjects),
+		index.ProjectionRef,
+	)
+
+	actions := append([]grammar.ContextProjectionAction(nil), index.Actions...)
+	sort.Slice(actions, func(i, j int) bool { return actions[i].ActionID < actions[j].ActionID })
+	allActionCount := len(actions)
+	if len(actions) > contextRenderEntityLimit {
+		actions = actions[:contextRenderEntityLimit]
+	}
+	for _, action := range actions {
+		writer.writeHoldKV(
+			"action",
+			action.ActionID+" ["+strings.ToUpper(action.State.Value)+
+				"] projected "+action.Disposition,
+			"yel",
+		)
+		writeContextProjectionState(writer, "action", action.State)
+		writer.writeHoldKV("operation", action.Operation, "2nd")
+		writer.writeHoldKV("why", action.Why, "pri")
+		writer.writeHoldKV("predicted", action.PredictedEffect, "2nd")
+		writer.writeHoldKV("recovery", action.Recovery, "mut")
+		writeContextProjectionList(
+			writer,
+			"action source fact",
+			action.SourceFactRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		for _, guard := range action.GuardEvidence {
+			writer.writeHoldKV(
+				"guard",
+				guard.Guard+" ["+strings.ToUpper(guard.Disposition)+"]",
+				"mut",
+			)
+			writeContextProjectionList(
+				writer,
+				"guard evidence",
+				guard.EvidenceRefs,
+				"mut",
+				index.ProjectionRef,
+			)
+		}
+		writer.writeHoldKV("receipt", action.ExpectedReceiptRef, "mut")
+		writeContextNoEffect(writer, "action effect", action.NoEffect, action.MayAuthorize)
+	}
+	writeContextOmission(writer, "actions", allActionCount-len(actions), index.ProjectionRef)
+	events := index.Events
+	if len(events) > contextRenderChronologyLimit {
+		headCount := contextRenderChronologyLimit / 2
+		tailCount := contextRenderChronologyLimit - headCount
+		window := make([]grammar.ContextProjectionEvent, 0, contextRenderChronologyLimit)
+		window = append(window, events[:headCount]...)
+		window = append(window, events[len(events)-tailCount:]...)
+		events = window
+	}
+	for _, event := range events {
+		writer.writeHoldKV(
+			"chronology",
+			event.OccurredAt+" · "+event.Kind+" · "+event.EventID+
+				" ["+strings.ToUpper(event.State.Value)+"]",
+			"2nd",
+		)
+		reasons := "none"
+		if len(event.State.ReasonCodes) > 0 {
+			reasons = contextJoinWithRetention(
+				event.State.ReasonCodes,
+				",",
+				contextRenderListLimit,
+			)
+		}
+		writer.writeHoldKV(
+			"event context",
+			"subject="+event.SubjectRef+" · state="+strings.ToUpper(event.State.Value)+
+				" · reasons="+reasons+" · authority="+event.AuthorityCeiling+
+				fmt.Sprintf(" · may_authorize=%t", event.MayAuthorize),
+			"mut",
+		)
+		writer.writeHoldKV(
+			"event evidence",
+			"sources="+contextJoinWithRetention(
+				event.SourceRefs,
+				",",
+				contextRenderListLimit,
+			)+" · caused by="+contextJoinWithRetention(
+				event.CausedBy,
+				",",
+				contextRenderListLimit,
+			),
+			"mut",
+		)
+	}
+	writeContextOmission(writer, "causal events", len(index.Events)-len(events), index.ProjectionRef)
+	impingements := index.Impingements
+	if len(impingements) > contextRenderEntityLimit {
+		impingements = impingements[:contextRenderEntityLimit]
+	}
+	for _, impingement := range impingements {
+		writer.writeHoldKV(
+			"impingement",
+			impingement.Kind+" ["+strings.ToUpper(impingement.State.Value)+
+				"] · "+impingement.Summary,
+			"yel",
+		)
+		writeContextProjectionState(writer, "impingement", impingement.State)
+		writeContextProjectionList(
+			writer,
+			"impingement source fact",
+			impingement.SourceFactRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"impingement protects",
+			impingement.Protects,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"impingement lawful next",
+			impingement.LegalNext,
+			"mut",
+			index.ProjectionRef,
+		)
+		writer.writeHoldKV(
+			"impingement may authorize",
+			fmt.Sprint(impingement.MayAuthorize),
+			"mut",
+		)
+	}
+	writeContextOmission(
+		writer,
+		"impingements",
+		len(index.Impingements)-len(impingements),
+		index.ProjectionRef,
+	)
+	signals := index.Signals
+	if len(signals) > contextRenderEntityLimit {
+		signals = signals[:contextRenderEntityLimit]
+	}
+	for _, signal := range signals {
+		writer.writeHoldKV("signal", signal.Label+" · "+signal.WhyNow, "2nd")
+		writeContextProjectionState(writer, "signal", signal.State)
+		writer.writeHoldKV("uncertainty", signal.Uncertainty, "mut")
+		writeContextProjectionList(
+			writer,
+			"signal does not prove",
+			signal.DoesNotProve,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"signal source fact",
+			signal.SourceFactRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"signal estimate",
+			signal.EstimateRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		writer.writeHoldKV("signal lens", signal.LensRef, "mut")
+		writer.writeHoldKV("signal constellation", signal.ConstellationRef, "mut")
+		if signal.PortalRef != nil {
+			writer.writeHoldKV("signal portal", *signal.PortalRef, "mut")
+		}
+		writeContextNoEffect(writer, "signal effect", signal.NoEffect, signal.MayAuthorize)
+	}
+	writeContextOmission(writer, "signals", len(index.Signals)-len(signals), index.ProjectionRef)
+	portals := index.Portals
+	if len(portals) > contextRenderEntityLimit {
+		portals = portals[:contextRenderEntityLimit]
+	}
+	for _, portal := range portals {
+		writer.writeHoldKV(
+			"portal",
+			portal.PortalRef+" · "+portal.Purpose+" · no effect",
+			"2nd",
+		)
+		writeContextProjectionState(writer, "portal", portal.State)
+		writeContextProjectionList(
+			writer,
+			"portal source fact",
+			portal.SourceFactRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		writer.writeHoldKV("portal budget", portal.BudgetRef, "mut")
+		writeContextProjectionList(
+			writer,
+			"portal effectivity",
+			portal.EffectivityBasis,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextNoEffect(writer, "portal effect", portal.NoEffect, portal.MayAuthorize)
+	}
+	writeContextOmission(writer, "portals", len(index.Portals)-len(portals), index.ProjectionRef)
+	writer.finish(index.ProjectionRef)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderContextCarrierCompact(w int) string {
+	state := m.contextCarrierCompactState()
+	if m.AIR {
+		return " " + grammar.C("mut", "CONTEXT DARK · operator_private_withheld_on_air")
+	}
+	index, semanticState := m.contextProjectionForRender()
+	if semanticState != "ready" {
+		reason := "context_read_invalid"
+		if len(m.ContextReadout.ReasonCodes) > 0 {
+			reason = strings.Join(m.ContextReadout.ReasonCodes, ",")
+		}
+		semantic := strings.ToUpper(semanticState)
+		if semanticState == "dark" {
+			semantic = "DARK"
+		}
+		line := "CONTEXT " + state + " · semantic " + semantic + " · " + reason
+		return " " + grammar.C("mut", clipRunes(line, maxVisible(8, w-1))) + "\n" +
+			" " + grammar.C("yel", clipRunes("[Y] context · carrier state remains dominant", maxVisible(8, w-1)))
+	}
+	meaning := contextJoinWithRetention(index.Meaning, " | ", contextRenderListLimit)
+	if len(index.FocusedFacts) > 0 {
+		meaning = index.FocusedFacts[0].Meaning
+	}
+	line := fmt.Sprintf(
+		"CONTEXT %s · semantic %s · %s · %s",
+		state,
+		strings.ToUpper(index.State.Value),
+		index.Position.TaskRef,
+		index.Position.StageToken,
+	)
+	var b strings.Builder
+	b.WriteString(" " + grammar.C("2nd", clipRunes(line, maxVisible(8, w-1))) + "\n")
+	b.WriteString(" " + grammar.C("mut", clipRunes("why "+meaning, maxVisible(8, w-1))) + "\n")
+	if index.Orientation != nil {
+		boundary := "boundary " + index.Orientation.BoundaryKind +
+			" · facet " + index.Orientation.FacetID +
+			" · can " + contextJoinWithRetention(index.Orientation.Can, ",", contextRenderListLimit) +
+			" · cannot " + contextJoinWithRetention(index.Orientation.Cannot, ",", contextRenderListLimit) +
+			" · no effect · carrier HOLD · [Y] complete facet"
+		b.WriteString(" " + grammar.C("yel", clipRunes(boundary, maxVisible(8, w-1))) + "\n")
+	}
+	if index.LifecyclePossibility != nil {
+		possibility := index.LifecyclePossibility
+		line := "lifecycle possibility " + possibility.FacetID +
+			" · candidate " + possibility.CandidateRef +
+			" · gaps " + possibility.PlantGap.Value + "/" +
+			possibility.HarnessGap.Value + "/" + possibility.MeasurementGap.Value +
+			" · no effect · carrier HOLD · [Y] complete facet"
+		b.WriteString(" " + grammar.C("yel", clipRunes(line, maxVisible(8, w-1))) + "\n")
+	}
+	receipt := "none"
+	if len(index.Actions) > 0 {
+		receipt = index.Actions[0].ExpectedReceiptRef
+	}
+	provenance := "context unavailable"
+	if len(index.FocusedFacts) > 0 {
+		provenance = index.FocusedFacts[0].Provenance.Kind +
+			" / " + index.FocusedFacts[0].FreshnessState
+	}
+	b.WriteString(
+		" " + grammar.C(
+			"2nd",
+			clipRunes(
+				"[Y] context · provenance "+provenance+" · receipt "+receipt,
+				maxVisible(8, w-1),
+			),
+		),
+	)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+const (
+	contextRenderEntityLimit     = 64
+	contextRenderChronologyLimit = 6
+	contextRenderListLimit       = 16
+	contextRenderLineLimit       = 256
+	contextRenderByteLimit       = 32 * 1024
+	contextRenderValueRuneLimit  = 2048
+	// The receipt is bounded by four machine integers and one fixed-size projection locator;
+	// 40 lines covers its worst case at writeWrappedKV's eight-column minimum value width.
+	contextRenderReceiptLineReserve = 40
+	contextRenderReceiptByteReserve = 4 * 1024
+)
+
+type contextRenderWriter struct {
+	b                *strings.Builder
+	width            int
+	lines            int
+	bytes            int
+	sealed           bool
+	omittedItems     int
+	omittedFields    int
+	clippedValues    int
+	omittedRunes     int
+	omissionReceipts []string
+}
+
+func newContextRenderWriter(b *strings.Builder, width int) *contextRenderWriter {
+	return &contextRenderWriter{
+		b:     b,
+		width: width,
+		lines: strings.Count(b.String(), "\n"),
+		bytes: b.Len(),
+	}
+}
+
+func (r *contextRenderWriter) writeKV(label, value, token string) {
+	if r.sealed {
+		r.omittedFields++
+		return
+	}
+	runes := []rune(value)
+	if len(runes) > contextRenderValueRuneLimit {
+		r.omittedRunes += len(runes) - contextRenderValueRuneLimit
+		r.clippedValues++
+		value = string(runes[:contextRenderValueRuneLimit]) +
+			"… [display clipped; exact value retained in projection]"
+	}
+
+	var row strings.Builder
+	writeWrappedKV(&row, label, value, token, r.width)
+	lines := strings.Split(strings.TrimSuffix(row.String(), "\n"), "\n")
+	for _, line := range lines {
+		encoded := line + "\n"
+		if r.lines+1 > contextRenderLineLimit-contextRenderReceiptLineReserve ||
+			r.bytes+len(encoded) > contextRenderByteLimit-contextRenderReceiptByteReserve {
+			r.omittedFields++
+			r.sealed = true
+			return
+		}
+		r.b.WriteString(encoded)
+		r.lines++
+		r.bytes += len(encoded)
+	}
+}
+
+func (r *contextRenderWriter) writeHoldKV(label, value, token string) {
+	value = strings.TrimSpace(strings.TrimSuffix(value, " · carrier HOLD"))
+	r.writeKV(label, "carrier HOLD · "+value, token)
+}
+
+func (r *contextRenderWriter) join(values []string, separator string) string {
+	if len(values) <= contextRenderListLimit {
+		return strings.Join(values, separator)
+	}
+	r.omittedItems += len(values) - contextRenderListLimit
+	return contextJoinWithRetention(values, separator, contextRenderListLimit)
+}
+
+func (r *contextRenderWriter) finish(retainedAt string) {
+	if r.omittedItems == 0 && r.omittedFields == 0 &&
+		r.clippedValues == 0 && r.omittedRunes == 0 {
+		return
+	}
+	summary := fmt.Sprintf(
+		"carrier HOLD · exact context retained in %s · %d source items, "+
+			"%d display fields, and %d runes omitted; %d values clipped",
+		retainedAt,
+		r.omittedItems,
+		r.omittedFields,
+		r.omittedRunes,
+		r.clippedValues,
+	)
+	var receipt strings.Builder
+	for _, omission := range r.omissionReceipts {
+		writeWrappedKV(&receipt, "omitted", "carrier HOLD · "+omission, "mut", r.width)
+	}
+	writeWrappedKV(&receipt, "display omission", summary, "yel", r.width)
+	for _, line := range strings.Split(strings.TrimSuffix(receipt.String(), "\n"), "\n") {
+		encoded := line + "\n"
+		if r.lines+1 > contextRenderLineLimit || r.bytes+len(encoded) > contextRenderByteLimit {
+			break
+		}
+		r.b.WriteString(encoded)
+		r.lines++
+		r.bytes += len(encoded)
+	}
+}
+
+func contextJoinWithRetention(values []string, separator string, limit int) string {
+	if len(values) <= limit {
+		return strings.Join(values, separator)
+	}
+	return strings.Join(values[:limit], separator) +
+		fmt.Sprintf("%s… %d retained in projection", separator, len(values)-limit)
+}
+
+func writeContextPurposeFacet(
+	writer *contextRenderWriter,
+	index grammar.ContextProjectionIndex,
+) {
+	if index.Orientation != nil {
+		writer.writeHoldKV("boundary facet", index.Orientation.FacetID, "yel")
+		writer.writeHoldKV("boundary facet ref", index.Orientation.FacetRef, "mut")
+		writer.writeHoldKV("boundary facet hash", index.Orientation.FacetHash, "mut")
+		writer.writeHoldKV("boundary focus", index.Orientation.FocusRef, "mut")
+		writer.writeHoldKV("boundary position", index.Orientation.PositionRef, "mut")
+		writer.writeHoldKV("boundary", index.Orientation.BoundaryKind, "yel")
+		writeContextProjectionList(
+			writer, "boundary why now", index.Orientation.WhyNowRefs, "2nd", index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer, "projected can", index.Orientation.Can, "yel", index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer, "cannot", index.Orientation.Cannot, "yel", index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer, "until", index.Orientation.Until, "mut", index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer, "IFF", index.Orientation.IFF, "mut", index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer, "protects", index.Orientation.Protects, "mut", index.ProjectionRef,
+		)
+		writer.writeHoldKV("change authority", index.Orientation.ChangeAuthority, "yel")
+		writer.writeHoldKV(
+			"counterfactual action",
+			index.Orientation.Counterfactual.ActionID,
+			"2nd",
+		)
+		writer.writeHoldKV(
+			"counterfactual delta",
+			index.Orientation.Counterfactual.PredictedStateDelta.CanonicalJSON+
+				" · sha256="+index.Orientation.Counterfactual.PredictedStateDelta.SHA256,
+			"mut",
+		)
+		writeContextNoEffect(
+			writer,
+			"counterfactual effect",
+			index.Orientation.Counterfactual.NoEffect,
+			index.Orientation.Counterfactual.MayAuthorize,
+		)
+		writeContextNoEffect(
+			writer,
+			"boundary effect",
+			index.Orientation.NoEffect,
+			index.Orientation.MayAuthorize,
+		)
+	}
+	if index.LifecyclePossibility != nil {
+		possibility := index.LifecyclePossibility
+		writer.writeHoldKV("lifecycle facet", possibility.FacetID, "yel")
+		writer.writeHoldKV("lifecycle facet ref", possibility.FacetRef, "mut")
+		writer.writeHoldKV("lifecycle facet hash", possibility.FacetHash, "mut")
+		writer.writeHoldKV("candidate", possibility.CandidateRef, "yel")
+		writer.writeHoldKV("why now", possibility.WhyNow, "2nd")
+		writer.writeHoldKV("uncertainty", possibility.Uncertainty, "mut")
+		writeContextProjectionList(
+			writer,
+			"candidate source fact",
+			possibility.SourceFactRefs,
+			"mut",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"candidate does not prove",
+			possibility.DoesNotProve,
+			"yel",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"alternative disposition",
+			possibility.AlternativeDispositions,
+			"2nd",
+			index.ProjectionRef,
+		)
+		writeContextProjectionList(
+			writer,
+			"unknown field",
+			possibility.UnknownFields,
+			"mut",
+			index.ProjectionRef,
+		)
+		writer.writeHoldKV(
+			"candidate plant",
+			possibility.CandidatePlant.CanonicalJSON+" · sha256="+possibility.CandidatePlant.SHA256,
+			"mut",
+		)
+		writer.writeHoldKV(
+			"estimated cost",
+			possibility.EstimatedCost.CanonicalJSON+" · sha256="+possibility.EstimatedCost.SHA256,
+			"mut",
+		)
+		writeContextProjectionState(writer, "plant gap", possibility.PlantGap)
+		writeContextProjectionState(writer, "harness gap", possibility.HarnessGap)
+		writeContextProjectionState(writer, "measurement gap", possibility.MeasurementGap)
+		writeContextProjectionList(
+			writer,
+			"lawful next",
+			possibility.LawfulNext,
+			"yel",
+			index.ProjectionRef,
+		)
+		writeContextNoEffect(
+			writer,
+			"lifecycle facet effect",
+			possibility.NoEffect,
+			possibility.MayAuthorize,
+		)
+	}
+}
+
+func writeContextCanon(
+	writer *contextRenderWriter,
+	index grammar.ContextProjectionIndex,
+) {
+	if index.Depth == "raw" {
+		writer.writeHoldKV("WHAT", escapeContextMultiline(index.LifecycleFSM.What), "yel")
+		writer.writeHoldKV("HOW", escapeContextMultiline(index.LifecycleFSM.How), "yel")
+		writer.writeHoldKV("MUST", escapeContextMultiline(index.LifecycleFSM.Must), "yel")
+		return
+	}
+	writer.writeHoldKV(
+		"canon context",
+		"exact WHAT/HOW/MUST retained at "+index.ProjectionRef,
+		"mut",
+	)
+}
+
+func writeContextProjectionState(
+	writer *contextRenderWriter,
+	label string,
+	state grammar.ContextProjectionState,
+) {
+	writer.writeHoldKV(label+" state", strings.ToUpper(state.Value), "yel")
+	for _, reason := range state.ReasonCodes {
+		writer.writeHoldKV(label+" reason", reason, "mut")
+	}
+}
+
+func writeContextNoEffect(
+	writer *contextRenderWriter,
+	label string,
+	noEffect bool,
+	mayAuthorize bool,
+) {
+	writer.writeHoldKV(
+		label,
+		fmt.Sprintf("no_effect=%t may_authorize=%t", noEffect, mayAuthorize),
+		"mut",
+	)
+}
+
+func writeContextProjectionFact(
+	writer *contextRenderWriter,
+	fact grammar.ContextProjectionFact,
+	projectionRef string,
+) {
+	writer.writeHoldKV(
+		"datum",
+		fact.FactID+" ["+strings.ToUpper(fact.State.Value)+"]",
+		"yel",
+	)
+	for _, reason := range fact.State.ReasonCodes {
+		writer.writeHoldKV("datum reason", reason, "mut")
+	}
+	writer.writeHoldKV(
+		"datum identity",
+		fact.FactType+" · subject="+fact.SubjectRef,
+		"2nd",
+	)
+	writer.writeHoldKV(
+		"datum value",
+		"sha256="+fact.Data.SHA256+" · unit="+string(fact.Unit)+
+			" · exact value retained in "+projectionRef,
+		"2nd",
+	)
+	writer.writeHoldKV("projected meaning", fact.Meaning, "yel")
+	writeContextProjectionList(writer, "implication", fact.Implications, "2nd", projectionRef)
+	writeContextProjectionList(writer, "projected proves", fact.Proves, "yel", projectionRef)
+	writeContextProjectionList(writer, "does not prove", fact.DoesNotProve, "yel", projectionRef)
+	writeContextProjectionList(writer, "blind spot", fact.BlindSpots, "mut", projectionRef)
+	writer.writeHoldKV(
+		"provenance",
+		fact.Provenance.Kind+" / "+fact.Provenance.AuthorityLevel+
+			" / "+fact.Provenance.ProducerRef,
+		"2nd",
+	)
+	writeContextProjectionList(
+		writer,
+		"provenance source",
+		fact.Provenance.SourceRefs,
+		"mut",
+		projectionRef,
+	)
+	writer.writeHoldKV(
+		"provenance generation",
+		fact.Provenance.Generation+" · policy="+fact.Provenance.PolicyGeneration,
+		"mut",
+	)
+	writer.writeHoldKV(
+		"provenance time",
+		"observed="+fact.Provenance.ObservedAt+" · produced="+fact.Provenance.ProducedAt,
+		"mut",
+	)
+	writer.writeHoldKV(
+		"freshness",
+		fact.FreshnessState+" · stale after "+fact.Provenance.StaleAfter,
+		"yel",
+	)
+	writer.writeHoldKV(
+		"confidence",
+		fact.Confidence.Word+" / "+fact.Confidence.Method,
+		"2nd",
+	)
+	writeContextProjectionList(
+		writer,
+		"confidence evidence",
+		fact.Confidence.EvidenceRefs,
+		"mut",
+		projectionRef,
+	)
+	writeContextProjectionList(
+		writer,
+		"confidence validity",
+		fact.Confidence.ValidityDomainRefs,
+		"mut",
+		projectionRef,
+	)
+	writer.writeHoldKV(
+		"confidence calibration",
+		"ref="+string(fact.Confidence.CalibrationRef)+
+			" · metric="+string(fact.Confidence.CalibrationMetric)+
+			" · distribution="+fact.Confidence.DistributionState+
+			fmt.Sprintf(" · abstained=%t", fact.Confidence.Abstained),
+		"mut",
+	)
+	writer.writeHoldKV(
+		"datum coordinates",
+		"scope="+fact.ScopeRef+" · temporal="+fact.TemporalRef+
+			" · resolution="+fact.ResolutionRef+" · derivation="+fact.DerivationRef,
+		"mut",
+	)
+	writeContextProjectionList(writer, "relation", fact.RelationRefs, "mut", projectionRef)
+	writeContextProjectionList(writer, "legal next", fact.LegalNext, "yel", projectionRef)
+	writeContextProjectionList(
+		writer,
+		"prohibited next",
+		fact.ProhibitedNext,
+		"yel",
+		projectionRef,
+	)
+	writeContextProjectionList(
+		writer,
+		"expected receipt",
+		fact.ExpectedReceiptRefs,
+		"mut",
+		projectionRef,
+	)
+	writeContextProjectionList(
+		writer,
+		"supersedes",
+		fact.SupersedesRefs,
+		"mut",
+		projectionRef,
+	)
+	writeContextNoEffect(writer, "datum effect", fact.NoEffect, fact.MayAuthorize)
+}
+
+func writeContextProjectionList(
+	writer *contextRenderWriter,
+	label string,
+	values []string,
+	token string,
+	projectionRef string,
+) {
+	visible := values
+	if len(visible) > contextRenderListLimit {
+		visible = visible[:contextRenderListLimit]
+	}
+	for _, value := range visible {
+		writer.writeHoldKV(label, value, token)
+	}
+	writeContextOmission(writer, label+" values", len(values)-len(visible), projectionRef)
+}
+
+func writeContextOmission(
+	writer *contextRenderWriter,
+	kind string,
+	count int,
+	projectionRef string,
+) {
+	if count <= 0 {
+		return
+	}
+	writer.omittedItems += count
+	writer.omissionReceipts = append(
+		writer.omissionReceipts,
+		fmt.Sprintf("%d %s retained in %s", count, kind, projectionRef),
+	)
+}
+
+func escapeContextMultiline(value string) string {
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"\n", "\\n",
+		"\t", "\\t",
+		"\r", "\\r",
+	).Replace(value)
+}
+
 func (m Model) renderYardCockpit(w int) string {
 	var b strings.Builder
 	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
 	b.WriteString(" " + grammar.C("brt", "YARD") + grammar.C("mut", " — Trainyard SDLC cockpit over live Reins read models") + "\n")
-	b.WriteString(" " + grammar.C("yel", "read-only projection") + grammar.C("mut", " · no claim/close/dispatch · no transcript/PTY bridge · [Y]/:yard") + "\n")
+	b.WriteString(" " + grammar.C("yel", "read-only projection") +
+		grammar.C("mut", " · ctx ") +
+		grammar.C("2nd", m.contextCarrierCompactState()) +
+		grammar.C("mut", " · no claim/close/dispatch · no transcript/PTY bridge · [Y]/:yard") + "\n")
 	b.WriteString(" " + grammar.C("2nd", "sources") + " " +
 		m.readSourceChip("events", len(m.Events), m.EventsDark, m.EventsSeq) + grammar.C("mut", " · ") +
 		m.readSourceChip("tasks", len(m.Tasks), m.TasksDark, m.TasksSeq) + grammar.C("mut", " · ") +
@@ -5588,6 +6403,8 @@ func (m Model) renderYardCockpit(w int) string {
 	}
 
 	b.WriteString(m.renderYardRailTopology(w) + "\n")
+	b.WriteString(rule + "\n")
+	b.WriteString(m.renderContextCarrier(w) + "\n")
 	b.WriteString(rule + "\n")
 
 	// The rail topology, DRAWN: the octolinear SDLC metro-map. The textual RAIL TOPOLOGY above is

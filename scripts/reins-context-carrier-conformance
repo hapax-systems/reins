@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+export PYTHONDONTWRITEBYTECODE=1
+
+repo="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+fixture="$repo/api/fixtures/context-canon-gate0-carriers.json"
+predecessor_wheel="${HAPAX_CONTEXT_CANON_PREDECESSOR_WHEEL:-/tmp/hapax-context-canon-final-wheel-20260711/hapax_context_canon-0.1.0-py3-none-any.whl}"
+predecessor_wheel_sha="2c2202acad9050977d9f773c952c2d92c44ac0c0fb626a5395b041eb128cfe08"
+fixture_sha="594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+go_image="golang:1.26.3"
+go_image_id="sha256:2d6c80227255c3112a4d08e67ba98e58efd3846daf15d9d7d4c389565d881b1a"
+
+test "$(sha256sum "$fixture" | cut -d' ' -f1)" = "$fixture_sha"
+test "$(docker image inspect --format '{{.Id}}' "$go_image")" = "$go_image_id"
+if test -f "$predecessor_wheel"; then
+  test "$(sha256sum "$predecessor_wheel" | cut -d' ' -f1)" = "$predecessor_wheel_sha"
+  if uv run --isolated --frozen --project "$repo/api" \
+    --with 'httpx==0.28.1' \
+    --with 'httpx2==2.5.0' \
+    python "$repo/scripts/reins-context-wire-materialize.py" \
+    --mode exact-wheel \
+    --output /dev/null \
+    --fixture "$fixture" \
+    --wheel "$predecessor_wheel" 2>/dev/null; then
+    echo "predecessor context-canon wheel was accepted" >&2
+    exit 1
+  fi
+fi
+
+wire="$(mktemp -d "${TMPDIR:-/tmp}/reins-context-wire.XXXXXXXX")"
+trap 'rm -rf -- "$wire"' EXIT HUP INT TERM
+
+uv run --isolated --frozen --project "$repo/api" \
+  --with 'httpx==0.28.1' \
+  --with 'httpx2==2.5.0' \
+  python "$repo/scripts/reins-context-wire-materialize.py" \
+  --mode source-fixture \
+  --output "$wire" \
+  --fixture "$fixture"
+
+uv run --isolated --frozen --project "$repo/api" \
+  --with 'httpx==0.28.1' \
+  --with 'httpx2==2.5.0' \
+  python "$repo/scripts/reins-context-wire-materialize.py" \
+  --mode no-wheel \
+  --output "$wire" \
+  --fixture "$fixture"
+
+PYTHONPATH="$repo/api" "$repo/api/.venv/bin/python" - "$fixture" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import reins_context
+
+fixture_path = sys.argv[1]
+raw = Path(fixture_path).read_bytes()
+assert hashlib.sha256(raw).hexdigest() == "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+payload = json.dumps(
+    json.loads(raw)["operator_projection"],
+    allow_nan=False,
+    ensure_ascii=True,
+    separators=(",", ":"),
+    sort_keys=True,
+).encode("ascii")
+body = reins_context.parse_context_payload_bytes(payload)
+decoded = json.loads(body)
+assert decoded["state"] == "dark"
+assert decoded["reason_codes"] == ["canonical_verifier_unavailable"]
+assert decoded["projection"] is None and decoded["compatibility"] is None
+PY
+
+uv run --isolated --frozen --project "$repo/api" \
+  --with 'httpx==0.28.1' \
+  --with 'httpx2==2.5.0' \
+  --with 'pytest==9.1.1' \
+  pytest -q -p no:cacheprovider "$repo/api"
+
+uvx --from 'ruff==0.15.12' ruff check \
+  "$repo/api/reins_context.py" \
+  "$repo/api/test_reins_context.py" \
+  "$repo/scripts/reins-context-wire-materialize.py"
+uvx --from 'ruff==0.15.12' ruff check --select E9,F \
+  "$repo/api/reins_read.py" \
+  "$repo/api/test_reins_read.py"
+uvx --from 'ruff==0.15.12' ruff format --check \
+  "$repo/api/reins_context.py" \
+  "$repo/api/test_reins_context.py" \
+  "$repo/scripts/reins-context-wire-materialize.py"
+git -C "$repo" diff --check
+
+unexpected_refs="$(
+  rg -n 'reins_context_correlation|fingerprint_correlation|CorrelationFingerprint' \
+    "$repo" --glob '*.py' --glob '!**/api/test_reins_context.py' || true
+)"
+test -z "$unexpected_refs"
+for host_root in "$HOME/.config/systemd/user" "$HOME/.local/bin"; do
+  if test -e "$host_root" && rg -n \
+    'reins_context_correlation|fingerprint_correlation|CorrelationFingerprint' \
+    "$host_root" --glob '!*.pyc'; then
+    exit 1
+  fi
+done
+
+docker run --rm --pull=never \
+  --mount "type=bind,src=$repo,dst=/src,readonly" \
+  --mount "type=bind,src=$wire,dst=/wire,readonly" \
+  --mount type=tmpfs,destination=/go/pkg/mod \
+  --mount type=tmpfs,destination=/root/.cache/go-build \
+  --workdir /src \
+  --env GOTOOLCHAIN=local \
+  --env REINS_CONTEXT_CARRIER_CONFORMANCE_MANIFEST=/wire/manifest.json \
+  "$go_image" \
+  sh -euc '
+    go test -mod=readonly ./cmd/reins -run "^TestContextCarrierWireConformance$" -count=1
+    go test -mod=readonly ./...
+    go test -mod=readonly -race ./cmd/reins ./internal/api ./internal/model
+    go vet -mod=readonly ./...
+    unformatted="$(gofmt -l cmd internal)"
+    test -z "$unformatted"
+  '
+
+printf '%s\n' 'HOLD reason=current_context_canon_package_artifact_missing fixture_sha256=594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9 predecessor_wheel_rejected=true source_and_go_conformance=pass may_authorize=false'
+exit 78

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -469,143 +471,147 @@ func (m Model) yankTurnField(key string) (field, val string, ok bool) {
 }
 
 type Model struct {
-	Title               string
-	Page                int
-	Events              []grammar.Event
-	Tasks               []grammar.Task
-	Sessions            []grammar.Session
-	Traces              []grammar.Trace
-	DispatchRecords     []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
-	TurnLadder          []grammar.Turn           // SESSION TURN-LADDER (live FetchTurns; fixture fallback when the feed is dark)
-	TurnBlocks          map[string][]grammar.TurnBlock
-	TurnRole            string            // the session role whose turns the chat-pane streams (set on entry from the focused lane)
-	TurnsDark           bool              // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
-	TurnsFixture        bool              // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
-	PortForeign         bool              // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
-	Demo                bool              // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
-	CockpitVersion      string            // the binary's compiled semver (main.version); compared to APIVersion → GEN-SKEW
-	APIVersion          string            // the API's /read/meta version; a mismatch means the two halves shipped out of sync
-	ServingSHA          string            // U1: the serving generation sha from /read/meta (staleness/identity witness)
-	WiredVerbs          map[string]bool   // apply-seam: the router's live wired-set from /read/meta.verbs
-	VerbModes           map[string]string // apply-seam: per-verb mode (preview verbs must not read as applied)
-	DeviceOverride      DeviceClass       // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
-	PendingCommand      *CommandRequest   // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
-	LastVerdict         string            // apply-seam: the last witnessed command verdict (rendered)
-	Commands            []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
-	CommandsEnforcement string            // U3b: the enforcement cell — armed|breakglass|absent|dark (absent until CP-E)
-	CommandsIntegrity   string            // tamper-evidence of the witnessed ledger — verified|empty|unsigned|broken:<reason>|unknown
-	CommandsDark        bool
-	CommandsError       string
-	pending             *pendingReanchor // U2: identity anchors from --resume awaiting the first non-dark fold (unexported: never serialized)
-	SessionDetail       grammar.SessionDetail
-	Intake              grammar.IntakeSummary
-	Capabilities        grammar.CapabilitySummary
-	ContextAffordances  map[string][]grammar.ContextAffordance // tri-audience /read/context, operator projection
-	ContextDark         bool
-	Gates               grammar.GateSummary
-	Domains             grammar.DomainSummary
-	Dynamics            grammar.Graph
-	Epistemics          grammar.EpistemicsSummary
-	EventsDark          bool
-	TasksDark           bool
-	SessionsDark        bool
-	TracesDark          bool
-	SessionDetailDark   bool
-	IntakeDark          bool
-	CapabilitiesDark    bool
-	GatesDark           bool
-	DomainsDark         bool
-	Vault               []grammar.VaultNote // E11.5b Obsidian vault metadata (live /read/vault)
-	VaultDark           bool
-	Observe             []grammar.ObserveDimension // E11.7 whole-system awareness (live /read/observe)
-	ObserveDark         bool
-	RoutePosture        grammar.RoutePosture     // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
-	RouteCandidates     []grammar.RouteCandidate // U5 — measured demand per routing_class
-	RouteDark           bool
-	DynamicsDark        bool
-	EpistemicsDark      bool
-	EventsError         string
-	TasksError          string
-	SessionsError       string
-	TracesError         string
-	SessionDetailError  string
-	IntakeError         string
-	CapabilitiesError   string
-	GatesError          string
-	DomainsError        string
-	DynamicsError       string
-	EpistemicsError     string
-	EventsSeq           int
-	TasksSeq            int
-	SessionsSeq         int
-	TracesSeq           int
-	IntakeSeq           int
-	CapabilitiesSeq     int
-	GatesSeq            int
-	DomainsSeq          int
-	DynamicsSeq         int
-	EpistemicsSeq       int
-	LastFold            string
-	AIR                 bool // the AIR lens
-	Mode                int  // ModeNormal | ModeCommand
-	Input               string
-	Status              string // last command result / error (one line, above the hint)
-	Reactions           grammar.ReactionSet
-	Quitting            bool // Exec(:quit) sets this; Update turns it into tea.Quit
-	SwapRequested       bool // Exec(:swap) sets this + Quitting; main.go does the exec-handover after the TUI releases the terminal (U6b-deploy cockpit half — self-hosted development)
-	DynScale            int  // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
-	DynFocus            int  // selected dynamics element (node/edge/source) for epistemic inspection
-	LoopFocus           int  // selected A5 causal loop in :loops
-	AxisFocus           int  // selected case-role axis in :axes
-	IdentityFocus       int  // selected principal in :identity
-	RelationalFocus     int  // selected consent facet in :relational
-	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
-	Height              int
-	Beat                int                // low-rate liveness frame; visual only, never authority/readiness
-	Focus               int                // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
-	EFocus              int                // selected row index into m.Events (the :events cursor) — selection is page-aware
-	SFocus              int                // selected row index into m.Sessions (the :sessions cursor)
-	TFocus              int                // selected row index into m.Traces (the :traces cursor)
-	TurnFocus           int                // selected row index into m.TurnLadder (the :session-turns cursor)
-	DetailScroll        int                // reserved detail-pane scroll for expanded turn blocks
-	IFocus              int                // selected row index into visibleIntakeRows (the :intake bucket cursor)
-	CFocus              int                // selected capability/status row index into the grouped :capabilities projection
-	CommandFocus        int                // selected command registry row
-	WindowFocus         int                // selected window registry row
-	SurfaceFocus        int                // selected surface registry row
-	DomainFocus         int                // selected domain registry row
-	LifecycleFocus      int                // selected lifecycle contract row
-	EpiFocus            int                // selected epistemic posture row
-	IntentFocus         int                // selected governed target row on :intent
-	RefScroll           int                // scroll offset for full-width reference pages (:dynamics/:help/:legend/:commands/:windows)
-	Deck                []string           // E8.3 DECK: non-evicting operator-readout history (vs the evicting event STREAM) — no-loss
-	Ring                []RingEntry        // the yank kill-ring (most-recent first)
-	DoorOpen            bool               // the /whois full-screen drill-in is open for the focused task
-	SessionDoorOpen     bool               // the /session full-screen lane card is open for the focused session
-	IntakeDoorOpen      bool               // the /intake full-screen aggregate provenance door is open
-	LastlogDoorOpen     bool               // the /lastlog scrollback door is open (retained event history)
-	EventScrollback     Scrollback         // per-window event-history ring (the /lastlog affordance), fed on poll
-	LastlogOlder        []grammar.Event    // transient backward-paged events (PgUp); cleared on close
-	LastlogPaging       bool               // a /lastlog backward-page fetch is in flight
-	WindowSeen          map[int]string     // per-window state signature at last visit (activity ladder)
-	Sel                 Selection          // the cursor-of-attention's rank/field/type (row index stays in Focus)
-	CoordChatInput      string             // the Yard Coordinator chat input buffer (ModeCoordChat)
-	CoordChatLog        []CoordChatMessage // local structured coordination messages (send gated · CapabilityIO session backend)
-	LensZone            string             // active coordinator-lens zone ("" / "tasks" = task rows; "files" = the filebrowser)
-	FilesCwd            string             // filebrowser current directory (lazily defaulted on first entry)
-	FilesCursor         int                // filebrowser row cursor into FilesEntries
-	FilesEntries        []files.Entry      // the current directory listing (loaded on zone entry / cwd change)
-	FilesErr            string             // last filebrowser load error (honest, shown in the pane)
-	Basket              []string           // injection basket: absolute paths staged from the files zone ([space]); feeds {{basket}}
-	Filter              string             // active :tasks filter (id substring); narrows the selectable set
-	CritFilter          string             // active criticality-class filter (ok|warn|major|crit) — a selected count
-	IntakeSourceFilter  string             // active :intake source filter; empty means all sources
-	CompIdx             int                // fish-style completion: the highlighted candidate in the navigable list
-	Flash               string             // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
-	FlashSeq            int                // monotonic flash id — a stale tick only clears the flash it was armed for
-	IntentTarget        string             // currently reviewed governed intent target, e.g. resume/dispatch/show-route
-	IntentSubject       string             // AIR-safe subject captured before switching to the intent review page
-	SuppressSplitPinned bool               // render-only: split body clone omits the pinned selected-source block
+	Title                  string
+	Page                   int
+	Events                 []grammar.Event
+	Tasks                  []grammar.Task
+	Sessions               []grammar.Session
+	Traces                 []grammar.Trace
+	DispatchRecords        []grammar.DispatchRecord // the cc-dispatch ledger (read on :dispatch; fixture fallback)
+	TurnLadder             []grammar.Turn           // SESSION TURN-LADDER (live FetchTurns; fixture fallback when the feed is dark)
+	TurnBlocks             map[string][]grammar.TurnBlock
+	TurnRole               string            // the session role whose turns the chat-pane streams (set on entry from the focused lane)
+	TurnsDark              bool              // the live turn feed is dark (the ladder is NOT freshly live — labeled honestly, never silently)
+	TurnsFixture           bool              // the ladder shown is the demo FIXTURE (vs kept-but-stale LIVE rows) — disambiguates the dark label
+	PortForeign            bool              // U1: the configured API port answers but is NOT reins (/read/meta app!="reins") — rendered on the title bar
+	Demo                   bool              // reins --demo: a seed-backed FIXTURE instance (no live estate). Set from frame 1 (no ribbon-race); drives a persistent per-page DEMO provenance marker + suppresses ALL live fetch.
+	CockpitVersion         string            // the binary's compiled semver (main.version); compared to APIVersion → GEN-SKEW
+	APIVersion             string            // the API's /read/meta version; a mismatch means the two halves shipped out of sync
+	ServingSHA             string            // U1: the serving generation sha from /read/meta (staleness/identity witness)
+	WiredVerbs             map[string]bool   // apply-seam: the router's live wired-set from /read/meta.verbs
+	VerbModes              map[string]string // apply-seam: per-verb mode (preview verbs must not read as applied)
+	DeviceOverride         DeviceClass       // responsive layout: REINS_DEVICE (handheld/compact/monitor); Auto = infer
+	PendingCommand         *CommandRequest   // apply-seam: Exec sets this for a WIRED governed verb; main.go POSTs it
+	LastVerdict            string            // apply-seam: the last witnessed command verdict (rendered)
+	Commands               []grammar.Command // U3b: the witnessed command-ledger datoms (/read/commands)
+	CommandsEnforcement    string            // U3b: the enforcement cell — armed|breakglass|absent|dark (absent until CP-E)
+	CommandsIntegrity      string            // tamper-evidence of the witnessed ledger — verified|empty|unsigned|broken:<reason>|unknown
+	CommandsDark           bool
+	CommandsError          string
+	pending                *pendingReanchor // U2: identity anchors from --resume awaiting the first non-dark fold (unexported: never serialized)
+	SessionDetail          grammar.SessionDetail
+	Intake                 grammar.IntakeSummary
+	Capabilities           grammar.CapabilitySummary
+	ContextReadout         grammar.ContextReadout
+	ContextEpoch           uint64
+	ContextError           string
+	contextProjection      *grammar.ContextProjectionIndex
+	contextProjectionState string
+	contextNow             func() time.Time
+	Gates                  grammar.GateSummary
+	Domains                grammar.DomainSummary
+	Dynamics               grammar.Graph
+	Epistemics             grammar.EpistemicsSummary
+	EventsDark             bool
+	TasksDark              bool
+	SessionsDark           bool
+	TracesDark             bool
+	SessionDetailDark      bool
+	IntakeDark             bool
+	CapabilitiesDark       bool
+	GatesDark              bool
+	DomainsDark            bool
+	Vault                  []grammar.VaultNote // E11.5b Obsidian vault metadata (live /read/vault)
+	VaultDark              bool
+	Observe                []grammar.ObserveDimension // E11.7 whole-system awareness (live /read/observe)
+	ObserveDark            bool
+	RoutePosture           grammar.RoutePosture     // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
+	RouteCandidates        []grammar.RouteCandidate // U5 — measured demand per routing_class
+	RouteDark              bool
+	DynamicsDark           bool
+	EpistemicsDark         bool
+	EventsError            string
+	TasksError             string
+	SessionsError          string
+	TracesError            string
+	SessionDetailError     string
+	IntakeError            string
+	CapabilitiesError      string
+	GatesError             string
+	DomainsError           string
+	DynamicsError          string
+	EpistemicsError        string
+	EventsSeq              int
+	TasksSeq               int
+	SessionsSeq            int
+	TracesSeq              int
+	IntakeSeq              int
+	CapabilitiesSeq        int
+	GatesSeq               int
+	DomainsSeq             int
+	DynamicsSeq            int
+	EpistemicsSeq          int
+	LastFold               string
+	AIR                    bool // the AIR lens
+	Mode                   int  // ModeNormal | ModeCommand
+	Input                  string
+	Status                 string // last command result / error (one line, above the hint)
+	Reactions              grammar.ReactionSet
+	Quitting               bool // Exec(:quit) sets this; Update turns it into tea.Quit
+	SwapRequested          bool // Exec(:swap) sets this + Quitting; main.go does the exec-handover after the TUI releases the terminal (U6b-deploy cockpit half — self-hosted development)
+	DynScale               int  // :dynamics view-scale (0=all .. 5=evidence); the resolution/zoom knob
+	DynFocus               int  // selected dynamics element (node/edge/source) for epistemic inspection
+	LoopFocus              int  // selected A5 causal loop in :loops
+	AxisFocus              int  // selected case-role axis in :axes
+	IdentityFocus          int  // selected principal in :identity
+	RelationalFocus        int  // selected consent facet in :relational
+	Width                  int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
+	Height                 int
+	Beat                   int                // low-rate liveness frame; visual only, never authority/readiness
+	Focus                  int                // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
+	EFocus                 int                // selected row index into m.Events (the :events cursor) — selection is page-aware
+	SFocus                 int                // selected row index into m.Sessions (the :sessions cursor)
+	TFocus                 int                // selected row index into m.Traces (the :traces cursor)
+	TurnFocus              int                // selected row index into m.TurnLadder (the :session-turns cursor)
+	DetailScroll           int                // reserved detail-pane scroll for expanded turn blocks
+	IFocus                 int                // selected row index into visibleIntakeRows (the :intake bucket cursor)
+	CFocus                 int                // selected capability/status row index into the grouped :capabilities projection
+	CommandFocus           int                // selected command registry row
+	WindowFocus            int                // selected window registry row
+	SurfaceFocus           int                // selected surface registry row
+	DomainFocus            int                // selected domain registry row
+	LifecycleFocus         int                // selected lifecycle contract row
+	EpiFocus               int                // selected epistemic posture row
+	IntentFocus            int                // selected governed target row on :intent
+	RefScroll              int                // scroll offset for full-width reference pages (:dynamics/:help/:legend/:commands/:windows)
+	Deck                   []string           // E8.3 DECK: non-evicting operator-readout history (vs the evicting event STREAM) — no-loss
+	Ring                   []RingEntry        // the yank kill-ring (most-recent first)
+	DoorOpen               bool               // the /whois full-screen drill-in is open for the focused task
+	SessionDoorOpen        bool               // the /session full-screen lane card is open for the focused session
+	IntakeDoorOpen         bool               // the /intake full-screen aggregate provenance door is open
+	LastlogDoorOpen        bool               // the /lastlog scrollback door is open (retained event history)
+	EventScrollback        Scrollback         // per-window event-history ring (the /lastlog affordance), fed on poll
+	LastlogOlder           []grammar.Event    // transient backward-paged events (PgUp); cleared on close
+	LastlogPaging          bool               // a /lastlog backward-page fetch is in flight
+	WindowSeen             map[int]string     // per-window state signature at last visit (activity ladder)
+	Sel                    Selection          // the cursor-of-attention's rank/field/type (row index stays in Focus)
+	CoordChatInput         string             // the Yard Coordinator chat input buffer (ModeCoordChat)
+	CoordChatLog           []CoordChatMessage // local structured coordination messages (send gated · CapabilityIO session backend)
+	LensZone               string             // active coordinator-lens zone ("" / "tasks" = task rows; "files" = the filebrowser)
+	FilesCwd               string             // filebrowser current directory (lazily defaulted on first entry)
+	FilesCursor            int                // filebrowser row cursor into FilesEntries
+	FilesEntries           []files.Entry      // the current directory listing (loaded on zone entry / cwd change)
+	FilesErr               string             // last filebrowser load error (honest, shown in the pane)
+	Basket                 []string           // injection basket: absolute paths staged from the files zone ([space]); feeds {{basket}}
+	Filter                 string             // active :tasks filter (id substring); narrows the selectable set
+	CritFilter             string             // active criticality-class filter (ok|warn|major|crit) — a selected count
+	IntakeSourceFilter     string             // active :intake source filter; empty means all sources
+	CompIdx                int                // fish-style completion: the highlighted candidate in the navigable list
+	Flash                  string             // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
+	FlashSeq               int                // monotonic flash id — a stale tick only clears the flash it was armed for
+	IntentTarget           string             // currently reviewed governed intent target, e.g. resume/dispatch/show-route
+	IntentSubject          string             // AIR-safe subject captured before switching to the intent review page
+	SuppressSplitPinned    bool               // render-only: split body clone omits the pinned selected-source block
 }
 
 // FlashClearMsg clears a flash after its lifetime, but only if it's still the current one (seq match).
@@ -1597,10 +1603,18 @@ func (m Model) openEpistemicsForIntakeFocus() Model {
 }
 
 func New(title string) Model {
-	// RouteDark defaults TRUE: an un-fetched ROUTE projection must render honest-dark, never live-empty.
-	// Paths that don't FetchRoute (--probe, driveLiveModel) would otherwise show a fabricated empty-but-live
-	// surface (RouteDark=false + zero posture); FoldRoute flips it on the first real fetch.
-	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true, DeviceOverride: parseDeviceClass(os.Getenv("REINS_DEVICE"))}
+	// Unfetched source state is DARK. Only the strict context fetch fold can replace it with HOLD.
+	return Model{
+		Title:                  title,
+		Sel:                    Selection{Rank: RankRow, Type: "task"},
+		EventScrollback:        Scrollback{Cap: 512},
+		WindowSeen:             map[int]string{},
+		RouteDark:              true,
+		ContextReadout:         darkContextReadout("context_not_fetched"),
+		contextProjectionState: "dark",
+		contextNow:             time.Now,
+		DeviceOverride:         parseDeviceClass(os.Getenv("REINS_DEVICE")),
+	}
 }
 
 // toggleFilesZone flips the coordinator lens between task rows and the filebrowser. On entering the
@@ -1911,21 +1925,274 @@ func (m Model) FoldRoute(posture grammar.RoutePosture, candidates []grammar.Rout
 	return m
 }
 
-// FoldContext is the pure projection for the tri-audience /read/context substrate: the operator-cockpit
-// affordances (classification→affordance→WHY), grouped by subject. Honest-dark until the spine producer
-// emits the fact bundle. Readout only — reins mints nothing; action routes through the governed apply seam.
-func (m Model) FoldContext(affs []grammar.ContextAffordance, dark bool) Model {
-	m.ContextDark = dark
-	if len(affs) == 0 {
-		m.ContextAffordances = nil
+// FoldContext owns the operator-private carrier. Only validated HOLD is retained in Gate 0;
+// every other transition overwrites model-owned carrier buffers before replacing them.
+func (m Model) FoldContext(readout grammar.ContextReadout, fetchErr string) Model {
+	if m.AIR {
+		return m.rejectContextReadout(
+			&readout,
+			"operator_private_withheld_on_air",
+			"",
+		)
+	}
+	if readout.State == grammar.ContextReadPresent {
+		return m.rejectContextReadout(
+			&readout,
+			grammar.ContextReadReasonCanonUnverified,
+			"",
+		)
+	}
+	if fetchErr != "" {
+		if validDarkContextReadout(readout) &&
+			len(readout.ReasonCodes) == 1 &&
+			readout.ReasonCodes[0] == grammar.ContextReadReasonCanonUnverified {
+			next := darkContextReadout(readout.ReasonCodes...)
+			wipeContextReadout(&readout)
+			return m.replaceContextReadout(next, grammar.ContextReadReasonCanonUnverified)
+		}
+		return m.rejectContextReadout(&readout, "context_read_error", "context_read_error")
+	}
+
+	switch readout.State {
+	case grammar.ContextReadDark:
+		if !validDarkContextReadout(readout) {
+			return m.rejectContextReadout(
+				&readout,
+				"context_read_invalid",
+				"context_read_invalid",
+			)
+		}
+		next := darkContextReadout(readout.ReasonCodes...)
+		wipeContextReadout(&readout)
+		return m.replaceContextReadout(next, "")
+	case grammar.ContextReadHold:
+		if !validHoldContextReadout(readout) {
+			return m.rejectContextReadout(
+				&readout,
+				"context_read_invalid",
+				"context_read_invalid",
+			)
+		}
+		next := cloneContextReadout(readout)
+		wipeContextReadout(&readout)
+		m = m.replaceContextReadout(next, "")
+		if next.Compatibility != nil {
+			m.contextProjectionState = "opaque"
+			return m
+		}
+		index, err := next.ProjectionIndexAt(m.contextTime())
+		if err != nil {
+			if errors.Is(err, grammar.ErrContextProjectionStale) {
+				m.contextProjectionState = "stale"
+			} else {
+				m.contextProjectionState = "dark"
+			}
+			return m
+		}
+		m.contextProjection = &index
+		m.contextProjectionState = "ready"
 		return m
+	default:
+		return m.rejectContextReadout(
+			&readout,
+			"context_read_invalid",
+			"context_read_invalid",
+		)
 	}
-	grouped := make(map[string][]grammar.ContextAffordance, len(affs))
-	for _, a := range affs {
-		grouped[a.Subject] = append(grouped[a.Subject], a)
+}
+
+// SetAIR is the single production transition for the broadcast lens. Every transition invalidates
+// in-flight context reads. Enabling AIR overwrites the model-owned carrier buffers; Go runtime
+// temporaries outside this ownership boundary still follow the language's memory lifecycle.
+func (m Model) SetAIR(on bool) Model {
+	if m.AIR != on {
+		m.ContextEpoch++
 	}
-	m.ContextAffordances = grouped
+	m.AIR = on
+	if on {
+		return m.clearContext("operator_private_withheld_on_air", "")
+	}
 	return m
+}
+
+func (m Model) rejectContextReadout(
+	readout *grammar.ContextReadout,
+	reason string,
+	errorCode string,
+) Model {
+	wipeContextReadout(readout)
+	return m.clearContext(reason, errorCode)
+}
+
+func (m Model) clearContext(reason, errorCode string) Model {
+	return m.replaceContextReadout(darkContextReadout(reason), errorCode)
+}
+
+func (m Model) replaceContextReadout(
+	next grammar.ContextReadout,
+	errorCode string,
+) Model {
+	wipeContextReadout(&m.ContextReadout)
+	wipeContextProjectionIndex(m.contextProjection)
+	m.ContextReadout = next
+	m.ContextError = errorCode
+	m.contextProjection = nil
+	m.contextProjectionState = "dark"
+	return m
+}
+
+func (m Model) contextTime() time.Time {
+	if m.contextNow == nil {
+		return time.Now().UTC()
+	}
+	return m.contextNow().UTC()
+}
+
+func (m Model) contextProjectionForRender() (
+	grammar.ContextProjectionIndex,
+	string,
+) {
+	if m.contextProjection == nil {
+		return grammar.ContextProjectionIndex{}, m.contextProjectionState
+	}
+	staleAfter, err := time.Parse(time.RFC3339, m.contextProjection.StaleAfter)
+	if err != nil || !m.contextTime().Before(staleAfter) {
+		return grammar.ContextProjectionIndex{}, "stale"
+	}
+	return *m.contextProjection, "ready"
+}
+
+func wipeContextProjectionIndex(index *grammar.ContextProjectionIndex) {
+	if index == nil {
+		return
+	}
+	for i := range index.Facts {
+		index.Facts[i] = grammar.ContextProjectionFact{}
+	}
+	for i := range index.FocusedFacts {
+		index.FocusedFacts[i] = grammar.ContextProjectionFact{}
+	}
+	for i := range index.RedactedFacts {
+		index.RedactedFacts[i] = grammar.ContextRedactedFact{}
+	}
+	for i := range index.RedactedObjects {
+		index.RedactedObjects[i] = grammar.ContextRedactedObject{}
+	}
+	for i := range index.Actions {
+		index.Actions[i] = grammar.ContextProjectionAction{}
+	}
+	for i := range index.Events {
+		clear(index.Events[i].Payload)
+		index.Events[i] = grammar.ContextProjectionEvent{}
+	}
+	for i := range index.Impingements {
+		index.Impingements[i] = grammar.ContextProjectionImpingement{}
+	}
+	for i := range index.Signals {
+		index.Signals[i] = grammar.ContextProjectionSignal{}
+	}
+	for i := range index.Portals {
+		index.Portals[i] = grammar.ContextProjectionPortal{}
+	}
+	if index.Orientation != nil {
+		clear(index.Orientation.WhyNowRefs)
+		clear(index.Orientation.Protects)
+		clear(index.Orientation.Can)
+		clear(index.Orientation.Cannot)
+		clear(index.Orientation.Until)
+		clear(index.Orientation.IFF)
+		*index.Orientation = grammar.ContextBoundaryOrientation{}
+	}
+	if index.LifecyclePossibility != nil {
+		clear(index.LifecyclePossibility.SourceFactRefs)
+		clear(index.LifecyclePossibility.DoesNotProve)
+		clear(index.LifecyclePossibility.AlternativeDispositions)
+		clear(index.LifecyclePossibility.UnknownFields)
+		clear(index.LifecyclePossibility.PlantGap.ReasonCodes)
+		clear(index.LifecyclePossibility.HarnessGap.ReasonCodes)
+		clear(index.LifecyclePossibility.MeasurementGap.ReasonCodes)
+		clear(index.LifecyclePossibility.LawfulNext)
+		*index.LifecyclePossibility = grammar.ContextLifecyclePossibility{}
+	}
+	clear(index.Meaning)
+	clear(index.Implications)
+	clear(index.BlindSpots)
+	clear(index.LegalNext)
+	clear(index.ProhibitedNext)
+	clear(index.LineageRefs)
+	clear(index.SupersedesRefs)
+	*index = grammar.ContextProjectionIndex{}
+}
+
+func darkContextReadout(reasons ...string) grammar.ContextReadout {
+	if len(reasons) == 0 {
+		reasons = []string{"context_read_invalid"}
+	}
+	return grammar.ContextReadout{
+		Schema:      grammar.ContextReadSchema,
+		State:       grammar.ContextReadDark,
+		Audience:    grammar.ContextReadAudience,
+		ReasonCodes: append([]string(nil), reasons...),
+	}
+}
+
+func validDarkContextReadout(readout grammar.ContextReadout) bool {
+	return readout.Schema == grammar.ContextReadSchema &&
+		readout.Audience == grammar.ContextReadAudience &&
+		readout.State == grammar.ContextReadDark &&
+		readout.Projection == nil &&
+		readout.Compatibility == nil &&
+		validContextReasons(readout.ReasonCodes)
+}
+
+func validHoldContextReadout(readout grammar.ContextReadout) bool {
+	return readout.Schema == grammar.ContextReadSchema &&
+		readout.Audience == grammar.ContextReadAudience &&
+		readout.State == grammar.ContextReadHold &&
+		(readout.Projection == nil) != (readout.Compatibility == nil) &&
+		len(readout.RawEnvelope) > 0 &&
+		validContextReasons(readout.ReasonCodes)
+}
+
+func validContextReasons(reasons []string) bool {
+	return grammar.ValidContextReasonCodes(reasons, false)
+}
+
+func cloneContextReadout(readout grammar.ContextReadout) grammar.ContextReadout {
+	readout.ReasonCodes = append([]string(nil), readout.ReasonCodes...)
+	readout.Projection = cloneRawMessage(readout.Projection)
+	readout.Compatibility = cloneRawMessage(readout.Compatibility)
+	readout.RawEnvelope = append(json.RawMessage(nil), readout.RawEnvelope...)
+	return readout
+}
+
+func cloneRawMessage(raw *json.RawMessage) *json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	cloned := append(json.RawMessage(nil), (*raw)...)
+	return &cloned
+}
+
+func wipeContextReadout(readout *grammar.ContextReadout) {
+	if readout == nil {
+		return
+	}
+	wipeRawMessage(readout.Projection)
+	wipeRawMessage(readout.Compatibility)
+	clear(readout.RawEnvelope)
+	readout.Projection = nil
+	readout.Compatibility = nil
+	readout.RawEnvelope = nil
+	readout.ReasonCodes = nil
+}
+
+func wipeRawMessage(raw *json.RawMessage) {
+	if raw == nil {
+		return
+	}
+	clear(*raw)
+	*raw = nil
 }
 
 func (m Model) FoldCapabilities(caps grammar.CapabilitySummary, dark bool) Model {
@@ -2218,11 +2485,11 @@ func (m Model) Exec(line string) Model {
 	case "air":
 		switch arg0(args) {
 		case "on":
-			m.AIR = true
+			m = m.SetAIR(true)
 		case "off":
-			m.AIR = false
+			m = m.SetAIR(false)
 		default:
-			m.AIR = !m.AIR
+			m = m.SetAIR(!m.AIR)
 		}
 		m.Status = fmt.Sprintf("air %v", m.AIR)
 	case "note", "n": // a free-text sink — the {{…}} refs already expanded above (the template seed)
@@ -2561,9 +2828,9 @@ type CapabilitiesMsg struct {
 }
 
 type ContextMsg struct {
-	Affordances []grammar.ContextAffordance
-	Dark        bool
-	Error       string
+	Readout grammar.ContextReadout
+	Epoch   uint64
+	Error   string
 }
 type VaultMsg struct {
 	Notes []grammar.VaultNote
@@ -2808,7 +3075,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.LastFold = "intake"
 		return m, nil
 	case ContextMsg:
-		m = m.FoldContext(v.Affordances, v.Dark)
+		if v.Epoch != m.ContextEpoch {
+			wipeContextReadout(&v.Readout)
+			return m, nil
+		}
+		m = m.FoldContext(v.Readout, v.Error)
 		return m, nil
 	case CapabilitiesMsg:
 		m = m.FoldCapabilities(v.Capabilities, v.Dark)
@@ -3482,7 +3753,7 @@ func (m Model) updateGlobal(v tea.KeyMsg) (Model, tea.Cmd, bool) {
 	case "q", "ctrl+c":
 		return m, tea.Quit, true
 	case "a": // toggle the AIR lens
-		m.AIR = !m.AIR
+		m = m.SetAIR(!m.AIR)
 		state := "AIR off"
 		if m.AIR {
 			state = "AIR on"

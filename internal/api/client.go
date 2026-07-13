@@ -3,12 +3,15 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hapax-systems/reins/internal/grammar"
 )
@@ -481,48 +484,237 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 	return r.Capabilities, r.Dark, nil
 }
 
-type ctxProjection struct {
-	Affordances []struct {
-		Subject     string                      `json:"subject_ref"`
-		Affordances []grammar.ContextAffordance `json:"affordances"`
-	} `json:"affordances"`
-	FactCount int `json:"fact_count"`
-}
+const maxContextReadBytes = 16 << 20
 
-type contextResp struct {
-	Dark        bool                     `json:"dark"`
-	Reason      string                   `json:"reason"`
-	Projections map[string]ctxProjection `json:"projections"`
-}
+var ErrContextPresentValidationUnavailable = errors.New(
+	"reins: canonical context projection verification unavailable",
+)
 
-// FetchContext reads the tri-audience /read/context substrate and returns the OPERATOR-COCKPIT projection's
-// affordances (subject → offered affordance + state), flattened. Honest-dark until the spine producer emits
-// the fact bundle (then it lights up with no code change). Readout only — never an injector.
-func FetchContext(apiURL string) ([]grammar.ContextAffordance, bool, error) {
+// FetchContext reads only the strict outer carrier. Nested payload semantics are retained as raw
+// bytes and remain unusable until canonical verification and a governed producer receipt exist.
+func FetchContext(apiURL string) (grammar.ContextReadout, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/context")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.ContextReadout{}, fmt.Errorf("reins: READ api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/context"); err != nil {
-		return nil, true, err
+		return grammar.ContextReadout{}, err
 	}
-	var r contextResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxContextReadBytes+1))
+	if err != nil {
+		return grammar.ContextReadout{}, fmt.Errorf("reins: read /read/context: %w", err)
 	}
-	if r.Dark {
-		return nil, true, nil // producer not emitting — honest-dark, not an error
+	defer clear(body)
+	if len(body) > maxContextReadBytes {
+		return grammar.ContextReadout{}, fmt.Errorf(
+			"reins: /read/context exceeds %d bytes", maxContextReadBytes,
+		)
 	}
-	var out []grammar.ContextAffordance
-	for _, subj := range r.Projections["operator_private"].Affordances {
-		for _, a := range subj.Affordances {
-			a.Subject = subj.Subject
-			out = append(out, a)
+	return decodeContextReadout(body)
+}
+
+func decodeContextReadout(payload []byte) (grammar.ContextReadout, error) {
+	if !utf8.Valid(payload) {
+		return grammar.ContextReadout{}, errors.New("reins: /read/context is not valid UTF-8")
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	start, err := decoder.Token()
+	if err != nil {
+		return grammar.ContextReadout{}, fmt.Errorf("reins: decode /read/context: %w", err)
+	}
+	if delim, ok := start.(json.Delim); !ok || delim != '{' {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context must be one JSON object",
+		)
+	}
+
+	allowed := map[string]struct{}{
+		"schema": {}, "state": {}, "audience": {}, "reason_codes": {},
+		"projection": {}, "compatibility": {},
+	}
+	fields := make(map[string]json.RawMessage, len(allowed))
+	defer func() {
+		for _, raw := range fields {
+			clear(raw)
+		}
+	}()
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return grammar.ContextReadout{}, fmt.Errorf(
+				"reins: decode /read/context key: %w", err,
+			)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return grammar.ContextReadout{}, errors.New(
+				"reins: /read/context contains a non-string key",
+			)
+		}
+		if _, ok := allowed[key]; !ok {
+			return grammar.ContextReadout{}, fmt.Errorf(
+				"reins: /read/context contains unknown field %q", key,
+			)
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return grammar.ContextReadout{}, fmt.Errorf(
+				"reins: /read/context contains duplicate field %q", key,
+			)
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return grammar.ContextReadout{}, fmt.Errorf(
+				"reins: decode /read/context field %q: %w", key, err,
+			)
+		}
+		fields[key] = raw
+	}
+	end, err := decoder.Token()
+	if err != nil {
+		return grammar.ContextReadout{}, fmt.Errorf(
+			"reins: close /read/context object: %w", err,
+		)
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != '}' {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context object is not closed",
+		)
+	}
+	if err := rejectTrailingContextJSON(decoder); err != nil {
+		return grammar.ContextReadout{}, err
+	}
+	for key := range allowed {
+		if _, ok := fields[key]; !ok {
+			return grammar.ContextReadout{}, fmt.Errorf(
+				"reins: /read/context is missing field %q", key,
+			)
 		}
 	}
-	return out, false, nil
+
+	var out grammar.ContextReadout
+	retainDecoded := false
+	defer func() {
+		if retainDecoded {
+			return
+		}
+		wipeDecodedContextReadout(&out)
+	}()
+	if err := json.Unmarshal(fields["schema"], &out.Schema); err != nil {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context schema must be a string",
+		)
+	}
+	if err := json.Unmarshal(fields["state"], &out.State); err != nil {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context state must be a string",
+		)
+	}
+	if err := json.Unmarshal(fields["audience"], &out.Audience); err != nil {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context audience must be a string",
+		)
+	}
+	if out.Schema != grammar.ContextReadSchema {
+		return grammar.ContextReadout{}, fmt.Errorf(
+			"reins: /read/context schema is %q", out.Schema,
+		)
+	}
+	if out.Audience != grammar.ContextReadAudience {
+		return grammar.ContextReadout{}, fmt.Errorf(
+			"reins: /read/context audience is %q", out.Audience,
+		)
+	}
+	if bytes.Equal(bytes.TrimSpace(fields["reason_codes"]), []byte("null")) {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context reason_codes must be an array of strings",
+		)
+	}
+	if err := json.Unmarshal(fields["reason_codes"], &out.ReasonCodes); err != nil {
+		return grammar.ContextReadout{}, errors.New(
+			"reins: /read/context reason_codes must be an array of strings",
+		)
+	}
+	if err := validateContextReasonCodes(out.ReasonCodes); err != nil {
+		return grammar.ContextReadout{}, err
+	}
+	if out.Projection, err = contextObjectOrNull(fields["projection"], "projection"); err != nil {
+		return grammar.ContextReadout{}, err
+	}
+	if out.Compatibility, err = contextObjectOrNull(
+		fields["compatibility"], "compatibility",
+	); err != nil {
+		return grammar.ContextReadout{}, err
+	}
+	out.RawEnvelope = append(json.RawMessage(nil), payload...)
+
+	switch out.State {
+	case grammar.ContextReadDark:
+		if out.Projection != nil || out.Compatibility != nil || len(out.ReasonCodes) == 0 {
+			return grammar.ContextReadout{}, errors.New(
+				"reins: DARK context requires null payloads and reasons",
+			)
+		}
+	case grammar.ContextReadHold:
+		if (out.Projection == nil) == (out.Compatibility == nil) || len(out.ReasonCodes) == 0 {
+			return grammar.ContextReadout{}, errors.New(
+				"reins: HOLD context requires exactly one payload and reasons",
+			)
+		}
+	case grammar.ContextReadPresent:
+		if out.Projection == nil || out.Compatibility != nil || len(out.ReasonCodes) != 0 {
+			return grammar.ContextReadout{}, errors.New(
+				"reins: PRESENT context requires projection only and no reasons",
+			)
+		}
+		return grammar.ContextReadout{
+			Schema:      grammar.ContextReadSchema,
+			State:       grammar.ContextReadDark,
+			Audience:    grammar.ContextReadAudience,
+			ReasonCodes: []string{grammar.ContextReadReasonCanonUnverified},
+		}, ErrContextPresentValidationUnavailable
+	default:
+		return grammar.ContextReadout{}, fmt.Errorf(
+			"reins: /read/context state is %q", out.State,
+		)
+	}
+	retainDecoded = true
+	return out, nil
+}
+
+func rejectTrailingContextJSON(decoder *json.Decoder) error {
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err == io.EOF {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("reins: trailing /read/context JSON: %w", err)
+	}
+	return errors.New("reins: /read/context contains trailing JSON")
+}
+
+func validateContextReasonCodes(codes []string) error {
+	if !grammar.ValidContextReasonCodes(codes, true) {
+		return errors.New(
+			"reins: /read/context reason_codes violate the bounded canonical token contract",
+		)
+	}
+	return nil
+}
+
+func contextObjectOrNull(raw json.RawMessage, field string) (*json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, fmt.Errorf(
+			"reins: /read/context %s must be an object or null", field,
+		)
+	}
+	copyOfRaw := append(json.RawMessage(nil), raw...)
+	return &copyOfRaw, nil
 }
 
 type vaultResp struct {
@@ -773,4 +965,17 @@ func FetchDomains(apiURL string) (grammar.DomainSummary, bool, error) {
 		return r.Domains, true, fmt.Errorf("%s", r.Error)
 	}
 	return r.Domains, r.Dark, nil
+}
+
+func wipeDecodedContextReadout(readout *grammar.ContextReadout) {
+	if readout == nil {
+		return
+	}
+	if readout.Projection != nil {
+		clear(*readout.Projection)
+	}
+	if readout.Compatibility != nil {
+		clear(*readout.Compatibility)
+	}
+	clear(readout.RawEnvelope)
 }

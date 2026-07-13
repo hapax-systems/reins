@@ -167,11 +167,11 @@ var PageContracts = map[int]PaneContract{
 		BlindSpot:  "the demand VECTOR (A3/PageDispatch); raw domain bodies",
 	},
 	PageYard: {
-		Question:   "the yard (the lifecycle topology metro-map)",
-		State:      "the yard rails + lanes",
-		Controls:   "navigate the yard",
-		Provenance: "the yard rails-map + the lifecycle registry",
-		BlindSpot:  "non-yard lifecycles; the gate decisions (A2 readiness)",
+		Question:   "the yard (lifecycle topology + current contextual boundary)",
+		State:      "yard rails + lanes + the canonical projection under its carrier admission",
+		Controls:   "navigate the yard; inspect projected context without executing it",
+		Provenance: "yard rails-map + lifecycle registry + operator-private ProjectionEnvelope",
+		BlindSpot:  "producer/frame receipt remains unverified while the context carrier is HOLD",
 	},
 	PageSessionTurns: {
 		Question:   "the steering conversation turns (the Helm chat-pane)",
