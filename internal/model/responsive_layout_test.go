@@ -3,6 +3,8 @@ package model
 import (
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDeviceClassSelection(t *testing.T) {
@@ -45,15 +47,18 @@ func TestDeviceClassSelection(t *testing.T) {
 // The coordinator page collapses its pane count to the device — the operator's cramping fix.
 func TestResponsiveCoordinatorCollapse(t *testing.T) {
 	view := func(dev DeviceClass, w int) string {
-		m := New("REINS")
+		m := gate0ContextModel(t)
 		m.Page, m.Width, m.Height, m.DeviceOverride = PageCoordinator, w, 44, dev
+		m = m.FoldContext(canonicalOperatorContextReadout(t), "")
 		return m.View()
 	}
 	// MONITOR @220 -> full 3-pane (the middle CROW context pane is present)
-	if mon := view(DeviceMonitor, 220); !strings.Contains(mon, "CROW") {
-		t.Fatal("monitor must keep the 3-pane coordinator (CROW context pane)")
+	if mon := view(DeviceMonitor, 220); !strings.Contains(mon, "CROW") ||
+		!strings.Contains(mon, "task:rich") {
+		t.Fatal("monitor must keep the CROW pane and canonical context")
 	}
-	// HANDHELD @164 -> 2-pane LENS|CHAT; the middle CROW pane DROPS (was the cramp), chat survives
+	// HANDHELD @164 -> 2-pane LENS|CHAT; the CROW geometry drops, but its
+	// immediate contextual boundary reflows into CHAT.
 	hh := view(DeviceHandheld, 164)
 	if !strings.Contains(hh, "LENS") || !strings.Contains(hh, "CHAT") {
 		t.Fatalf("handheld coordinator must keep LENS + CHAT")
@@ -61,13 +66,51 @@ func TestResponsiveCoordinatorCollapse(t *testing.T) {
 	if strings.Contains(hh, "CROW") {
 		t.Fatal("handheld must COLLAPSE the 3rd coordinator pane (the cramping) — got the middle pane")
 	}
-	// COMPACT @80 -> single column (chat only): no LENS/CROW pane headers, chat content present
+	if !strings.Contains(hh, "CONTEXT HOLD") ||
+		!strings.Contains(hh, "semantic HOLD") ||
+		!strings.Contains(hh, "task:rich") ||
+		!strings.Contains(hh, "[Y] context") {
+		t.Fatal("handheld reflow deleted canonical context")
+	}
+	// COMPACT @80 -> single CHAT column with the same immediate contextual
+	// boundary in linear order; only the pane geometry disappears.
 	c := view(DeviceCompact, 80)
 	if strings.Contains(c, "CROW") || strings.Contains(c, "LENS ·") {
 		t.Fatal("compact must be a single column (no lens/coordinator pane headers)")
 	}
 	if !strings.Contains(c, "steer") && !strings.Contains(c, "hapax") {
 		t.Fatal("compact must still render the chat (steer) column")
+	}
+	if !strings.Contains(c, "CONTEXT HOLD") ||
+		!strings.Contains(c, "semantic HOLD") ||
+		!strings.Contains(c, "task:rich") ||
+		!strings.Contains(c, "[Y] context") {
+		t.Fatal("compact reflow deleted canonical context")
+	}
+}
+
+func TestCompactContextDoorReachesFullContextWithoutGrantingAction(t *testing.T) {
+	m := gate0ContextModel(t)
+	m.Page, m.Width, m.Height, m.DeviceOverride = PageCoordinator, 80, 44, DeviceCompact
+	m = m.FoldContext(canonicalOperatorContextReadout(t), "")
+
+	opened, _, handled := m.updateGlobal(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	if !handled || opened.Page != PageYard {
+		t.Fatalf("[Y] context door did not open Yard: handled=%v page=%d", handled, opened.Page)
+	}
+	full := opened.renderContextCarrier(100)
+	for _, want := range []string{
+		"action:execute",
+		"Independent measurement and an execution lease are absent.",
+		"receipt:execute",
+		"observed / support_non_authoritative",
+	} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("full context door omitted %q:\n%s", want, full)
+		}
+	}
+	if opened.PendingCommand != nil {
+		t.Fatal("opening the context door created a command")
 	}
 }
 

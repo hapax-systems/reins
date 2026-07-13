@@ -1,10 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/hapax-systems/reins/internal/grammar"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -272,6 +278,249 @@ func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
 	row := ep.Rows[0]
 	if row.RowID != "map-edge:e1" || row.MapSource != "n1" || row.MapTarget != "n2" || row.MapRelation != "feeds" || len(row.SourceRefLabels) != 1 {
 		t.Fatalf("epistemics row should decode map identity and refs: %+v", row)
+	}
+}
+
+func contextEnvelope(state, reasons, projection, compatibility string) []byte {
+	return []byte(fmt.Sprintf(
+		`{"schema":"hapax.reins-context-read.v1","state":%q,"audience":"operator_private","reason_codes":%s,"projection":%s,"compatibility":%s}`,
+		state,
+		reasons,
+		projection,
+		compatibility,
+	))
+}
+
+func TestFetchContextDarkEnvelope(t *testing.T) {
+	payload := contextEnvelope("dark", `["producer_absent"]`, "null", "null")
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/context" {
+			t.Fatalf("FetchContext should GET /read/context, got %s", r.URL.Path)
+		}
+		_, _ = w.Write(payload)
+	})
+
+	readout, err := FetchContext(apiURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.State != grammar.ContextReadDark ||
+		len(readout.ReasonCodes) != 1 ||
+		readout.ReasonCodes[0] != "producer_absent" ||
+		readout.Projection != nil ||
+		readout.Compatibility != nil {
+		t.Fatalf("unexpected DARK readout: %+v", readout)
+	}
+}
+
+func TestDecodeContextHoldRetainsRawProjectionAndEnvelope(t *testing.T) {
+	nested := `{"z": 1.2300, "a":[true, null], "sentinel":"PRIVATE-NESTED"}`
+	payload := contextEnvelope(
+		"hold",
+		`["canonical_verifier_unavailable","producer_receipt_missing"]`,
+		nested,
+		"null",
+	)
+	original := append([]byte(nil), payload...)
+
+	readout, err := decodeContextReadout(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.State != grammar.ContextReadHold || readout.Projection == nil {
+		t.Fatalf("expected projection HOLD, got %+v", readout)
+	}
+	if got := string(*readout.Projection); got != nested {
+		t.Fatalf("nested bytes changed:\nwant %q\n got %q", nested, got)
+	}
+	if !bytes.Equal(readout.RawEnvelope, original) {
+		t.Fatal("full envelope bytes changed")
+	}
+
+	payload[0] = '['
+	if !bytes.Equal(readout.RawEnvelope, original) || string(*readout.Projection) != nested {
+		t.Fatal("retained bytes alias the caller buffer")
+	}
+}
+
+func TestFetchContextHoldRetainsRawCompatibility(t *testing.T) {
+	nested := `{"compatibility_only":true,"sentinel":"COMPAT-PRIVATE"}`
+	payload := contextEnvelope("hold", `["compatibility_only"]`, "null", nested)
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	})
+
+	readout, err := FetchContext(apiURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.Compatibility == nil || readout.Projection != nil {
+		t.Fatalf("expected compatibility-only HOLD, got %+v", readout)
+	}
+	if got := string(*readout.Compatibility); got != nested {
+		t.Fatalf("compatibility bytes changed: %q", got)
+	}
+}
+
+func TestDecodeContextPresentReturnsOnlySafeDark(t *testing.T) {
+	nested := `{"projection_id":"p1","sentinel":"UNVERIFIED-PRIVATE"}`
+	payload := contextEnvelope("present", `[]`, nested, "null")
+
+	readout, err := decodeContextReadout(payload)
+	if !errors.Is(err, ErrContextPresentValidationUnavailable) {
+		t.Fatalf("want canonical verifier sentinel, got %v", err)
+	}
+	if readout.State != grammar.ContextReadDark ||
+		len(readout.ReasonCodes) != 1 ||
+		readout.ReasonCodes[0] != grammar.ContextReadReasonCanonUnverified ||
+		readout.Projection != nil ||
+		readout.Compatibility != nil ||
+		len(readout.RawEnvelope) != 0 {
+		t.Fatalf("unverified PRESENT escaped as a usable carrier: %+v", readout)
+	}
+}
+
+func TestDecodeContextRejectsMissingAndDuplicateOuterFields(t *testing.T) {
+	base := map[string]any{
+		"schema":        grammar.ContextReadSchema,
+		"state":         "dark",
+		"audience":      grammar.ContextReadAudience,
+		"reason_codes":  []string{"producer_absent"},
+		"projection":    nil,
+		"compatibility": nil,
+	}
+	valid, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for key := range base {
+		t.Run("missing_"+key, func(t *testing.T) {
+			missing := make(map[string]any, len(base)-1)
+			for candidate, value := range base {
+				if candidate != key {
+					missing[candidate] = value
+				}
+			}
+			payload, marshalErr := json.Marshal(missing)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, decodeErr := decodeContextReadout(payload); decodeErr == nil {
+				t.Fatalf("missing %q was accepted", key)
+			}
+		})
+
+		t.Run("duplicate_"+key, func(t *testing.T) {
+			encoded, marshalErr := json.Marshal(base[key])
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			payload := []byte(fmt.Sprintf("{%q:%s,%s", key, encoded, valid[1:]))
+			if _, decodeErr := decodeContextReadout(payload); decodeErr == nil {
+				t.Fatalf("duplicate %q was accepted", key)
+			}
+		})
+	}
+}
+
+func TestDecodeContextRejectsMalformedOuterEnvelope(t *testing.T) {
+	valid := contextEnvelope("dark", `["producer_absent"]`, "null", "null")
+	invalidUTF8 := append(append([]byte(nil), valid...), 0xff)
+	cases := map[string][]byte{
+		"non_object":   []byte(`[]`),
+		"unknown":      []byte(strings.TrimSuffix(string(valid), "}") + `,"extra":true}`),
+		"trailing":     append(append([]byte(nil), valid...), []byte(` { }`)...),
+		"invalid_utf8": invalidUTF8,
+		"legacy":       []byte(`{"dark":true,"projections":{}}`),
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeContextReadout(payload); err == nil {
+				t.Fatalf("invalid envelope %q was accepted", payload)
+			}
+		})
+	}
+}
+
+func TestDecodeContextRejectsInvalidValuesAndStateMatrices(t *testing.T) {
+	cases := map[string][]byte{
+		"wrong_schema": contextEnvelope("dark", `["x"]`, "null", "null"),
+		"wrong_audience": []byte(
+			`{"schema":"hapax.reins-context-read.v1","state":"dark","audience":"all","reason_codes":["x"],"projection":null,"compatibility":null}`,
+		),
+		"unknown_state":              contextEnvelope("pending", `["x"]`, "null", "null"),
+		"reasons_null":               contextEnvelope("dark", `null`, "null", "null"),
+		"reasons_scalar":             contextEnvelope("dark", `"x"`, "null", "null"),
+		"reasons_blank":              contextEnvelope("dark", `[""]`, "null", "null"),
+		"reasons_duplicate":          contextEnvelope("dark", `["x","x"]`, "null", "null"),
+		"reasons_unsorted":           contextEnvelope("dark", `["z","a"]`, "null", "null"),
+		"reasons_edge_whitespace":    contextEnvelope("dark", `[" x"]`, "null", "null"),
+		"reasons_uppercase":          contextEnvelope("dark", `["NotCanonical"]`, "null", "null"),
+		"reasons_newline":            contextEnvelope("dark", `["line\nbreak"]`, "null", "null"),
+		"reasons_ansi":               contextEnvelope("dark", `["\u001b[31m"]`, "null", "null"),
+		"reasons_control":            contextEnvelope("dark", `["x\u0000y"]`, "null", "null"),
+		"reasons_lone_surrogate":     contextEnvelope("dark", `["\ud800"]`, "null", "null"),
+		"projection_array":           contextEnvelope("hold", `["x"]`, `[]`, "null"),
+		"compatibility_scalar":       contextEnvelope("hold", `["x"]`, "null", `"bad"`),
+		"dark_with_projection":       contextEnvelope("dark", `["x"]`, `{}`, "null"),
+		"dark_without_reasons":       contextEnvelope("dark", `[]`, "null", "null"),
+		"hold_without_payload":       contextEnvelope("hold", `["x"]`, "null", "null"),
+		"hold_with_both":             contextEnvelope("hold", `["x"]`, `{}`, `{}`),
+		"hold_without_reasons":       contextEnvelope("hold", `[]`, `{}`, "null"),
+		"present_without_projection": contextEnvelope("present", `[]`, "null", "null"),
+		"present_with_compatibility": contextEnvelope("present", `[]`, `{}`, `{}`),
+		"present_with_reasons":       contextEnvelope("present", `["x"]`, `{}`, "null"),
+	}
+	tooLongJSON, err := json.Marshal(
+		[]string{strings.Repeat("a", grammar.ContextReadMaxReasonCodeBytes+1)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases["reason_too_long"] = contextEnvelope(
+		"dark",
+		string(tooLongJSON),
+		"null",
+		"null",
+	)
+	tooMany := make([]string, grammar.ContextReadMaxReasonCodes+1)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("reason_%03d", index)
+	}
+	tooManyJSON, err := json.Marshal(tooMany)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases["too_many_reasons"] = contextEnvelope(
+		"dark",
+		string(tooManyJSON),
+		"null",
+		"null",
+	)
+	// Override the schema field in the one schema-specific case.
+	cases["wrong_schema"] = []byte(strings.Replace(
+		string(cases["wrong_schema"]),
+		grammar.ContextReadSchema,
+		"hapax.reins-context-read.v0",
+		1,
+	))
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeContextReadout(payload); err == nil {
+				t.Fatalf("invalid context matrix was accepted: %s", payload)
+			}
+		})
+	}
+}
+
+func TestFetchContextRejectsOversizeBody(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxContextReadBytes+1))
+	})
+	if _, err := FetchContext(apiURL); err == nil {
+		t.Fatal("oversize /read/context body was accepted")
 	}
 }
 

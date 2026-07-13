@@ -39,25 +39,342 @@ from reins_read import (
 
 
 EXPECTED_DEFAULT_ALLOW = [
-    "kind", "score", "ts", "task_id", "stage", "no_go",
-    "id", "layer", "status", "source", "target", "relation", "res",
-    "role", "platform", "state", "alive", "idle", "stalled", "output_age_s", "relay_age_s",
-    "readiness", "blocker", "attention",
-    "evidence_count", "resume_ready",
-    "evidence_summary", "by_kind", "transcript_roots_observed", "transcript_roots_missing", "truncated",
-    "count", "age_bucket", "coverage", "task_link_state", "severity", "privacy", "raw_access", "exists",
-    "capability_id", "capability_class", "surface_family", "spend_model", "egress_class", "receipt_requirement",
-    "route_count", "ok_count", "blocked_count", "hkp_posture", "source_refs", "source_ref_labels",
-    "route_id", "mode", "profile", "model_id", "effort", "context_mode", "fast_mode", "quantization", "capacity_pool", "demand_vector", "hardening", "eval_plane", "review_obligation", "learning_eligibility", "benchmark_coverage", "fixed_overhead", "route_state", "authority_ceiling",
-    "freshness_ok", "quota_state", "receipt_count", "blockers", "authority",
+    "kind",
+    "score",
+    "ts",
+    "task_id",
+    "stage",
+    "no_go",
+    "id",
+    "layer",
+    "status",
+    "source",
+    "target",
+    "relation",
+    "res",
+    "role",
+    "platform",
+    "state",
+    "alive",
+    "idle",
+    "stalled",
+    "output_age_s",
+    "relay_age_s",
+    "readiness",
+    "blocker",
+    "attention",
+    "evidence_count",
+    "resume_ready",
+    "evidence_summary",
+    "by_kind",
+    "transcript_roots_observed",
+    "transcript_roots_missing",
+    "truncated",
+    "count",
+    "age_bucket",
+    "coverage",
+    "task_link_state",
+    "severity",
+    "privacy",
+    "raw_access",
+    "exists",
+    "capability_id",
+    "capability_class",
+    "surface_family",
+    "spend_model",
+    "egress_class",
+    "receipt_requirement",
+    "route_count",
+    "ok_count",
+    "blocked_count",
+    "hkp_posture",
+    "source_refs",
+    "source_ref_labels",
+    "route_id",
+    "mode",
+    "profile",
+    "model_id",
+    "effort",
+    "context_mode",
+    "fast_mode",
+    "quantization",
+    "capacity_pool",
+    "demand_vector",
+    "hardening",
+    "eval_plane",
+    "review_obligation",
+    "learning_eligibility",
+    "benchmark_coverage",
+    "fixed_overhead",
+    "route_state",
+    "authority_ceiling",
+    "freshness_ok",
+    "quota_state",
+    "receipt_count",
+    "blockers",
+    "authority",
     "route_binding_state",
-    "tool_id", "available", "authority_use", "observed_at", "stale_after",
-    "schema_version", "row_id", "family", "subject_kind", "subject_ref", "posture", "map_kind", "map_id", "map_source", "map_target", "map_relation",
-    "gate_id", "domain", "evidence", "missing", "action",
-    "detail", "generated_at", "package_hash", "default_lens",
-    "domain_id", "lifecycle", "terrain", "depth", "scope", "claim_ceiling", "windows", "surfaces", "parity", "source_refs",
-    "lifecycle_id", "owner", "plant", "posture", "maturity", "adapter_id", "claim_surface", "mutation_surface", "dark_policy", "freshness_policy", "air_class", "commands", "receipt_contracts", "next_evidence",
+    "tool_id",
+    "available",
+    "authority_use",
+    "observed_at",
+    "stale_after",
+    "schema_version",
+    "row_id",
+    "family",
+    "subject_kind",
+    "subject_ref",
+    "posture",
+    "map_kind",
+    "map_id",
+    "map_source",
+    "map_target",
+    "map_relation",
+    "gate_id",
+    "domain",
+    "evidence",
+    "missing",
+    "action",
+    "detail",
+    "generated_at",
+    "package_hash",
+    "default_lens",
+    "domain_id",
+    "lifecycle",
+    "terrain",
+    "depth",
+    "scope",
+    "claim_ceiling",
+    "windows",
+    "surfaces",
+    "parity",
+    "source_refs",
+    "lifecycle_id",
+    "owner",
+    "plant",
+    "posture",
+    "maturity",
+    "adapter_id",
+    "claim_surface",
+    "mutation_surface",
+    "dark_policy",
+    "freshness_policy",
+    "air_class",
+    "commands",
+    "receipt_contracts",
+    "next_evidence",
 ]
+
+
+CONTEXT_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "context-canon-gate0-carriers.json"
+)
+CONTEXT_KEYS = {
+    "schema",
+    "state",
+    "audience",
+    "reason_codes",
+    "projection",
+    "compatibility",
+}
+
+
+def _context_carriers():
+    return json.loads(CONTEXT_FIXTURE.read_text())
+
+
+def _write_context_payload(tmp_path, name):
+    path = tmp_path / "context.json"
+    path.write_text(json.dumps(_context_carriers()[name]))
+    return path
+
+
+def _read_context_response(council_root="", params=None):
+    response = TestClient(build_app(council_root, EXPECTED_DEFAULT_ALLOW)).get(
+        "/read/context", params=params
+    )
+    assert response.status_code == 200
+    return response
+
+
+def _read_context(council_root="", params=None):
+    return _read_context_response(council_root, params).json()
+
+
+def _dark_context(reason):
+    return json.loads(reins_read.reins_context.dark_readout_bytes(reason))
+
+
+def _raise_canonical_verifier_unavailable():
+    raise reins_read.reins_context.ContextReadError("canonical_verifier_unavailable")
+
+
+def test_read_context_absent_is_honest_dark(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(tmp_path / "absent.json"))
+    data = _read_context()
+    assert data == _dark_context("producer_absent")
+    assert set(data) == CONTEXT_KEYS
+
+
+def test_read_context_current_projection_is_dark_without_current_package(
+    tmp_path, monkeypatch
+):
+    path = _write_context_payload(tmp_path, "operator_projection")
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    monkeypatch.setattr(
+        reins_read.reins_context,
+        "_canonical_models",
+        _raise_canonical_verifier_unavailable,
+    )
+    data = _read_context()
+    assert set(data) == CONTEXT_KEYS
+    assert data["state"] == "dark"
+    assert data["audience"] == "operator_private"
+    assert data["reason_codes"] == ["canonical_verifier_unavailable"]
+    assert data["projection"] is None
+    assert data["compatibility"] is None
+
+
+def test_read_context_compatibility_is_dark_without_current_package(
+    tmp_path, monkeypatch
+):
+    path = _write_context_payload(tmp_path, "compatibility")
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    monkeypatch.setattr(
+        reins_read.reins_context,
+        "_canonical_models",
+        _raise_canonical_verifier_unavailable,
+    )
+    data = _read_context()
+    assert set(data) == CONTEXT_KEYS
+    assert data["state"] == "dark"
+    assert data["reason_codes"] == ["canonical_verifier_unavailable"]
+    assert data["projection"] is None
+    assert data["compatibility"] is None
+
+
+def test_read_context_http_wire_exposes_missing_verifier_as_dark(tmp_path, monkeypatch):
+    path = _write_context_payload(tmp_path, "operator_projection")
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    monkeypatch.setattr(
+        reins_read.reins_context,
+        "_canonical_models",
+        _raise_canonical_verifier_unavailable,
+    )
+    client = TestClient(build_app("", EXPECTED_DEFAULT_ALLOW))
+    endpoint = next(
+        route.endpoint
+        for route in client.app.routes
+        if getattr(route, "path", "") == "/read/context"
+    )
+    assert endpoint.__code__.co_varnames[: endpoint.__code__.co_argcount] == (
+        "request",
+    )
+
+    response = client.get("/read/context")
+    assert response.status_code == 200
+    assert response.content == reins_read.reins_context.parse_context_payload_bytes(
+        path.read_bytes()
+    )
+    assert path.read_bytes() not in response.content
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["content-length"] == str(len(response.content))
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "content-encoding" not in response.headers
+    data = response.json()
+    assert set(data) == CONTEXT_KEYS
+    assert data == _dark_context("canonical_verifier_unavailable")
+
+    unsupported = client.get("/read/context", params={"audience": "all"})
+    assert unsupported.status_code == 200
+    assert unsupported.content == reins_read.reins_context.dark_readout_bytes(
+        "audience_unsupported"
+    )
+
+
+@pytest.mark.parametrize("audience", ["all", "yard_context", "public_or_air"])
+def test_read_context_rejects_every_non_operator_audience(
+    tmp_path, monkeypatch, audience
+):
+    path = _write_context_payload(tmp_path, "operator_projection")
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    data = _read_context(params={"audience": audience})
+    assert data == _dark_context("audience_unsupported")
+
+
+def test_read_context_query_short_circuits_before_producer_read(monkeypatch):
+    monkeypatch.setattr(
+        reins_read,
+        "_load_context_payload_bytes",
+        lambda _root: (_ for _ in ()).throw(AssertionError("producer was opened")),
+    )
+    response = _read_context_response(params={"audience": "operator_private"})
+    assert response.content == reins_read.reins_context.dark_readout_bytes(
+        "audience_unsupported"
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (b"{not-json", "producer_malformed"),
+        (b'{"schema":"one","schema":"two"}', "producer_malformed"),
+        (
+            json.dumps({"kind": "context_bundle"}).encode(),
+            "producer_schema_unsupported",
+        ),
+    ],
+)
+def test_read_context_malformed_never_leaks_path_body_or_exception(
+    tmp_path, monkeypatch, body, reason
+):
+    path = tmp_path / "context.json"
+    path.write_bytes(body)
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    data = _read_context()
+    assert set(data) == CONTEXT_KEYS
+    assert data["state"] == "dark"
+    assert data["reason_codes"] == [reason]
+    rendered = json.dumps(data)
+    assert str(path) not in rendered
+    assert body.decode("utf-8", errors="ignore") not in rendered
+
+
+def test_read_context_explicit_path_is_exclusive(tmp_path, monkeypatch):
+    default = tmp_path / "reins-context-bundle.json"
+    default.write_text(json.dumps(_context_carriers()["compatibility"]))
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text("{not-json")
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(explicit))
+    data = _read_context(str(tmp_path))
+    assert data == _dark_context("producer_malformed")
+
+
+def test_read_context_nonregular_producer_is_bounded_dark(tmp_path, monkeypatch):
+    path = tmp_path / "producer.fifo"
+    os.mkfifo(path)
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    data = _read_context()
+    assert data == _dark_context("producer_malformed")
+
+
+def test_read_context_oversize_is_dark_before_adapter(tmp_path, monkeypatch):
+    path = tmp_path / "context.json"
+    path.write_bytes(b" " * (reins_read.reins_context.MAX_CONTEXT_READ_BYTES + 1))
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    data = _read_context()
+    assert data == _dark_context("producer_payload_too_large")
+
+
+def test_read_context_never_emits_present(tmp_path, monkeypatch):
+    for name in ("operator_projection", "compatibility"):
+        path = _write_context_payload(tmp_path, name)
+        monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+        data = _read_context()
+        assert set(data) == CONTEXT_KEYS
+        assert data["state"] != "present"
+        assert "present" not in data["reason_codes"]
 
 
 def test_score_recency_and_kind():
@@ -84,7 +401,11 @@ def test_to_trace_row_folds_langfuse_shape_without_pii():
     )
     assert row["trace_id"] == "trace-1"
     assert row["model"] == "claude-opus-4"
-    assert row["prompt_tok"] == 100 and row["completion_tok"] == 50 and row["total_tok"] == 150
+    assert (
+        row["prompt_tok"] == 100
+        and row["completion_tok"] == 50
+        and row["total_tok"] == 150
+    )
     assert row["cost"] == 0.012
     assert row["latency_ms"] == 2500  # duration seconds -> ms
     # PII guard: prompt/completion text must never enter the operational row
@@ -97,8 +418,13 @@ def test_page_before_returns_strictly_older_window():
     # spine replays oldest->newest; _page_before returns up to `limit` events strictly
     # older than `before` (or the newest `limit` when before is None).
     def _ev(ts, subject):
-        return {"timestamp": ts, "event_type": "coord.test", "subject": subject,
-                "actor": "alpha", "payload": {}}
+        return {
+            "timestamp": ts,
+            "event_type": "coord.test",
+            "subject": subject,
+            "actor": "alpha",
+            "payload": {},
+        }
 
     events = [
         _ev("2026-06-26T10:00:00Z", "t1"),
@@ -108,25 +434,44 @@ def test_page_before_returns_strictly_older_window():
         _ev("2026-06-26T14:00:00Z", "t5"),
     ]
     # no cursor: newest `limit`, oldest->newest order preserved
-    assert [p["subject"] for p in _page_before(events, before=None, limit=2)] == ["t4", "t5"]
+    assert [p["subject"] for p in _page_before(events, before=None, limit=2)] == [
+        "t4",
+        "t5",
+    ]
     # cursor at t4's ts: strictly-older events, newest `limit` of them
-    assert [p["subject"] for p in _page_before(events, before="2026-06-26T13:00:00Z", limit=2)] == ["t2", "t3"]
+    assert [
+        p["subject"]
+        for p in _page_before(events, before="2026-06-26T13:00:00Z", limit=2)
+    ] == ["t2", "t3"]
     # page again from t2's ts
-    assert [p["subject"] for p in _page_before(events, before="2026-06-26T11:00:00Z", limit=2)] == ["t1"]
+    assert [
+        p["subject"]
+        for p in _page_before(events, before="2026-06-26T11:00:00Z", limit=2)
+    ] == ["t1"]
     # before older than everything -> empty (no fabrication)
     assert _page_before(events, before="2026-06-26T10:00:00Z", limit=2) == []
     # limit larger than the strictly-older set returns all of it
-    assert [p["subject"] for p in _page_before(events, before="2026-06-26T14:00:00Z", limit=99)] == ["t1", "t2", "t3", "t4"]
+    assert [
+        p["subject"]
+        for p in _page_before(events, before="2026-06-26T14:00:00Z", limit=99)
+    ] == ["t1", "t2", "t3", "t4"]
 
 
 def test_air_is_default_deny():
-    air = classify_air({"subject": "4284", "summary": "secret name"}, allowlist=["subject"])
+    air = classify_air(
+        {"subject": "4284", "summary": "secret name"}, allowlist=["subject"]
+    )
     assert air["subject"] == "ok" and air["summary"] == "deny"
 
 
 def test_to_event_shape():
-    raw = {"type": "coord.pr.merged", "subject": "4284", "actor": "alpha",
-           "payload": {"summary": "PR#4284 merged"}, "ts": "2026-06-24T14:22:00Z"}
+    raw = {
+        "type": "coord.pr.merged",
+        "subject": "4284",
+        "actor": "alpha",
+        "payload": {"summary": "PR#4284 merged"},
+        "ts": "2026-06-24T14:22:00Z",
+    }
     ev = to_event(raw, allowlist=["kind", "subject"], age_s=2)
     assert ev["kind"] == "pr.merged" and ev["subject"] == "4284"
     assert ev["air"]["actor"] == "deny" and ev["air"]["subject"] == "ok"
@@ -134,7 +479,11 @@ def test_to_event_shape():
 
 def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
     app = build_app("", EXPECTED_DEFAULT_ALLOW)
-    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/session/{role}/turns")
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/read/session/{role}/turns"
+    )
 
     data = endpoint("cc-reins", None, 2)
     # never-mint / never-false-green (dossier F2): fixtures ship dark:true + fixture_only so no
@@ -145,7 +494,18 @@ def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
     assert len(data["turns"]) == 2
 
     turn = data["turns"][0]
-    assert set(turn) == {"ts", "role", "kind", "prov", "summary", "magnitude", "model", "route", "gate", "air"}
+    assert set(turn) == {
+        "ts",
+        "role",
+        "kind",
+        "prov",
+        "summary",
+        "magnitude",
+        "model",
+        "route",
+        "gate",
+        "air",
+    }
     for field in ("ts", "role", "kind", "magnitude", "model", "route", "gate"):
         assert turn["air"][field] == "ok"
     assert turn["summary"] == "fixture assistant response body"
@@ -161,7 +521,11 @@ def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
 
 def test_read_session_turns_unknown_role_is_honest_dark():
     app = build_app("", EXPECTED_DEFAULT_ALLOW)
-    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/session/{role}/turns")
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/read/session/{role}/turns"
+    )
 
     data = endpoint("no-such-role", None, 80)
     assert data["dark"] is True
@@ -189,40 +553,87 @@ def test_read_session_turn_blocks_are_honest_empty_for_any_role_and_ts():
 
 
 def test_to_task_shape_and_air():
-    t = {"task_id": "x-1", "stage": "S6", "authority_case": "CASE-1", "no_go": {"blocked": True, "ok": False}}
+    t = {
+        "task_id": "x-1",
+        "stage": "S6",
+        "authority_case": "CASE-1",
+        "no_go": {"blocked": True, "ok": False},
+    }
     out = to_task("x-1", t, allowlist=["task_id", "stage", "no_go"])
-    assert out["task_id"] == "x-1" and out["stage"] == "S6" and out["no_go"] == "blocked"
+    assert (
+        out["task_id"] == "x-1" and out["stage"] == "S6" and out["no_go"] == "blocked"
+    )
     assert out["air"]["task_id"] == "ok" and out["air"]["authority_case"] == "deny"
 
 
 def test_to_node_shape_and_air():
-    n = {"id": "rdf-owl-kg", "label": "RDF / OWL KG", "kind": "backbone",
-         "layer": "semantic-backbone", "status": "asserted", "resolution": 1,
-         "summary": "Canonical semantic backbone",
-         "context": "Identity and evidence stay separate.",
-         "docs": [{"label": "W3C RDF", "url": "SECRET_URL"}],
-         "hardening": ["Use named graphs"],
-         "aliases": ["knowledge graph"],
-         "tags": ["semantic-core"]}
+    n = {
+        "id": "rdf-owl-kg",
+        "label": "RDF / OWL KG",
+        "kind": "backbone",
+        "layer": "semantic-backbone",
+        "status": "asserted",
+        "resolution": 1,
+        "summary": "Canonical semantic backbone",
+        "context": "Identity and evidence stay separate.",
+        "docs": [{"label": "W3C RDF", "url": "SECRET_URL"}],
+        "hardening": ["Use named graphs"],
+        "aliases": ["knowledge graph"],
+        "tags": ["semantic-core"],
+    }
     out = to_node(n, allowlist=["id", "layer", "status"])
-    assert out["id"] == "rdf-owl-kg" and out["layer"] == "semantic-backbone" and out["status"] == "asserted"
+    assert (
+        out["id"] == "rdf-owl-kg"
+        and out["layer"] == "semantic-backbone"
+        and out["status"] == "asserted"
+    )
     assert out["summary"] == "Canonical semantic backbone"
     assert out["docs"] == "W3C RDF"
     assert out["source_refs"] == "docs:1 refs"
     assert out["source_ref_labels"] == ["W3C RDF"]
     assert out["hardening_notes"] == "Use named graphs"
     assert "SECRET_URL" not in json.dumps(out)
-    assert out["air"]["id"] == "ok" and out["air"]["kind"] == "deny"  # kind not allowlisted -> deny
+    assert (
+        out["air"]["id"] == "ok" and out["air"]["kind"] == "deny"
+    )  # kind not allowlisted -> deny
     assert out["air"]["summary"] == "deny" and out["air"]["docs"] == "deny"
-    assert out["air"]["source_refs"] == "deny" and out["air"]["source_ref_labels"] == "deny"
+    assert (
+        out["air"]["source_refs"] == "deny"
+        and out["air"]["source_ref_labels"] == "deny"
+    )
 
 
 def test_to_edge_shape_and_air():
-    e = {"id": "dmn-to-drd", "source": "dmn", "target": "drd", "relation": "defines", "status": "asserted",
-         "confidence": 1.0, "summary": "DMN includes DRDs.", "docs": [{"label": "OMG DMN", "url": "SECRET_URL", "source_ref": "docs/specs/omg-dmn.md#drd"}]}
-    out = to_edge(e, allowlist=["source", "target", "relation", "source_refs", "source_ref_labels"])
-    assert out["source"] == "dmn" and out["target"] == "drd" and out["relation"] == "defines"
-    assert out["id"] == "dmn-to-drd" and out["confidence"] == "1.0" and out["docs"] == "OMG DMN"
+    e = {
+        "id": "dmn-to-drd",
+        "source": "dmn",
+        "target": "drd",
+        "relation": "defines",
+        "status": "asserted",
+        "confidence": 1.0,
+        "summary": "DMN includes DRDs.",
+        "docs": [
+            {
+                "label": "OMG DMN",
+                "url": "SECRET_URL",
+                "source_ref": "docs/specs/omg-dmn.md#drd",
+            }
+        ],
+    }
+    out = to_edge(
+        e,
+        allowlist=["source", "target", "relation", "source_refs", "source_ref_labels"],
+    )
+    assert (
+        out["source"] == "dmn"
+        and out["target"] == "drd"
+        and out["relation"] == "defines"
+    )
+    assert (
+        out["id"] == "dmn-to-drd"
+        and out["confidence"] == "1.0"
+        and out["docs"] == "OMG DMN"
+    )
     assert out["source_refs"] == "docs:1 refs"
     assert out["source_ref_labels"] == ["omg-dmn.md#drd"]
     assert "SECRET_URL" not in json.dumps(out)
@@ -234,89 +645,140 @@ def test_to_edge_shape_and_air():
 def test_read_dynamics_package_projects_metadata_without_raw_bodies(tmp_path):
     arch = tmp_path / "docs" / "architecture"
     arch.mkdir(parents=True)
-    (arch / "system-dynamics-map.package.json").write_text(json.dumps({
-        "authority_case": "CASE-DYN",
-        "generated_at": "2026-06-18T00:00:00Z",
-        "validation": {"package_gate": "scripts/system-dynamics-map-gate SECRET_RAW_COMMAND"},
-        "artifacts": [{"path": "docs/architecture/system-dynamics-map.seed.json"}],
-    }))
-    (arch / "system-dynamics-map.view-manifest.json").write_text(json.dumps({
-        "source_snapshot": {"node_count": 2, "edge_count": 1},
-        "validation": {"pytest": "uv run pytest"},
-        "workbench_contract": {
-            "defaults": {
-                "inquiry_mode": "release-gates",
-                "audience_mode": "operator",
-                "explanation_path": "release-readiness",
-            },
-            "inquiry_modes": [{
-                "id": "release-gates",
-                "label": "What gates release?",
-                "lens": "operating-slice",
-                "prompt": "SECRET_WORKBENCH_PROMPT",
-                "answer_shape": ["ordered gate path", "scope caveat"],
-                "focus_node_ids": ["sdlc-intake", "review-dossier"],
-                "focus_edge_ids": ["review-dossier-to-pr-ci"],
-            }],
-            "audience_modes": [{
-                "id": "operator",
-                "label": "Operator",
-                "emphasis": "diagnostic next action",
-            }],
-            "explanation_paths": [{
-                "id": "release-readiness",
-                "label": "Release readiness path",
-                "summary": "Teach release readiness.",
-                "must_include": ["what this does not prove"],
-                "scene_count": 1,
-                "scenes": [{
-                    "title": "State what this does not prove",
-                    "lens": "evidence-risk",
-                    "selection": {"group": "nodes", "id": "view-manifest"},
-                    "takeaway": "SECRET_WORKBENCH_TAKEAWAY",
-                    "caveat": "SECRET_WORKBENCH_CAVEAT",
-                }],
-            }],
-            "follow_on_tranches": ["bitemporal snapshot registry"],
-        },
-        "lenses": [{
-            "id": "topology",
-            "label": "Topology",
-            "state_mode": "topology",
-            "layout": "cose",
-            "visible_node_count": 2,
-            "visible_edge_count": 1,
-            "aggregation": {"lossy": False, "reversible": True},
-        }],
-    }))
-    (arch / "system-dynamics-map.lock.json").write_text(json.dumps({
-        "package_hash": "abcdef1234567890",
-        "generated_at": "2026-06-18T00:00:00Z",
-    }))
-    (arch / "system-dynamics-map.claims.json").write_text(json.dumps({
-        "claims": [{
-            "element_kind": "node",
-            "claim_type": "asserted",
-            "subject": "SECRET_CLAIM_SUBJECT",
-            "provenance": {"authority_ceiling": "architecture_contract", "source_ref": "SECRET_REF"},
-            "freshness": {"state": "timeless"},
-        }]
-    }))
-    (arch / "system-dynamics-map.lenses.json").write_text(json.dumps({"default_lens": "topology", "lenses": []}))
-    (arch / "system-dynamics-map.observations.jsonl").write_text(json.dumps({
-        "state": "stale_fixture",
-        "source_type": "fixture",
-        "freshness": "stale",
-        "evidence": [{"label": "SECRET_OBSERVATION_BODY"}],
-    }) + "\n")
-    (arch / "system-dynamics-map.relations.json").write_text(json.dumps({
-        "relations": [{
-            "category": "governance",
-            "allowed_claim_types": ["asserted"],
-            "edge_ids": ["edge-1"],
-            "semantics": "SECRET_RELATION_BODY",
-        }]
-    }))
+    (arch / "system-dynamics-map.package.json").write_text(
+        json.dumps(
+            {
+                "authority_case": "CASE-DYN",
+                "generated_at": "2026-06-18T00:00:00Z",
+                "validation": {
+                    "package_gate": "scripts/system-dynamics-map-gate SECRET_RAW_COMMAND"
+                },
+                "artifacts": [
+                    {"path": "docs/architecture/system-dynamics-map.seed.json"}
+                ],
+            }
+        )
+    )
+    (arch / "system-dynamics-map.view-manifest.json").write_text(
+        json.dumps(
+            {
+                "source_snapshot": {"node_count": 2, "edge_count": 1},
+                "validation": {"pytest": "uv run pytest"},
+                "workbench_contract": {
+                    "defaults": {
+                        "inquiry_mode": "release-gates",
+                        "audience_mode": "operator",
+                        "explanation_path": "release-readiness",
+                    },
+                    "inquiry_modes": [
+                        {
+                            "id": "release-gates",
+                            "label": "What gates release?",
+                            "lens": "operating-slice",
+                            "prompt": "SECRET_WORKBENCH_PROMPT",
+                            "answer_shape": ["ordered gate path", "scope caveat"],
+                            "focus_node_ids": ["sdlc-intake", "review-dossier"],
+                            "focus_edge_ids": ["review-dossier-to-pr-ci"],
+                        }
+                    ],
+                    "audience_modes": [
+                        {
+                            "id": "operator",
+                            "label": "Operator",
+                            "emphasis": "diagnostic next action",
+                        }
+                    ],
+                    "explanation_paths": [
+                        {
+                            "id": "release-readiness",
+                            "label": "Release readiness path",
+                            "summary": "Teach release readiness.",
+                            "must_include": ["what this does not prove"],
+                            "scene_count": 1,
+                            "scenes": [
+                                {
+                                    "title": "State what this does not prove",
+                                    "lens": "evidence-risk",
+                                    "selection": {
+                                        "group": "nodes",
+                                        "id": "view-manifest",
+                                    },
+                                    "takeaway": "SECRET_WORKBENCH_TAKEAWAY",
+                                    "caveat": "SECRET_WORKBENCH_CAVEAT",
+                                }
+                            ],
+                        }
+                    ],
+                    "follow_on_tranches": ["bitemporal snapshot registry"],
+                },
+                "lenses": [
+                    {
+                        "id": "topology",
+                        "label": "Topology",
+                        "state_mode": "topology",
+                        "layout": "cose",
+                        "visible_node_count": 2,
+                        "visible_edge_count": 1,
+                        "aggregation": {"lossy": False, "reversible": True},
+                    }
+                ],
+            }
+        )
+    )
+    (arch / "system-dynamics-map.lock.json").write_text(
+        json.dumps(
+            {
+                "package_hash": "abcdef1234567890",
+                "generated_at": "2026-06-18T00:00:00Z",
+            }
+        )
+    )
+    (arch / "system-dynamics-map.claims.json").write_text(
+        json.dumps(
+            {
+                "claims": [
+                    {
+                        "element_kind": "node",
+                        "claim_type": "asserted",
+                        "subject": "SECRET_CLAIM_SUBJECT",
+                        "provenance": {
+                            "authority_ceiling": "architecture_contract",
+                            "source_ref": "SECRET_REF",
+                        },
+                        "freshness": {"state": "timeless"},
+                    }
+                ]
+            }
+        )
+    )
+    (arch / "system-dynamics-map.lenses.json").write_text(
+        json.dumps({"default_lens": "topology", "lenses": []})
+    )
+    (arch / "system-dynamics-map.observations.jsonl").write_text(
+        json.dumps(
+            {
+                "state": "stale_fixture",
+                "source_type": "fixture",
+                "freshness": "stale",
+                "evidence": [{"label": "SECRET_OBSERVATION_BODY"}],
+            }
+        )
+        + "\n"
+    )
+    (arch / "system-dynamics-map.relations.json").write_text(
+        json.dumps(
+            {
+                "relations": [
+                    {
+                        "category": "governance",
+                        "allowed_claim_types": ["asserted"],
+                        "edge_ids": ["edge-1"],
+                        "semantics": "SECRET_RELATION_BODY",
+                    }
+                ]
+            }
+        )
+    )
     (arch / "system-dynamics-map.canonical.trig").write_text("SECRET_TRIG_BODY")
     (arch / "system-dynamics-map.shacl.ttl").write_text("SECRET_SHACL_BODY")
 
@@ -339,9 +801,19 @@ def test_read_dynamics_package_projects_metadata_without_raw_bodies(tmp_path):
     assert workbench["audience_modes"][0]["label"] == "Operator"
     assert workbench["explanation_paths"][0]["label"] == "Release readiness path"
     assert workbench["explanation_paths"][0]["scenes"][0]["air"]["takeaway"] == "deny"
-    assert any(row["id"] == "topology" and row["status"] == "lossless" for row in summary["lenses"])
+    assert any(
+        row["id"] == "topology" and row["status"] == "lossless"
+        for row in summary["lenses"]
+    )
     dumped = json.dumps(summary)
-    for secret in ["SECRET_CLAIM_SUBJECT", "SECRET_REF", "SECRET_OBSERVATION_BODY", "SECRET_RELATION_BODY", "SECRET_TRIG_BODY", "SECRET_SHACL_BODY"]:
+    for secret in [
+        "SECRET_CLAIM_SUBJECT",
+        "SECRET_REF",
+        "SECRET_OBSERVATION_BODY",
+        "SECRET_RELATION_BODY",
+        "SECRET_TRIG_BODY",
+        "SECRET_SHACL_BODY",
+    ]:
         assert secret not in dumped
 
 
@@ -355,7 +827,9 @@ def test_read_dynamics_package_handles_missing_or_malformed_workbench(tmp_path):
     assert summary["workbench_contract"]["status"] == "missing"
     assert summary["workbench_contract"]["missing"] == "workbench_contract"
 
-    (arch / "system-dynamics-map.view-manifest.json").write_text(json.dumps({"workbench_contract": ["bad"]}))
+    (arch / "system-dynamics-map.view-manifest.json").write_text(
+        json.dumps({"workbench_contract": ["bad"]})
+    )
     summary = read_dynamics_package(str(tmp_path), EXPECTED_DEFAULT_ALLOW)
     assert summary["workbench_contract"]["status"] == "malformed"
     assert summary["workbench_contract"]["missing"] == "workbench_contract"
@@ -364,103 +838,152 @@ def test_read_dynamics_package_handles_missing_or_malformed_workbench(tmp_path):
 def _write_epistemics_dynamics_fixture(root: Path) -> None:
     arch = root / "docs" / "architecture"
     arch.mkdir(parents=True)
-    (arch / "system-dynamics-map.seed.json").write_text(json.dumps({
-        "map_id": "dyn-map",
-        "thesis": "SECRET MAP BODY",
-        "layers": [{"id": "runtime", "label": "SECRET LAYER LABEL"}],
-        "nodes": [{
-            "id": "node-alpha",
-            "label": "SECRET NODE LABEL",
-            "kind": "capability",
-            "layer": "runtime",
-            "status": "asserted",
-            "summary": "SECRET NODE SUMMARY",
-            "docs": [{
-                "label": "SECRET NODE DOC LABEL",
-                "url": "https://secret.example/node-alpha",
-                "source_ref": "docs/sources/node.md#node-alpha",
-            }],
-        }],
-        "edges": [{
-            "id": "edge-alpha-beta",
-            "source": "node-alpha",
-            "target": "node-beta",
-            "relation": "depends_on",
-            "status": "asserted",
-            "summary": "SECRET EDGE SUMMARY",
-            "docs": [{
-                "label": "SECRET EDGE DOC LABEL",
-                "url": "https://secret.example/edge-alpha-beta",
-                "source_refs": ["docs/sources/edge.md#alpha-beta"],
-            }],
-        }],
-    }))
-    (arch / "system-dynamics-map.package.json").write_text(json.dumps({
-        "authority_case": "CASE-DYN",
-        "generated_at": "2026-06-25T12:00:00Z",
-        "validation": {"package_gate": "scripts/gate SECRET_COMMAND"},
-        "artifacts": [{"path": "docs/architecture/system-dynamics-map.seed.json"}],
-    }))
-    (arch / "system-dynamics-map.view-manifest.json").write_text(json.dumps({
-        "source_snapshot": {"node_count": 1, "edge_count": 1},
-        "lenses": [{
-            "id": "topology",
-            "label": "SECRET LENS LABEL",
-            "state_mode": "topology",
-            "layout": "cose",
-            "visible_node_count": 1,
-            "visible_edge_count": 1,
-            "aggregation": {"lossy": False, "reversible": True},
-        }],
-    }))
-    (arch / "system-dynamics-map.lock.json").write_text(json.dumps({
-        "package_hash": "sha256:test-package",
-        "generated_at": "2026-06-25T12:00:00Z",
-    }))
-    (arch / "system-dynamics-map.claims.json").write_text(json.dumps({
-        "claims": [{
-            "element_kind": "node",
-            "element_id": "node-alpha",
-            "claim_type": "asserted",
-            "subject": "SECRET_CLAIM_SUBJECT",
-            "provenance": {
-                "authority_ceiling": "architecture_contract",
-                "source_ref": "docs/claims/node-claim.md#authority",
-                "raw_ref": "SECRET_CLAIM_REF",
-            },
-            "freshness": {"state": "timeless"},
-        }]
-    }))
-    (arch / "system-dynamics-map.observations.jsonl").write_text("\n".join([
-        json.dumps({
-            "subject_kind": "node",
-            "subject": "node-alpha",
-            "state": "observed",
-            "source_type": "fixture",
-            "freshness": "recent",
-            "source_ref": "observations/node-alpha.jsonl#latest",
-            "evidence": [{"label": "node-alpha-observed"}],
-            "body": "SECRET_OBSERVATION_BODY",
-        }),
-        json.dumps({
-            "subject_kind": "edge",
-            "subject": "edge-alpha-beta",
-            "state": "observed",
-            "source_type": "fixture",
-            "freshness": "recent",
-            "source_ref": "observations/edge-alpha-beta.jsonl#latest",
-            "evidence": [{"label": "edge-alpha-beta-observed"}],
-            "body": "SECRET_OBSERVATION_BODY",
-        }),
-    ]) + "\n")
-    (arch / "system-dynamics-map.relations.json").write_text(json.dumps({
-        "relations": [{
-            "category": "governance",
-            "allowed_claim_types": ["asserted"],
-            "edge_ids": ["edge-alpha-beta"],
-            "semantics": "SECRET_RELATION_BODY",
-        }]
-    }))
+    (arch / "system-dynamics-map.seed.json").write_text(
+        json.dumps(
+            {
+                "map_id": "dyn-map",
+                "thesis": "SECRET MAP BODY",
+                "layers": [{"id": "runtime", "label": "SECRET LAYER LABEL"}],
+                "nodes": [
+                    {
+                        "id": "node-alpha",
+                        "label": "SECRET NODE LABEL",
+                        "kind": "capability",
+                        "layer": "runtime",
+                        "status": "asserted",
+                        "summary": "SECRET NODE SUMMARY",
+                        "docs": [
+                            {
+                                "label": "SECRET NODE DOC LABEL",
+                                "url": "https://secret.example/node-alpha",
+                                "source_ref": "docs/sources/node.md#node-alpha",
+                            }
+                        ],
+                    }
+                ],
+                "edges": [
+                    {
+                        "id": "edge-alpha-beta",
+                        "source": "node-alpha",
+                        "target": "node-beta",
+                        "relation": "depends_on",
+                        "status": "asserted",
+                        "summary": "SECRET EDGE SUMMARY",
+                        "docs": [
+                            {
+                                "label": "SECRET EDGE DOC LABEL",
+                                "url": "https://secret.example/edge-alpha-beta",
+                                "source_refs": ["docs/sources/edge.md#alpha-beta"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    (arch / "system-dynamics-map.package.json").write_text(
+        json.dumps(
+            {
+                "authority_case": "CASE-DYN",
+                "generated_at": "2026-06-25T12:00:00Z",
+                "validation": {"package_gate": "scripts/gate SECRET_COMMAND"},
+                "artifacts": [
+                    {"path": "docs/architecture/system-dynamics-map.seed.json"}
+                ],
+            }
+        )
+    )
+    (arch / "system-dynamics-map.view-manifest.json").write_text(
+        json.dumps(
+            {
+                "source_snapshot": {"node_count": 1, "edge_count": 1},
+                "lenses": [
+                    {
+                        "id": "topology",
+                        "label": "SECRET LENS LABEL",
+                        "state_mode": "topology",
+                        "layout": "cose",
+                        "visible_node_count": 1,
+                        "visible_edge_count": 1,
+                        "aggregation": {"lossy": False, "reversible": True},
+                    }
+                ],
+            }
+        )
+    )
+    (arch / "system-dynamics-map.lock.json").write_text(
+        json.dumps(
+            {
+                "package_hash": "sha256:test-package",
+                "generated_at": "2026-06-25T12:00:00Z",
+            }
+        )
+    )
+    (arch / "system-dynamics-map.claims.json").write_text(
+        json.dumps(
+            {
+                "claims": [
+                    {
+                        "element_kind": "node",
+                        "element_id": "node-alpha",
+                        "claim_type": "asserted",
+                        "subject": "SECRET_CLAIM_SUBJECT",
+                        "provenance": {
+                            "authority_ceiling": "architecture_contract",
+                            "source_ref": "docs/claims/node-claim.md#authority",
+                            "raw_ref": "SECRET_CLAIM_REF",
+                        },
+                        "freshness": {"state": "timeless"},
+                    }
+                ]
+            }
+        )
+    )
+    (arch / "system-dynamics-map.observations.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "subject_kind": "node",
+                        "subject": "node-alpha",
+                        "state": "observed",
+                        "source_type": "fixture",
+                        "freshness": "recent",
+                        "source_ref": "observations/node-alpha.jsonl#latest",
+                        "evidence": [{"label": "node-alpha-observed"}],
+                        "body": "SECRET_OBSERVATION_BODY",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "subject_kind": "edge",
+                        "subject": "edge-alpha-beta",
+                        "state": "observed",
+                        "source_type": "fixture",
+                        "freshness": "recent",
+                        "source_ref": "observations/edge-alpha-beta.jsonl#latest",
+                        "evidence": [{"label": "edge-alpha-beta-observed"}],
+                        "body": "SECRET_OBSERVATION_BODY",
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    (arch / "system-dynamics-map.relations.json").write_text(
+        json.dumps(
+            {
+                "relations": [
+                    {
+                        "category": "governance",
+                        "allowed_claim_types": ["asserted"],
+                        "edge_ids": ["edge-alpha-beta"],
+                        "semantics": "SECRET_RELATION_BODY",
+                    }
+                ]
+            }
+        )
+    )
     (arch / "system-dynamics-map.canonical.trig").write_text("SECRET_TRIG_BODY")
     (arch / "system-dynamics-map.shacl.ttl").write_text("SECRET_SHACL_BODY")
 
@@ -543,9 +1066,22 @@ def test_read_epistemics_projects_package_rows_as_metadata(tmp_path):
     assert validation["raw_access"] is False
 
     assert by_id["lens:topology"]["posture"] == "source-backed"
-    assert by_id["lens:topology"]["detail"] == "mode=topology; layout=cose; edges=1; reversible=True"
-    assert by_id["claim:node:asserted:architecture_contract:freshness-timeless"]["source_refs"] == "claims:1 records"
-    assert by_id["observation:observed:fixture:recent:state-observed-source_type-fixture"]["source_refs"] == "observations:2 records"
+    assert (
+        by_id["lens:topology"]["detail"]
+        == "mode=topology; layout=cose; edges=1; reversible=True"
+    )
+    assert (
+        by_id["claim:node:asserted:architecture_contract:freshness-timeless"][
+            "source_refs"
+        ]
+        == "claims:1 records"
+    )
+    assert (
+        by_id["observation:observed:fixture:recent:state-observed-source_type-fixture"][
+            "source_refs"
+        ]
+        == "observations:2 records"
+    )
     assert by_id["relation:governance:asserted"]["source_refs"] == "relations:1 records"
 
 
@@ -586,14 +1122,26 @@ def test_read_epistemics_air_default_denies_unallowlisted_fields(tmp_path):
 
 def test_to_session_shape_state_precedence_and_air():
     lane = {
-        "role": "cx-p0", "session": "hapax-codex-cx-p0", "platform": "codex",
-        "alive": True, "idle": True, "stalled": True, "claimed_task": "private-task",
-        "output_age_s": "12.34", "relay_age_s": None,
+        "role": "cx-p0",
+        "session": "hapax-codex-cx-p0",
+        "platform": "codex",
+        "alive": True,
+        "idle": True,
+        "stalled": True,
+        "claimed_task": "private-task",
+        "output_age_s": "12.34",
+        "relay_age_s": None,
     }
-    out = to_session("cx-p0", lane, allowlist=["role", "platform", "state", "output_age_s"])
+    out = to_session(
+        "cx-p0", lane, allowlist=["role", "platform", "state", "output_age_s"]
+    )
     assert out["role"] == "cx-p0" and out["state"] == "stalled"
     assert out["output_age_s"] == 12.3 and out["relay_age_s"] == 0.0
-    assert out["readiness"] == "stall" and out["blocker"] == "stalled" and out["attention"] >= 0.95
+    assert (
+        out["readiness"] == "stall"
+        and out["blocker"] == "stalled"
+        and out["attention"] >= 0.95
+    )
     assert out["air"]["role"] == "ok"
     assert out["air"]["session"] == "deny" and out["air"]["claimed_task"] == "deny"
     assert out["air"]["readiness"] == "deny" and out["air"]["attention"] == "deny"
@@ -601,11 +1149,24 @@ def test_to_session_shape_state_precedence_and_air():
 
 def test_session_attention_sort_prioritizes_cutover_lanes():
     sessions = [
-        to_session("alpha", {"role": "alpha", "platform": "codex", "alive": False}, EXPECTED_DEFAULT_ALLOW),
-        to_session("beta", {
-            "role": "beta", "session": "tmux-beta", "platform": "codex",
-            "alive": True, "claimed_task": "task-beta", "output_age_s": 30, "relay_age_s": 40,
-        }, EXPECTED_DEFAULT_ALLOW),
+        to_session(
+            "alpha",
+            {"role": "alpha", "platform": "codex", "alive": False},
+            EXPECTED_DEFAULT_ALLOW,
+        ),
+        to_session(
+            "beta",
+            {
+                "role": "beta",
+                "session": "tmux-beta",
+                "platform": "codex",
+                "alive": True,
+                "claimed_task": "task-beta",
+                "output_age_s": 30,
+                "relay_age_s": 40,
+            },
+            EXPECTED_DEFAULT_ALLOW,
+        ),
     ]
     ranked = sorted(sessions, key=_session_sort_key)
     assert [s["role"] for s in ranked] == ["beta", "alpha"]
@@ -614,15 +1175,32 @@ def test_session_attention_sort_prioritizes_cutover_lanes():
 
 def test_read_sessions_uses_configured_state_path(monkeypatch, tmp_path):
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({
-        "lanes": {
-            "beta": {"role": "beta", "platform": "claude", "alive": False, "idle": True},
-            "alpha": {"role": "alpha", "session": "tmux-alpha", "platform": "codex", "alive": True, "idle": False},
-        }
-    }))
+    state.write_text(
+        json.dumps(
+            {
+                "lanes": {
+                    "beta": {
+                        "role": "beta",
+                        "platform": "claude",
+                        "alive": False,
+                        "idle": True,
+                    },
+                    "alpha": {
+                        "role": "alpha",
+                        "session": "tmux-alpha",
+                        "platform": "codex",
+                        "alive": True,
+                        "idle": False,
+                    },
+                }
+            }
+        )
+    )
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
     raw = _raw_sessions()
-    sessions = [to_session(name, lane, ["role", "platform", "state"]) for name, lane in raw]
+    sessions = [
+        to_session(name, lane, ["role", "platform", "state"]) for name, lane in raw
+    ]
     assert [s["role"] for s in sessions] == ["alpha", "beta"]
     assert sessions[0]["state"] == "active"
     assert sessions[0]["air"]["session"] == "deny"
@@ -631,73 +1209,91 @@ def test_read_sessions_uses_configured_state_path(monkeypatch, tmp_path):
 def test_session_route_binding_prefers_launch_receipt_and_marks_policy_only(tmp_path):
     route_decisions = tmp_path / "route-decisions.jsonl"
     route_decisions.write_text(
-        "\n".join([
-            json.dumps({
-                "created_at": "2026-06-25T10:00:00Z",
-                "decision_id": "rd-alpha",
-                "lane": "alpha",
-                "task_id": "task-a",
-                "platform": "codex",
-                "mode": "headless",
-                "profile": "full",
-                "route_id": "codex.headless.full",
-                "action": "launch",
-                "launch_allowed": True,
-            }),
-            json.dumps({
-                "created_at": "2026-06-25T10:01:00Z",
-                "decision_id": "rd-beta",
-                "lane": "beta",
-                "task_id": "task-b",
-                "platform": "claude",
-                "mode": "headless",
-                "profile": "full",
-                "route_id": "claude.headless.full",
-                "action": "launch",
-                "launch_allowed": True,
-            }),
-            json.dumps({
-                "created_at": "2026-06-25T10:02:00Z",
-                "decision_id": "rd-gamma",
-                "lane": "gamma",
-                "task_id": "task-c",
-                "platform": "claude",
-                "mode": "headless",
-                "profile": "full",
-                "route_id": "claude.headless.full",
-                "action": "launch",
-                "launch_allowed": True,
-            }),
-            json.dumps({
-                "created_at": "2026-06-25T10:04:00Z",
-                "decision_id": "rd-alpha-later-policy",
-                "lane": "alpha",
-                "task_id": "task-a",
-                "platform": "codex",
-                "mode": "headless",
-                "profile": "full",
-                "route_id": "codex.headless.full",
-                "action": "launch",
-                "launch_allowed": True,
-            }),
-        ]) + "\n"
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "created_at": "2026-06-25T10:00:00Z",
+                        "decision_id": "rd-alpha",
+                        "lane": "alpha",
+                        "task_id": "task-a",
+                        "platform": "codex",
+                        "mode": "headless",
+                        "profile": "full",
+                        "route_id": "codex.headless.full",
+                        "action": "launch",
+                        "launch_allowed": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "created_at": "2026-06-25T10:01:00Z",
+                        "decision_id": "rd-beta",
+                        "lane": "beta",
+                        "task_id": "task-b",
+                        "platform": "claude",
+                        "mode": "headless",
+                        "profile": "full",
+                        "route_id": "claude.headless.full",
+                        "action": "launch",
+                        "launch_allowed": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "created_at": "2026-06-25T10:02:00Z",
+                        "decision_id": "rd-gamma",
+                        "lane": "gamma",
+                        "task_id": "task-c",
+                        "platform": "claude",
+                        "mode": "headless",
+                        "profile": "full",
+                        "route_id": "claude.headless.full",
+                        "action": "launch",
+                        "launch_allowed": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "created_at": "2026-06-25T10:04:00Z",
+                        "decision_id": "rd-alpha-later-policy",
+                        "lane": "alpha",
+                        "task_id": "task-a",
+                        "platform": "codex",
+                        "mode": "headless",
+                        "profile": "full",
+                        "route_id": "codex.headless.full",
+                        "action": "launch",
+                        "launch_allowed": True,
+                    }
+                ),
+            ]
+        )
+        + "\n"
     )
     methodology = tmp_path / "methodology-dispatch.jsonl"
-    methodology.write_text(json.dumps({
-        "timestamp": "2026-06-25T10:03:00Z",
-        "route_decision_id": "rd-alpha",
-        "lane": "alpha",
-        "task_id": "task-a",
-        "platform": "codex",
-        "mode": "headless",
-        "profile": "full",
-        "dimensional_selected_route_id": "codex.headless.full",
-        "route_policy_action": "launch",
-        "ok": True,
-        "launched": True,
-    }) + "\n")
+    methodology.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-06-25T10:03:00Z",
+                "route_decision_id": "rd-alpha",
+                "lane": "alpha",
+                "task_id": "task-a",
+                "platform": "codex",
+                "mode": "headless",
+                "profile": "full",
+                "dimensional_selected_route_id": "codex.headless.full",
+                "route_policy_action": "launch",
+                "ok": True,
+                "launched": True,
+            }
+        )
+        + "\n"
+    )
 
-    bindings, source_state, source_path = _route_binding_index({"orchestration_ledger_dir": str(tmp_path)})
+    bindings, source_state, source_path = _route_binding_index(
+        {"orchestration_ledger_dir": str(tmp_path)}
+    )
     assert source_state == "observed"
     assert source_path == tmp_path
 
@@ -706,17 +1302,42 @@ def test_session_route_binding_prefers_launch_receipt_and_marks_policy_only(tmp_
     gamma = {"role": "gamma", "platform": "codex", "claimed_task": "task-c"}
     idle = {"role": "idle", "platform": "codex"}
 
-    alpha_binding = _session_route_binding("alpha", alpha, bindings, source_state, source_path)
+    alpha_binding = _session_route_binding(
+        "alpha", alpha, bindings, source_state, source_path
+    )
     assert alpha_binding["route_binding_state"] == "bound"
     assert alpha_binding["route_evidence_ref"] == "methodology-dispatch.jsonl:rd-alpha"
-    assert _session_route_binding("beta", beta, bindings, source_state, source_path)["route_binding_state"] == "policy_only"
-    assert _session_route_binding("gamma", gamma, bindings, source_state, source_path)["route_binding_state"] == "platform_mismatch"
-    assert _session_route_binding("idle", idle, bindings, source_state, source_path)["route_binding_state"] == "no_claim"
+    assert (
+        _session_route_binding("beta", beta, bindings, source_state, source_path)[
+            "route_binding_state"
+        ]
+        == "policy_only"
+    )
+    assert (
+        _session_route_binding("gamma", gamma, bindings, source_state, source_path)[
+            "route_binding_state"
+        ]
+        == "platform_mismatch"
+    )
+    assert (
+        _session_route_binding("idle", idle, bindings, source_state, source_path)[
+            "route_binding_state"
+        ]
+        == "no_claim"
+    )
 
     session = to_session(
         "alpha",
         {**alpha, "alive": True},
-        ["role", "platform", "state", "route_id", "mode", "profile", "route_binding_state"],
+        [
+            "role",
+            "platform",
+            "state",
+            "route_id",
+            "mode",
+            "profile",
+            "route_binding_state",
+        ],
         _session_route_binding("alpha", alpha, bindings, source_state, source_path),
     )
     assert session["route_id"] == "codex.headless.full"
@@ -726,7 +1347,9 @@ def test_session_route_binding_prefers_launch_receipt_and_marks_policy_only(tmp_
 
 
 def test_session_route_binding_reports_missing_source(tmp_path):
-    bindings, source_state, source_path = _route_binding_index({"orchestration_ledger_dir": str(tmp_path)})
+    bindings, source_state, source_path = _route_binding_index(
+        {"orchestration_ledger_dir": str(tmp_path)}
+    )
     lane = {"role": "alpha", "platform": "codex", "claimed_task": "task-a"}
     route = _session_route_binding("alpha", lane, bindings, source_state, source_path)
     assert route["route_binding_state"] == "source_missing"
@@ -735,25 +1358,34 @@ def test_session_route_binding_reports_missing_source(tmp_path):
 
 def test_session_route_binding_allows_guarded_long_task_prefix(tmp_path):
     route_decisions = tmp_path / "route-decisions.jsonl"
-    route_decisions.write_text(json.dumps({
-        "created_at": "2026-06-25T10:00:00Z",
-        "decision_id": "rd-prefix",
-        "lane": "cx-fugu-1",
-        "task_id": "p0-incident-sdlc-dispatch-refusal-p0-incident-sdlc-dispatch-refu-77cbfee6-sdlc-dispatch-refusal-circuit-breaker",
-        "platform": "codex",
-        "mode": "headless",
-        "profile": "full",
-        "route_id": "codex.headless.full",
-        "action": "launch",
-        "launch_allowed": True,
-    }) + "\n")
-    bindings, source_state, source_path = _route_binding_index({"orchestration_ledger_dir": str(tmp_path)})
+    route_decisions.write_text(
+        json.dumps(
+            {
+                "created_at": "2026-06-25T10:00:00Z",
+                "decision_id": "rd-prefix",
+                "lane": "cx-fugu-1",
+                "task_id": "p0-incident-sdlc-dispatch-refusal-p0-incident-sdlc-dispatch-refu-77cbfee6-sdlc-dispatch-refusal-circuit-breaker",
+                "platform": "codex",
+                "mode": "headless",
+                "profile": "full",
+                "route_id": "codex.headless.full",
+                "action": "launch",
+                "launch_allowed": True,
+            }
+        )
+        + "\n"
+    )
+    bindings, source_state, source_path = _route_binding_index(
+        {"orchestration_ledger_dir": str(tmp_path)}
+    )
     lane = {
         "role": "cx-fugu-1",
         "platform": "codex",
         "claimed_task": "p0-incident-sdlc-dispatch-refusal-p0-incident-sdlc-dispatch-refu-77cbfee6",
     }
-    route = _session_route_binding("cx-fugu-1", lane, bindings, source_state, source_path)
+    route = _session_route_binding(
+        "cx-fugu-1", lane, bindings, source_state, source_path
+    )
     assert route["route_binding_state"] == "policy_only"
     assert route["route_id"] == "codex.headless.full"
     assert route["route_evidence_ref"] == "route-decisions.jsonl:rd-prefix"
@@ -778,20 +1410,36 @@ body is not parsed
     transcript = transcripts / "cx-p0-session.jsonl"
     transcript.write_text('{"message":"SECRET_TRANSCRIPT_SENTINEL"}\n')
     lane = {
-        "role": "cx-p0", "session": "tmux-private", "platform": "codex",
-        "alive": True, "idle": False, "claimed_task": "secret-task",
-        "output_age_s": 1, "relay_age_s": 2,
+        "role": "cx-p0",
+        "session": "tmux-private",
+        "platform": "codex",
+        "alive": True,
+        "idle": False,
+        "claimed_task": "secret-task",
+        "output_age_s": 1,
+        "relay_age_s": 2,
     }
-    detail = to_session_detail("cx-p0", lane, allowlist=["role", "platform", "state", "evidence_count"], cfg={
-        "cc_tasks_active": str(tasks),
-        "session_transcript_roots": [str(transcripts)],
-    })
+    detail = to_session_detail(
+        "cx-p0",
+        lane,
+        allowlist=["role", "platform", "state", "evidence_count"],
+        cfg={
+            "cc_tasks_active": str(tasks),
+            "session_transcript_roots": [str(transcripts)],
+        },
+    )
     assert detail["task"]["status"] == "claimed"
     assert detail["readiness"] == "claim" and detail["blocker"] == "none"
     assert detail["resume"]["ready"] is False
-    assert {r["kind"] for r in detail["evidence_refs"]} == {"cc_task_note", "transcript_candidate"}
+    assert {r["kind"] for r in detail["evidence_refs"]} == {
+        "cc_task_note",
+        "transcript_candidate",
+    }
     assert detail["evidence_summary"]["total"] == 2
-    assert detail["evidence_summary"]["by_kind"] == {"cc_task_note": 1, "transcript_candidate": 1}
+    assert detail["evidence_summary"]["by_kind"] == {
+        "cc_task_note": 1,
+        "transcript_candidate": 1,
+    }
     assert detail["evidence_summary"]["transcript_roots_observed"] == 1
     assert detail["evidence_summary"]["transcript_roots_missing"] == 0
     assert detail["evidence_summary"]["raw_access"] is False
@@ -806,51 +1454,77 @@ body is not parsed
 
 def test_read_intake_summary_uses_bounded_metadata_only(tmp_path):
     request_state = tmp_path / "request-state.json"
-    request_state.write_text(json.dumps({
-        "combined_attention_count": 7,
-        "malformed_count": 1,
-        "unread_count": 0,
-        "stale_count": 0,
-    }))
-    planning_feed = tmp_path / "planning-feed.json"
-    planning_feed.write_text(json.dumps({
-        "total_requests": 9,
-        "coverage_summary": {"untracked": 3, "task_offered": 2},
-        "stale_summary": {"stale_offered": 2},
-        "attention_required": [{"request_id": "SECRET-REQUEST-ID"}],
-    }))
-    p0_state = tmp_path / "p0-state.json"
-    p0_state.write_text(json.dumps({
-        "incidents": {
-            "fp": {
-                "kind": "systemd_service_failed",
-                "last_message": "SECRET_NOTIFICATION_BODY",
-                "task_path": "/private/task/path",
+    request_state.write_text(
+        json.dumps(
+            {
+                "combined_attention_count": 7,
+                "malformed_count": 1,
+                "unread_count": 0,
+                "stale_count": 0,
             }
-        }
-    }))
+        )
+    )
+    planning_feed = tmp_path / "planning-feed.json"
+    planning_feed.write_text(
+        json.dumps(
+            {
+                "total_requests": 9,
+                "coverage_summary": {"untracked": 3, "task_offered": 2},
+                "stale_summary": {"stale_offered": 2},
+                "attention_required": [{"request_id": "SECRET-REQUEST-ID"}],
+            }
+        )
+    )
+    p0_state = tmp_path / "p0-state.json"
+    p0_state.write_text(
+        json.dumps(
+            {
+                "incidents": {
+                    "fp": {
+                        "kind": "systemd_service_failed",
+                        "last_message": "SECRET_NOTIFICATION_BODY",
+                        "task_path": "/private/task/path",
+                    }
+                }
+            }
+        )
+    )
     p0_events = tmp_path / "p0-events.jsonl"
-    p0_events.write_text(json.dumps({
-        "kind": "p0_incident_notification",
-        "message": "SECRET_LEDGER_MESSAGE",
-        "task_path": "/private/ledger/path",
-    }) + "\n")
+    p0_events.write_text(
+        json.dumps(
+            {
+                "kind": "p0_incident_notification",
+                "message": "SECRET_LEDGER_MESSAGE",
+                "task_path": "/private/ledger/path",
+            }
+        )
+        + "\n"
+    )
     security_state = tmp_path / "security.json"
-    security_state.write_text(json.dumps({
-        "total_signals": 2,
-        "requests": [{
-            "kind": "github-dependabot-alert",
-            "status": "skipped_existing",
-            "url": "https://secret.example/alert",
-        }],
-    }))
-    summary = read_intake_summary({
-        "request_intake_state": str(request_state),
-        "planning_feed_state": str(planning_feed),
-        "p0_incident_state": str(p0_state),
-        "p0_incident_events": str(p0_events),
-        "security_signal_state": str(security_state),
-    }, EXPECTED_DEFAULT_ALLOW)
+    security_state.write_text(
+        json.dumps(
+            {
+                "total_signals": 2,
+                "requests": [
+                    {
+                        "kind": "github-dependabot-alert",
+                        "status": "skipped_existing",
+                        "url": "https://secret.example/alert",
+                    }
+                ],
+            }
+        )
+    )
+    summary = read_intake_summary(
+        {
+            "request_intake_state": str(request_state),
+            "planning_feed_state": str(planning_feed),
+            "p0_incident_state": str(p0_state),
+            "p0_incident_events": str(p0_events),
+            "security_signal_state": str(security_state),
+        },
+        EXPECTED_DEFAULT_ALLOW,
+    )
 
     assert summary["totals"]["request_attention"] == 7
     assert summary["totals"]["planning_attention"] == 1
@@ -866,14 +1540,32 @@ def test_read_intake_summary_uses_bounded_metadata_only(tmp_path):
     assert coverage["source_refs"] == "planning_feed"
     assert coverage["action"] == "triage"
     assert coverage["next_evidence"]
-    incident = next(r for r in summary["rows"] if r["kind"] == "incident:systemd_service_failed")
+    incident = next(
+        r for r in summary["rows"] if r["kind"] == "incident:systemd_service_failed"
+    )
     assert incident["missing"] == "triage receipt · blocker resolution"
     assert incident["action"] == "triage-critical"
-    assert incident["next_evidence"] == "attach blocker disposition and governed receipt"
-    for field in ["id", "authority", "evidence", "missing", "action", "detail", "source_refs", "next_evidence"]:
+    assert (
+        incident["next_evidence"] == "attach blocker disposition and governed receipt"
+    )
+    for field in [
+        "id",
+        "authority",
+        "evidence",
+        "missing",
+        "action",
+        "detail",
+        "source_refs",
+        "next_evidence",
+    ]:
         assert coverage["air"][field] == "ok"
     dumped = json.dumps(summary)
-    for secret in ["SECRET-REQUEST-ID", "SECRET_NOTIFICATION_BODY", "SECRET_LEDGER_MESSAGE", "https://secret.example/alert"]:
+    for secret in [
+        "SECRET-REQUEST-ID",
+        "SECRET_NOTIFICATION_BODY",
+        "SECRET_LEDGER_MESSAGE",
+        "https://secret.example/alert",
+    ]:
         assert secret not in dumped
     assert summary["sources"][0]["air"]["path"] == "deny"
     assert summary["sources"][0]["air"]["count"] == "ok"
@@ -1035,58 +1727,116 @@ consumers:
 - consumer: research_viewer
   default: allow_read_only
 """)
-    (hkp_dir / "snapshot.json").write_text(json.dumps({
-        "bundle_uid": "hkp:bundle:sdlc",
-        "concept_count": 2,
-        "edge_count": 3,
-        "generated_at": "2026-06-25T18:35:16Z",
-    }))
+    (hkp_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "bundle_uid": "hkp:bundle:sdlc",
+                "concept_count": 2,
+                "edge_count": 3,
+                "generated_at": "2026-06-25T18:35:16Z",
+            }
+        )
+    )
     (hkp_dir / "events.jsonl").write_text("{}\n{}\n")
     (hkp_dir / "edges.jsonl").write_text("{}\n{}\n{}\n")
     (hkp_index / "sdlc.jsonl").write_text("\n".join("{}" for _ in range(7)) + "\n")
     (report_dir / "report.json").write_text("{}")
     (concepts / "secret.md").write_text("SECRET_HKP_CONCEPT_BODY")
 
-    summary = read_capability_summary(str(council), EXPECTED_DEFAULT_ALLOW, {
-        "capability_receipt_dir": str(receipts),
-        "quota_spend_ledger_live": str(quota),
-        "hkp_shadow_root": str(hkp_shadow),
-        "hkp_index_root": str(hkp_index),
-        "hkp_report_root": str(hkp_reports),
-        "hkp_bundles": ["sdlc"],
-    })
+    summary = read_capability_summary(
+        str(council),
+        EXPECTED_DEFAULT_ALLOW,
+        {
+            "capability_receipt_dir": str(receipts),
+            "quota_spend_ledger_live": str(quota),
+            "hkp_shadow_root": str(hkp_shadow),
+            "hkp_index_root": str(hkp_index),
+            "hkp_report_root": str(hkp_reports),
+            "hkp_bundles": ["sdlc"],
+        },
+    )
 
     assert summary["totals"]["routes"] == 1
     assert summary["totals"]["capabilities"] >= 5
-    assert any(row["capability_id"] == "grounding" and row["status"] == "observed" for row in summary["rows"])
-    assert any(row["capability_id"] == "source_editing" and row["status"] == "read-missing" for row in summary["rows"])
-    hkp = next(row for row in summary["rows"] if row["capability_id"] == "hkp_support_context")
+    assert any(
+        row["capability_id"] == "grounding" and row["status"] == "observed"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "source_editing" and row["status"] == "read-missing"
+        for row in summary["rows"]
+    )
+    hkp = next(
+        row for row in summary["rows"] if row["capability_id"] == "hkp_support_context"
+    )
     assert hkp["hkp_posture"] == "support_only"
     assert hkp["status"] == "support-only"
     assert hkp["evidence_count"] == 7
     assert hkp["source_refs"] == "hkp:sdlc:7 refs"
     assert "not source truth" in hkp["blocker"]
-    assert any(row["capability_id"] == "source_acquisition" and row["status"] == "admission-incomplete" for row in summary["rows"])
-    assert any(row["capability_id"] == "publication_egress" and "publication authority" in row["blocker"] for row in summary["rows"])
-    assert any(row["capability_id"] == "provider_gateway" and row["status"] == "spend-forbidden" for row in summary["rows"])
-    assert any(row["capability_id"] == "tavily_source_acquisition" and "usage telemetry" in row["blocker"] for row in summary["rows"])
-    assert any(row["capability_id"] == "cohere_embed_rerank" and row["authority"] == "source/verifier support" for row in summary["rows"])
-    assert any(row["capability_id"] == "elevenlabs_audio_generation" and "audio/public-egress" in row["authority"] for row in summary["rows"])
-    assert any(row["capability_id"] == "openrouter_break_glass" and row["status"] == "spend-forbidden" for row in summary["rows"])
-    glm = next(row for row in summary["rows"] if row["capability_id"] == "glm_coding_plan_tool_surface")
+    assert any(
+        row["capability_id"] == "source_acquisition"
+        and row["status"] == "admission-incomplete"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "publication_egress"
+        and "publication authority" in row["blocker"]
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "provider_gateway"
+        and row["status"] == "spend-forbidden"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "tavily_source_acquisition"
+        and "usage telemetry" in row["blocker"]
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "cohere_embed_rerank"
+        and row["authority"] == "source/verifier support"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "elevenlabs_audio_generation"
+        and "audio/public-egress" in row["authority"]
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "openrouter_break_glass"
+        and row["status"] == "spend-forbidden"
+        for row in summary["rows"]
+    )
+    glm = next(
+        row
+        for row in summary["rows"]
+        if row["capability_id"] == "glm_coding_plan_tool_surface"
+    )
     assert glm["status"] == "manual-bakeoff"
     assert "S15 proves invocation" in glm["blocker"]
-    fugu = next(row for row in summary["rows"] if row["capability_id"] == "fugu_raw_codex")
+    fugu = next(
+        row for row in summary["rows"] if row["capability_id"] == "fugu_raw_codex"
+    )
     assert fugu["status"] == "raw-manual"
     assert fugu["authority"] == "not dispatchable"
     assert fugu["route_count"] == 0
     assert "no governed Fugu route" in fugu["blocker"]
-    fugu_ultra = next(row for row in summary["rows"] if row["capability_id"] == "fugu_ultra_raw_codex")
+    fugu_ultra = next(
+        row for row in summary["rows"] if row["capability_id"] == "fugu_ultra_raw_codex"
+    )
     assert fugu_ultra["status"] == "raw-manual"
     assert fugu_ultra["route_count"] == 0
     assert "clean-host preflight" in fugu_ultra["receipt_requirement"]
-    assert any(src["id"] == "capability_surface_compiled_fallback" and src["status"] == "support-only" for src in summary["sources"])
-    hkp_bundle = next(src for src in summary["sources"] if src["id"] == "hkp_bundle:sdlc")
+    assert any(
+        src["id"] == "capability_surface_compiled_fallback"
+        and src["status"] == "support-only"
+        for src in summary["sources"]
+    )
+    hkp_bundle = next(
+        src for src in summary["sources"] if src["id"] == "hkp_bundle:sdlc"
+    )
     assert hkp_bundle["path"] == "hkp-shadow:sdlc/_hkp/manifest.yaml"
     assert hkp_bundle["status"] == "support-only"
     assert hkp_bundle["count"] == 7
@@ -1094,22 +1844,52 @@ consumers:
     assert str(hkp_shadow) not in hkp_bundle["path"]
     dumped = json.dumps(summary)
     assert "SECRET_HKP_CONCEPT_BODY" not in dumped
-    tavily = next(row for row in summary["rows"] if row["capability_id"] == "tavily_source_acquisition")
+    tavily = next(
+        row
+        for row in summary["rows"]
+        if row["capability_id"] == "tavily_source_acquisition"
+    )
     assert tavily["capability_class"] == "source_acquisition"
     assert tavily["surface_family"] == "tavily"
     assert tavily["spend_model"] == "api_spend_budgeted"
     assert tavily["egress_class"] == "source_query"
     assert "usage" in tavily["receipt_requirement"]
     assert tavily["source_refs"] == "compiled_fallback"
-    source_class = next(row for row in summary["rows"] if row["capability_id"] == "source_acquisition")
+    source_class = next(
+        row for row in summary["rows"] if row["capability_id"] == "source_acquisition"
+    )
     assert source_class["capability_class"] == "source_acquisition"
     assert source_class["surface_family"] == "source_acquisition"
-    assert any(row["capability_id"] == "codex_worker_reviewer_surface" and row["surface_family"] == "worker_reviewer" for row in summary["rows"])
-    assert any(row["capability_id"] == "glmcp_review_quota_admission" and row["status"] == "observed" for row in summary["rows"])
-    assert any(row["capability_id"] == "fugu_raw_codex" and row["surface_family"] == "sakana_fugu" for row in summary["rows"])
-    assert any(row["capability_id"] == "codeql_status_floor" and row["surface_family"] == "codeql_status" for row in summary["rows"])
-    assert any(row["capability_id"] == "google_workspace_youtube_connector" and row["egress_class"] == "public_or_workspace" for row in summary["rows"])
-    assert any(row["capability_id"] == "network_admin_tailscale" and row["capability_class"] == "infrastructure_control" for row in summary["rows"])
+    assert any(
+        row["capability_id"] == "codex_worker_reviewer_surface"
+        and row["surface_family"] == "worker_reviewer"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "glmcp_review_quota_admission"
+        and row["status"] == "observed"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "fugu_raw_codex"
+        and row["surface_family"] == "sakana_fugu"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "codeql_status_floor"
+        and row["surface_family"] == "codeql_status"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "google_workspace_youtube_connector"
+        and row["egress_class"] == "public_or_workspace"
+        for row in summary["rows"]
+    )
+    assert any(
+        row["capability_id"] == "network_admin_tailscale"
+        and row["capability_class"] == "infrastructure_control"
+        for row in summary["rows"]
+    )
     assert summary["routes"][0]["route_id"] == "codex.headless.full"
     assert summary["routes"][0]["effort"] == "high"
     assert summary["routes"][0]["context_mode"] == "large"
@@ -1136,39 +1916,53 @@ consumers:
 
 def test_capability_surface_pack_rows_are_source_backed(tmp_path):
     pack = tmp_path / "capability-pack.json"
-    pack.write_text(json.dumps({
-        "pack_id": "cap-pack",
-        "authority_case": "support_non_authoritative",
-        "capability_classes": [{
-            "capability_id": "source_acquisition",
-            "status": "admission-incomplete",
-            "authority": "sub-router",
-            "route_count": 2,
-            "ok_count": 1,
-            "blocked_count": 1,
-            "evidence_count": 2,
-            "blocker": "usage receipt missing",
-            "source_refs": ["handoff#source"],
-        }],
-        "surfaces": [{
-            "capability_id": "tavily_source_acquisition",
-            "status": "admission-incomplete",
-            "routing_meaning": "source-acquisition",
-            "route_count": 1,
-            "ok_count": 0,
-            "blocked_count": 1,
-            "evidence_count": 4,
-            "blocker": "usage schema validation failure on /usage limit null",
-            "source_refs": ["handoff#tavily", "docs#usage"],
-        }],
-    }))
-    sources, rows = _capability_surface_pack_rows({"capability_surface_pack_paths": [str(pack)]}, EXPECTED_DEFAULT_ALLOW)
+    pack.write_text(
+        json.dumps(
+            {
+                "pack_id": "cap-pack",
+                "authority_case": "support_non_authoritative",
+                "capability_classes": [
+                    {
+                        "capability_id": "source_acquisition",
+                        "status": "admission-incomplete",
+                        "authority": "sub-router",
+                        "route_count": 2,
+                        "ok_count": 1,
+                        "blocked_count": 1,
+                        "evidence_count": 2,
+                        "blocker": "usage receipt missing",
+                        "source_refs": ["handoff#source"],
+                    }
+                ],
+                "surfaces": [
+                    {
+                        "capability_id": "tavily_source_acquisition",
+                        "status": "admission-incomplete",
+                        "routing_meaning": "source-acquisition",
+                        "route_count": 1,
+                        "ok_count": 0,
+                        "blocked_count": 1,
+                        "evidence_count": 4,
+                        "blocker": "usage schema validation failure on /usage limit null",
+                        "source_refs": ["handoff#tavily", "docs#usage"],
+                    }
+                ],
+            }
+        )
+    )
+    sources, rows = _capability_surface_pack_rows(
+        {"capability_surface_pack_paths": [str(pack)]}, EXPECTED_DEFAULT_ALLOW
+    )
     assert sources[0]["id"] == "cap-pack"
     assert sources[0]["status"] == "observed"
-    source_class = next(row for row in rows if row["capability_id"] == "source_acquisition")
+    source_class = next(
+        row for row in rows if row["capability_id"] == "source_acquisition"
+    )
     assert source_class["capability_class"] == "source_acquisition"
     assert source_class["surface_family"] == "source_acquisition"
-    tavily = next(row for row in rows if row["capability_id"] == "tavily_source_acquisition")
+    tavily = next(
+        row for row in rows if row["capability_id"] == "tavily_source_acquisition"
+    )
     assert tavily["capability_class"] == "source_acquisition"
     assert tavily["authority"] == "source-acquisition"
     assert tavily["source_refs"] == "cap-pack:2 refs"
@@ -1188,15 +1982,29 @@ def test_capability_inventory_consumer_ingests_live_inventory(tmp_path):
         "freshness_counts": {"fresh": 1, "dark": 1},
         "shape_counts": {"provider_gateway": 1, "verifier_floor_checker": 1},
         "rows": [
-            {"capability_id": "litellm_provider_gateway", "shape": "provider_gateway",
-             "domain": "inference", "freshness_state": "fresh", "authority_ceiling": "route_defined", "gaps": []},
-            {"capability_id": "semgrep_static_analysis", "shape": "verifier_floor_checker",
-             "domain": "verify", "freshness_state": "dark", "authority_ceiling": "ci", "gaps": ["no_receipt"]},
+            {
+                "capability_id": "litellm_provider_gateway",
+                "shape": "provider_gateway",
+                "domain": "inference",
+                "freshness_state": "fresh",
+                "authority_ceiling": "route_defined",
+                "gaps": [],
+            },
+            {
+                "capability_id": "semgrep_static_analysis",
+                "shape": "verifier_floor_checker",
+                "domain": "verify",
+                "freshness_state": "dark",
+                "authority_ceiling": "ci",
+                "gaps": ["no_receipt"],
+            },
         ],
     }
     inv = tmp_path / "capability-inventory.json"
     inv.write_text(json.dumps(report))
-    sources, rows = _capability_inventory_rows({"capability_inventory_path": str(inv)}, EXPECTED_DEFAULT_ALLOW)
+    sources, rows = _capability_inventory_rows(
+        {"capability_inventory_path": str(inv)}, EXPECTED_DEFAULT_ALLOW
+    )
     assert len(rows) == 2
     by_id = {r["capability_id"]: r for r in rows}
     # freshness-honest status: a DARK descriptor renders read-missing, never a fabricated observed/green
@@ -1225,10 +2033,21 @@ def test_capability_inventory_absent_is_honest_dark_not_fabricated():
 def test_checked_in_capability_surface_pack_carries_explicit_ontology():
     # the checked-in EXAMPLE pack demos the capability-surface format with neutral entries (no
     # operator-specific toolchain). Every row carries the full ontology so the format is self-describing.
-    pack = Path(__file__).resolve().parents[1] / "docs" / "capability-surface-packs" / "example-capability-surface-pack.json"
+    pack = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "capability-surface-packs"
+        / "example-capability-surface-pack.json"
+    )
     doc = json.loads(pack.read_text())
     rows = [*doc["capability_classes"], *doc["surfaces"]]
-    required = ["capability_class", "surface_family", "spend_model", "egress_class", "receipt_requirement"]
+    required = [
+        "capability_class",
+        "surface_family",
+        "spend_model",
+        "egress_class",
+        "receipt_requirement",
+    ]
     missing = [
         f"{row.get('capability_id')}:{field}"
         for row in rows
@@ -1239,63 +2058,93 @@ def test_checked_in_capability_surface_pack_carries_explicit_ontology():
 
     by_id = {row["capability_id"]: row for row in rows}
     # neutral example ids demo each capability class
-    assert by_id["example_source_acquisition"]["capability_class"] == "source_acquisition"
-    assert by_id["example_verifier_floor_checker"]["capability_class"] == "verifier_floor_checker"
+    assert (
+        by_id["example_source_acquisition"]["capability_class"] == "source_acquisition"
+    )
+    assert (
+        by_id["example_verifier_floor_checker"]["capability_class"]
+        == "verifier_floor_checker"
+    )
 
 
-def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, tmp_path):
-    monkeypatch.setattr("reins_read._projection", lambda _root: {"tasks": {
-        "task-a": {
-            "task_id": "task-a",
-            "stage": "S7_RELEASE",
-            "authority_case": "CASE-A",
-            "no_go": {
-                "release_authorized": False,
-                "source_mutation_authorized": True,
-                "public_current": False,
-            },
+def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "reins_read._projection",
+        lambda _root: {
+            "tasks": {
+                "task-a": {
+                    "task_id": "task-a",
+                    "stage": "S7_RELEASE",
+                    "authority_case": "CASE-A",
+                    "no_go": {
+                        "release_authorized": False,
+                        "source_mutation_authorized": True,
+                        "public_current": False,
+                    },
+                },
+                "task-b": {
+                    "task_id": "task-b",
+                    "stage": "S4_BUILD",
+                    "authority_case": "",
+                    "no_go": {
+                        "implementation_authorized": False,
+                        "release_authorized": True,
+                    },
+                },
+            }
         },
-        "task-b": {
-            "task_id": "task-b",
-            "stage": "S4_BUILD",
-            "authority_case": "",
-            "no_go": {
-                "implementation_authorized": False,
-                "release_authorized": True,
-            },
-        },
-    }})
-    monkeypatch.setattr("reins_read._raw_tail", lambda _root, _limit: [{"kind": "coord_dispatch.launch_failed"}])
+    )
+    monkeypatch.setattr(
+        "reins_read._raw_tail",
+        lambda _root, _limit: [{"kind": "coord_dispatch.launch_failed"}],
+    )
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"lanes": {
-        "cx-stale": {
-            "role": "cx-stale",
-            "session": "tmux-stale",
-            "platform": "codex",
-            "alive": True,
-            "relay_age_s": 30000,
-            "claimed_task": "task-a",
-        },
-        "cx-off": {
-            "role": "cx-off",
-            "platform": "claude",
-            "alive": False,
-        },
-    }}))
-    (tmp_path / "route-decisions.jsonl").write_text(json.dumps({
-        "decision_id": "rd-gate",
-        "created_at": "2026-06-25T00:00:00Z",
-        "lane": "cx-stale",
-        "task_id": "task-a",
-        "platform": "codex",
-        "mode": "headless",
-        "profile": "full",
-        "route_id": "codex.headless.full",
-        "action": "launch",
-    }) + "\n")
+    state.write_text(
+        json.dumps(
+            {
+                "lanes": {
+                    "cx-stale": {
+                        "role": "cx-stale",
+                        "session": "tmux-stale",
+                        "platform": "codex",
+                        "alive": True,
+                        "relay_age_s": 30000,
+                        "claimed_task": "task-a",
+                    },
+                    "cx-off": {
+                        "role": "cx-off",
+                        "platform": "claude",
+                        "alive": False,
+                    },
+                }
+            }
+        )
+    )
+    (tmp_path / "route-decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "decision_id": "rd-gate",
+                "created_at": "2026-06-25T00:00:00Z",
+                "lane": "cx-stale",
+                "task_id": "task-a",
+                "platform": "codex",
+                "mode": "headless",
+                "profile": "full",
+                "route_id": "codex.headless.full",
+                "action": "launch",
+            }
+        )
+        + "\n"
+    )
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
 
-    summary = read_gate_summary("/fake/council", EXPECTED_DEFAULT_ALLOW, {"orchestration_ledger_dir": str(tmp_path)})
+    summary = read_gate_summary(
+        "/fake/council",
+        EXPECTED_DEFAULT_ALLOW,
+        {"orchestration_ledger_dir": str(tmp_path)},
+    )
 
     assert summary["totals"]["tasks"] == 2
     assert summary["totals"]["lanes"] == 2
@@ -1309,15 +2158,23 @@ def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, 
     assert "lane.blocker.stale_relay" in ids
     assert "lane.blocker.offline" in ids
     assert "route.binding.policy_only" in ids
-    release = next(row for row in summary["rows"] if row["gate_id"] == "task.no_go.release_authorized")
+    release = next(
+        row
+        for row in summary["rows"]
+        if row["gate_id"] == "task.no_go.release_authorized"
+    )
     assert release["missing"] == "release_authorized"
     assert release["state"] == "blocked"
     assert release["air"]["gate_id"] == "ok"
-    route = next(row for row in summary["rows"] if row["gate_id"] == "route.binding.policy_only")
+    route = next(
+        row for row in summary["rows"] if row["gate_id"] == "route.binding.policy_only"
+    )
     assert route["domain"] == "route"
     assert route["missing"] == "launch receipt/session confirmation"
     assert "codex.headless.full" in route["evidence"]
-    route_source = next(source for source in summary["sources"] if source["id"] == "route_binding")
+    route_source = next(
+        source for source in summary["sources"] if source["id"] == "route_binding"
+    )
     assert route_source["count"] == 2
     assert "ledger_records=1" in route_source["detail"]
     dumped = json.dumps(summary)
@@ -1327,66 +2184,83 @@ def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, 
 def test_read_domain_pack_summary_is_source_backed_without_raw_bodies(tmp_path):
     pack = tmp_path / "domains.json"
     registry = tmp_path / "lifecycles.json"
-    registry.write_text(json.dumps({
-        "registry_id": "hapax-lifecycle-registry",
-        "authority_case": "CASE-LC",
-        "generated_at": "2026-06-25T09:00:00Z",
-        "default_lens": "tenant-lifecycle",
-        "lifecycles": [{
-            "lifecycle_id": "ldlc",
-            "label": "SECRET LIFE LABEL",
-            "owner": "operator-instance",
-            "scope": "tenant",
-            "plant": "life-management",
-            "posture": "future-tenant",
-            "state": "dark_specified",
-            "maturity": "declared-not-modeled",
-            "adapter_id": "adapter.ldlc.pending",
-            "authority_ceiling": "support_non_authoritative",
-            "claim_surface": "practical loops",
-            "mutation_surface": "none until receipts exist",
-            "dark_policy": "show declared future lifecycle only",
-            "freshness_policy": "requires source inventory",
-            "air_class": "private-life",
-            "windows": ["domains", "intake"],
-            "surfaces": ["hapax-exclusive-chat"],
-            "commands": ["note", "show-route"],
-            "receipt_contracts": ["consent", "privacy"],
-            "blocker": "SECRET RAW BLOCKER",
-            "next_evidence": "LDLC parent spec",
-            "source_refs": ["SECRET-LIFE-REF"],
-            "notes": "SECRET RAW LIFE BODY",
-        }],
-    }))
-    pack.write_text(json.dumps({
-        "pack_id": "rdlc-pack",
-        "authority_case": "CASE-RDLC",
-        "generated_at": "2026-06-25T10:00:00Z",
-        "default_lens": "lifecycle",
-        "domains": [{
-            "domain_id": "rdlc-labrack",
-            "label": "SECRET LABRACK LABEL",
-            "lifecycle": "RDLC",
-            "terrain": "bedrock",
-            "depth": "stratum",
-            "scope": "tenant",
-            "state": "candidate",
-            "authority_ceiling": "support_non_authoritative",
-            "claim_ceiling": "navigation",
-            "windows": ["domains", "dynamics"],
-            "surfaces": ["wide-context"],
-            "parity": "labrack",
-            "source_refs": ["SECRET-RAW-REF"],
-            "notes": "SECRET RAW BODY",
-        }],
-        "relations": [{
-            "source": "rdlc-labrack",
-            "target": "research-rdlc",
-            "relation": "extends",
-            "source_refs": ["SECRET-REL-REF"],
-        }],
-    }))
-    summary = read_domain_pack_summary({"domain_pack_paths": [str(pack)], "lifecycle_registry_paths": [str(registry)]}, EXPECTED_DEFAULT_ALLOW)
+    registry.write_text(
+        json.dumps(
+            {
+                "registry_id": "hapax-lifecycle-registry",
+                "authority_case": "CASE-LC",
+                "generated_at": "2026-06-25T09:00:00Z",
+                "default_lens": "tenant-lifecycle",
+                "lifecycles": [
+                    {
+                        "lifecycle_id": "ldlc",
+                        "label": "SECRET LIFE LABEL",
+                        "owner": "operator-instance",
+                        "scope": "tenant",
+                        "plant": "life-management",
+                        "posture": "future-tenant",
+                        "state": "dark_specified",
+                        "maturity": "declared-not-modeled",
+                        "adapter_id": "adapter.ldlc.pending",
+                        "authority_ceiling": "support_non_authoritative",
+                        "claim_surface": "practical loops",
+                        "mutation_surface": "none until receipts exist",
+                        "dark_policy": "show declared future lifecycle only",
+                        "freshness_policy": "requires source inventory",
+                        "air_class": "private-life",
+                        "windows": ["domains", "intake"],
+                        "surfaces": ["hapax-exclusive-chat"],
+                        "commands": ["note", "show-route"],
+                        "receipt_contracts": ["consent", "privacy"],
+                        "blocker": "SECRET RAW BLOCKER",
+                        "next_evidence": "LDLC parent spec",
+                        "source_refs": ["SECRET-LIFE-REF"],
+                        "notes": "SECRET RAW LIFE BODY",
+                    }
+                ],
+            }
+        )
+    )
+    pack.write_text(
+        json.dumps(
+            {
+                "pack_id": "rdlc-pack",
+                "authority_case": "CASE-RDLC",
+                "generated_at": "2026-06-25T10:00:00Z",
+                "default_lens": "lifecycle",
+                "domains": [
+                    {
+                        "domain_id": "rdlc-labrack",
+                        "label": "SECRET LABRACK LABEL",
+                        "lifecycle": "RDLC",
+                        "terrain": "bedrock",
+                        "depth": "stratum",
+                        "scope": "tenant",
+                        "state": "candidate",
+                        "authority_ceiling": "support_non_authoritative",
+                        "claim_ceiling": "navigation",
+                        "windows": ["domains", "dynamics"],
+                        "surfaces": ["wide-context"],
+                        "parity": "labrack",
+                        "source_refs": ["SECRET-RAW-REF"],
+                        "notes": "SECRET RAW BODY",
+                    }
+                ],
+                "relations": [
+                    {
+                        "source": "rdlc-labrack",
+                        "target": "research-rdlc",
+                        "relation": "extends",
+                        "source_refs": ["SECRET-REL-REF"],
+                    }
+                ],
+            }
+        )
+    )
+    summary = read_domain_pack_summary(
+        {"domain_pack_paths": [str(pack)], "lifecycle_registry_paths": [str(registry)]},
+        EXPECTED_DEFAULT_ALLOW,
+    )
     assert summary["authority"] == "CASE-RDLC"
     assert summary["generated_at"] == "2026-06-25T10:00:00Z"
     assert summary["totals"]["rows"] == 1
@@ -1401,7 +2275,13 @@ def test_read_domain_pack_summary_is_source_backed_without_raw_bodies(tmp_path):
     assert summary["rows"][0]["air"]["label"] == "deny"
     assert summary["rows"][0]["air"]["domain_id"] == "ok"
     dumped = json.dumps(summary)
-    for secret in ["SECRET RAW BODY", "SECRET-RAW-REF", "SECRET-REL-REF", "SECRET RAW LIFE BODY", "SECRET-LIFE-REF"]:
+    for secret in [
+        "SECRET RAW BODY",
+        "SECRET-RAW-REF",
+        "SECRET-REL-REF",
+        "SECRET RAW LIFE BODY",
+        "SECRET-LIFE-REF",
+    ]:
         assert secret not in dumped
 
 
@@ -1422,7 +2302,6 @@ def test_read_domain_pack_summary_missing_config_is_explicit():
     assert summary["rows"] == []
 
 
-
 def test_read_vault_endpoint_returns_metadata_only(tmp_path):
     vault = tmp_path / "vault"
     projects = vault / "Projects"
@@ -1440,7 +2319,11 @@ def test_read_vault_endpoint_returns_metadata_only(tmp_path):
     os.utime(note_b, (1_700_000_100, 1_700_000_100))
 
     app = build_app("", EXPECTED_DEFAULT_ALLOW, {"vault_root": str(vault)})
-    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/vault")
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/read/vault"
+    )
 
     data = endpoint()
     assert data["vault_root"] == str(vault)
@@ -1449,7 +2332,9 @@ def test_read_vault_endpoint_returns_metadata_only(tmp_path):
     by_title = {note["title"]: note for note in data["notes"]}
     assert by_title["First Note"]["rel_path"] == "Projects/First Note.md"
     assert by_title["First Note"]["folder"] == "Projects"
-    assert by_title["First Note"]["obsidian_uri"] == "obsidian://open?path=" + quote(str(note_a.resolve()), safe="")
+    assert by_title["First Note"]["obsidian_uri"] == "obsidian://open?path=" + quote(
+        str(note_a.resolve()), safe=""
+    )
     assert by_title["Second Note"]["folder"] == "Areas"
     dumped = json.dumps(data)
     assert "SECRET" not in dumped
@@ -1465,21 +2350,25 @@ def test_read_vault_missing_root_is_dark(tmp_path):
 
 def test_read_observe_summary_is_per_dimension_honest_dark(tmp_path, monkeypatch):
     state = tmp_path / "coordinator-state.json"
-    state.write_text(json.dumps({
-        "lanes": {
-            "cc-live": {
-                "role": "cc-live",
-                "session": "tmux-live",
-                "platform": "codex",
-                "alive": True,
-                "idle": False,
-                "stalled": False,
-                "claimed_task": "",
-                "output_age_s": 1,
-                "relay_age_s": 2,
+    state.write_text(
+        json.dumps(
+            {
+                "lanes": {
+                    "cc-live": {
+                        "role": "cc-live",
+                        "session": "tmux-live",
+                        "platform": "codex",
+                        "alive": True,
+                        "idle": False,
+                        "stalled": False,
+                        "claimed_task": "",
+                        "output_age_s": 1,
+                        "relay_age_s": 2,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
 
     def dark_http(_url, _timeout):
@@ -1487,7 +2376,9 @@ def test_read_observe_summary_is_per_dimension_honest_dark(tmp_path, monkeypatch
 
     monkeypatch.setattr(reins_read, "_observe_http_json", dark_http)
 
-    data = read_observe_summary({"council_root": "", "observe_api_url": "http://127.0.0.1:9"})
+    data = read_observe_summary(
+        {"council_root": "", "observe_api_url": "http://127.0.0.1:9"}
+    )
     dims = {dim["key"]: dim for dim in data["dimensions"]}
 
     assert data["dark"] is False
@@ -1495,7 +2386,9 @@ def test_read_observe_summary_is_per_dimension_honest_dark(tmp_path, monkeypatch
     assert dims["agents"]["count"] == 1
     assert "lanes=1" in dims["agents"]["summary"]
     assert dims["gpu"]["status"] == "dark"
-    assert dims["gpu"]["count"] is None  # no fabricated zero when the source is unreachable
+    assert (
+        dims["gpu"]["count"] is None
+    )  # no fabricated zero when the source is unreachable
     assert dims["drift"]["status"] == "dark"
     assert dims["drift"]["count"] is None
 
@@ -1504,22 +2397,49 @@ def test_read_observe_endpoint_returns_summary(tmp_path, monkeypatch):
     state = tmp_path / "coordinator-state.json"
     state.write_text(json.dumps({"lanes": {}}))
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
-    monkeypatch.setattr(reins_read, "_observe_http_json", lambda _url, _timeout: {"status": "ok", "count": 2})
+    monkeypatch.setattr(
+        reins_read,
+        "_observe_http_json",
+        lambda _url, _timeout: {"status": "ok", "count": 2},
+    )
 
-    app = build_app("", EXPECTED_DEFAULT_ALLOW, {"observe_api_url": "http://observe.test"})
-    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/observe")
+    app = build_app(
+        "", EXPECTED_DEFAULT_ALLOW, {"observe_api_url": "http://observe.test"}
+    )
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/read/observe"
+    )
 
     data = endpoint()
     dims = {dim["key"]: dim for dim in data["dimensions"]}
     assert data["dark"] is False
-    assert dims["health"]["status"] == "live"  # local coordinator source was reachable, even empty
+    assert (
+        dims["health"]["status"] == "live"
+    )  # local coordinator source was reachable, even empty
     assert dims["health"]["count"] == 0
-    assert dims["gpu"]["status"] == "live"     # HTTP-backed dimension used the mocked observe API
+    assert (
+        dims["gpu"]["status"] == "live"
+    )  # HTTP-backed dimension used the mocked observe API
     assert dims["gpu"]["count"] == 2
+
 
 def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     monkeypatch.setenv("REINS_CONFIG", "/no/such/reins.toml")  # force the no-file path
-    for k in ("REINS_COUNCIL_ROOT", "REINS_AIR_ALLOWLIST", "REINS_PORT", "REINS_LIFECYCLE_REGISTRIES", "REINS_DOMAIN_PACKS", "REINS_CAPABILITY_SURFACE_PACKS", "REINS_HKP_SHADOW_ROOT", "REINS_HKP_INDEX_ROOT", "REINS_HKP_REPORT_ROOT", "REINS_HKP_BUNDLES", "REINS_VAULT_ROOT"):
+    for k in (
+        "REINS_COUNCIL_ROOT",
+        "REINS_AIR_ALLOWLIST",
+        "REINS_PORT",
+        "REINS_LIFECYCLE_REGISTRIES",
+        "REINS_DOMAIN_PACKS",
+        "REINS_CAPABILITY_SURFACE_PACKS",
+        "REINS_HKP_SHADOW_ROOT",
+        "REINS_HKP_INDEX_ROOT",
+        "REINS_HKP_REPORT_ROOT",
+        "REINS_HKP_BUNDLES",
+        "REINS_VAULT_ROOT",
+    ):
         monkeypatch.delenv(k, raising=False)
     cfg = instance_config()
     assert cfg["council_root"] == ""  # NO baked operator path
@@ -1531,10 +2451,13 @@ def test_instance_config_neutral_defaults_no_baked_path(monkeypatch):
     assert cfg["hkp_report_root"] == ""
     assert cfg["hkp_bundles"] == []
     assert cfg["vault_root"] == ""
-    assert "kind" in cfg["allowlist"] and "subject" not in cfg["allowlist"]  # conservative on-air default
+    assert (
+        "kind" in cfg["allowlist"] and "subject" not in cfg["allowlist"]
+    )  # conservative on-air default
     # the default AIR allowlist now derives from the facet-cut SSOT (operator-approved 2026-06-26),
     # which airs the structural skeleton + denies free-text/PII (proven safe by test_facet_registry).
     import facet_registry
+
     assert cfg["allowlist"] == facet_registry.air_allowlist()
 
 
@@ -1580,8 +2503,14 @@ def test_age_s_unknown_ts_never_fabricates_recency_or_freshness():
 def test_to_trace_row_air_is_allowlist_classified_default_deny():
     # dossier F4: trace rows classify AIR against the operator allowlist like every other
     # row kind — nothing hardcodes ok; no allowlist means default-DENY across the board.
-    raw = {"id": "trace-1", "timestamp": "2026-06-26T12:00:00Z",
-           "metadata": {"model": "m"}, "tokenUsage": {}, "totalPrice": 0.01, "duration": 1.0}
+    raw = {
+        "id": "trace-1",
+        "timestamp": "2026-06-26T12:00:00Z",
+        "metadata": {"model": "m"},
+        "tokenUsage": {},
+        "totalPrice": 0.01,
+        "duration": 1.0,
+    }
     deny_row = to_trace_row(raw)
     assert all(v == "deny" for v in deny_row["air"].values())
     allow_row = to_trace_row(raw, ["model", "latency_ms"])
