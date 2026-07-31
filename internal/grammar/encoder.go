@@ -154,11 +154,30 @@ func padTo(s string, n int) string {
 	return pad(s, n)
 }
 
+// Silence tokens (F4: "dark" is not "absent"). A cell never renders a bare run of dots, because
+// dots are indistinguishable from a value. It carries a value, or it NAMES which kind of nothing:
+//
+//	SilenceUnmeasured — no producer value reached the cockpit (we did not look, or the producer died)
+//	SilenceNone       — the producer LOOKED and there is nothing (a measured negative)
+//
+// SilenceNone is deliberately NOT reachable from today's task data: an empty prior_stage means only
+// "the producer gave us nothing", so rendering "none" would assert a measurement never made.
+const (
+	SilenceUnmeasured = "? unmeas"
+	SilenceNone       = "○ none"
+)
+
 // padSilent pads to n, but an EMPTY value becomes structured-silence dots — the grid reads "nothing
 // here" rather than a jarring blank (the dotsOr convention, made a property of the text/family cells).
 func padSilent(s string, n int) string {
 	if strings.TrimSpace(s) == "" && n > 0 {
-		return strings.Repeat("·", n)
+		// F4 (dark != absent): a run of dots does not say WHICH kind of nothing this is.
+		// Name it when the column can carry the word; degrade to a bare "?" when it cannot.
+		// "?" is the universal I-don't-know and still beats dots, which read as a value.
+		if n >= len(SilenceUnmeasured) {
+			return padTo(SilenceUnmeasured, n)
+		}
+		return padTo("?", n)
 	}
 	return padTo(s, n)
 }

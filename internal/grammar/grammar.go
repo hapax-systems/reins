@@ -725,12 +725,18 @@ func RenderTaskRow(t Task, airOn bool) string {
 	if strings.TrimSpace(prior) != "" {
 		prior += "◀"
 	}
-	pred := t.PredictedStage // the →next chip ("·ship" = terminal/arrived; "→X" = pending move)
+	if strings.TrimSpace(prior) == "" {
+		prior = SilenceUnmeasured // F4: no prior_stage reached us — say so, do not draw dots
+	}
+	pred := t.PredictedStage // the →next chip ("⇥ship" = terminal/arrived; "→X" = pending move)
 	switch pred {
-	case "", "ship":
-		if pred == "ship" {
-			pred = "·ship"
-		}
+	case "":
+		pred = SilenceUnmeasured // F4: unmeasured, NOT "terminal" and NOT "empty"
+	case "ship":
+		// "⇥" (U+21E5) keeps terminal in the arrow family while reading as arrive-and-stop.
+		// Verified present at advance 600 (single cell, identical to ASCII) in the installed
+		// JetBrains Mono Nerd Font; "·ship" was indistinguishable from the dots of silence.
+		pred = "⇥ship"
 	default:
 		pred = "→" + pred
 	}
@@ -741,8 +747,8 @@ func RenderTaskRow(t Task, airOn bool) string {
 	rel := relCell(t.RelCount, d("rel_count"), airOn)
 	id := cell("identity", t.TaskID, "task_id", 22)
 	stg := cell("action", shortStage(t.Stage), "stage", 4)
-	was := cell("action", prior, "prior_stage", 5)
-	nxt := cell("action", pred, "predicted_stage", 5)
+	was := cell("action", prior, "prior_stage", 8)
+	nxt := cell("action", pred, "predicted_stage", 8)
 	who := cell("ownership", t.Owner, "owner", 8)
 	fr := EncodeCell(reg, "time", CellValue{Magnitude: t.Freshness, Denied: d("freshness")}, airOn).Rendered
 	return strings.Join([]string{posture, rel, id, stg, was, nxt, who, fr}, " ")

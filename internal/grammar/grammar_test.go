@@ -308,10 +308,41 @@ func TestRenderTaskRowSevenDims(t *testing.T) {
 	}
 }
 
-func TestRenderTaskRowStructuredSilence(t *testing.T) {
-	got := RenderTaskRow(sampleTask(), false) // empty no_go -> dots, not blank jitter
-	if !strings.Contains(got, "····") {
-		t.Fatalf("empty cell must be structured-silence dots: %q", got)
+func TestRenderTaskRowNamesItsSilence(t *testing.T) {
+	got := ansi.Strip(RenderTaskRow(sampleTask(), false))
+	if !strings.Contains(got, SilenceUnmeasured) {
+		t.Fatalf("an unmeasured cell must name itself %q, not draw dots: %q", SilenceUnmeasured, got)
+	}
+}
+
+// F4, the load-bearing one: a terminal task ("ship") and an UNMEASURED trajectory must not render
+// the same leading mark. Under the old encoding both led with "·" — "·ship" and "·····" — so a cold
+// reader could not tell "arrived" from "we have no idea". They must differ in FORM, before colour.
+func TestTrajectoryTerminalIsNotConfusableWithSilence(t *testing.T) {
+	tk := sampleTask()
+	tk.PredictedStage = "ship"
+	shipped := ansi.Strip(RenderTaskRow(tk, false))
+	tk.PredictedStage = ""
+	silent := ansi.Strip(RenderTaskRow(tk, false))
+	if !strings.Contains(shipped, "⇥ship") {
+		t.Fatalf("terminal must render as ⇥ship: %q", shipped)
+	}
+	if strings.Contains(shipped, "·ship") {
+		t.Fatalf("terminal must not lead with the silence dot: %q", shipped)
+	}
+	if !strings.Contains(silent, SilenceUnmeasured) {
+		t.Fatalf("unmeasured trajectory must name itself: %q", silent)
+	}
+}
+
+// SilenceNone asserts a MEASURED negative. Today's /read contract cannot distinguish "looked and
+// found nothing" from "no value reached us", so nothing may render it — doing so would claim a
+// measurement never made. This test fails the day someone wires it up without fixing the producer.
+func TestMeasuredEmptyIsNotClaimedFromUnmeasuredData(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	if strings.Contains(ansi.Strip(RenderTaskRow(tk, false)), SilenceNone) {
+		t.Fatalf("empty prior_stage must not be rendered as a measured negative (%q)", SilenceNone)
 	}
 }
 
