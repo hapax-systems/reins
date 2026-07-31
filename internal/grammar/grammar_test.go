@@ -587,3 +587,34 @@ func TestRenderTraceHeaderAligns(t *testing.T) {
 		}
 	}
 }
+
+// The other half of the contract: when the producer HAS earned it — a complete log in which the
+// task appears and never transitioned — the measured negative must actually render. Without this
+// the discrimination would be built and never shown.
+func TestMeasuredOriginRendersTheMeasuredNegative(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	tk.PriorStageState = "origin"
+	got := ansi.Strip(RenderTaskRow(tk, false))
+	if !strings.Contains(got, SilenceNone) {
+		t.Fatalf("a measured origin must render %q: %q", SilenceNone, got)
+	}
+	// Scoped to the was◀ cell on purpose: other columns of this fixture are legitimately
+	// unmeasured, so asserting the token is absent from the whole ROW would be wrong.
+	was := strings.Index(got, SilenceNone)
+	nxt := strings.Index(got, SilenceUnmeasured)
+	if nxt >= 0 && nxt < was {
+		t.Fatalf("the was◀ cell must hold the measured negative, not unmeasured: %q", got)
+	}
+}
+
+// An older producer that omits the field must degrade to unmeasured, never to a measured negative.
+func TestAbsentStateFieldDegradesToUnmeasured(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	tk.PriorStageState = ""
+	got := ansi.Strip(RenderTaskRow(tk, false))
+	if !strings.Contains(got, SilenceUnmeasured) {
+		t.Fatalf("a producer without the field must read unmeasured: %q", got)
+	}
+}

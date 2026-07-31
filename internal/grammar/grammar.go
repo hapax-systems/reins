@@ -628,23 +628,28 @@ func RenderTurnDetail(t Turn, blocks []TurnBlock, airOn bool) string {
 
 // Task is the unified-API READ contract for one registry row (mirrors reins_read.to_task).
 type Task struct {
-	TaskID         string            `json:"task_id"`
-	Stage          string            `json:"stage"`
-	AuthorityCase  string            `json:"authority_case"`
-	NoGo           string            `json:"no_go"`
-	PriorStage     string            `json:"prior_stage"`     // D6 — the stage transitioned FROM
-	PredictedStage string            `json:"predicted_stage"` // D7 — the expected next stage
-	Owner          string            `json:"owner"`           // who — last actor / lane
-	Freshness      float64           `json:"freshness"`       // exp(-age/τ)
-	Criticality    string            `json:"criticality"`     // D4 — ok|warn|major|crit
-	RelCount       int               `json:"rel_count"`       // D2 — live relationship ties
-	AIR            map[string]string `json:"air"`
+	TaskID        string `json:"task_id"`
+	Stage         string `json:"stage"`
+	AuthorityCase string `json:"authority_case"`
+	NoGo          string `json:"no_go"`
+	PriorStage    string `json:"prior_stage"` // D6 — the stage transitioned FROM
+	// Which kind of nothing an empty PriorStage is: "measured" | "origin" | "unmeasured".
+	// Empty string means the producer predates the discriminated contract — treat as unmeasured.
+	PriorStageState string            `json:"prior_stage_state"`
+	PredictedStage  string            `json:"predicted_stage"` // D7 — the expected next stage
+	Owner           string            `json:"owner"`           // who — last actor / lane
+	Freshness       float64           `json:"freshness"`       // exp(-age/τ)
+	Criticality     string            `json:"criticality"`     // D4 — ok|warn|major|crit
+	RelCount        int               `json:"rel_count"`       // D2 — live relationship ties
+	AIR             map[string]string `json:"air"`
 }
 
 // RenderTaskHeader: the column header for the encoder-composed task row (posture carries criticality
 // as glyph+word, so there is no separate state/crit column anymore; relations stay as the edge cell).
 func RenderTaskHeader() string {
-	return C("mut", fmt.Sprintf("%-7s %-3s %-22s %-4s %-5s %-5s %-8s %s",
+	// was◀/→next are 8 wide to match the row cells: the silence tokens name themselves ("? unmeas")
+	// instead of drawing dots, and "→advance" no longer truncates to "→adva".
+	return C("mut", fmt.Sprintf("%-7s %-3s %-22s %-4s %-8s %-8s %-8s %s",
 		"state", "rel", "TASK", "STG", "was◀", "→next", "who", "fr"))
 }
 
@@ -726,7 +731,14 @@ func RenderTaskRow(t Task, airOn bool) string {
 		prior += "◀"
 	}
 	if strings.TrimSpace(prior) == "" {
-		prior = SilenceUnmeasured // F4: no prior_stage reached us — say so, do not draw dots
+		// F4: name which kind of nothing this is. Only a producer that says "origin" — a COMPLETE
+		// log in which the task appears and never transitioned — licenses the measured-negative
+		// token. Anything else, including an older producer that omits the field, reads unmeasured.
+		if t.PriorStageState == "origin" {
+			prior = SilenceNone
+		} else {
+			prior = SilenceUnmeasured
+		}
 	}
 	pred := t.PredictedStage // the →next chip ("⇥ship" = terminal/arrived; "→X" = pending move)
 	switch pred {
