@@ -2,6 +2,7 @@ package grammar
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hapax-systems/reins/internal/palette"
 )
@@ -154,17 +155,22 @@ func padTo(s string, n int) string {
 	return pad(s, n)
 }
 
-// Silence tokens (F4: "dark" is not "absent"). A cell never renders a bare run of dots, because
-// dots are indistinguishable from a value. It carries a value, or it NAMES which kind of nothing:
+// Silence tokens (F4: dark != absent). A cell never renders a bare run of dots — dots are
+// indistinguishable from a value, and "·" already carries four other meanings in this grammar.
 //
-//	SilenceUnmeasured — no producer value reached the cockpit (we did not look, or the producer died)
-//	SilenceNone       — the producer LOOKED and there is nothing (a measured negative)
+// These MINT NOTHING. They are the existing AffordanceState disposition vocabulary reused verbatim
+// (affordance.go StateDark/StateAbsent, rendered by model.affordanceStateBadge as ▒ dark / ○ absent).
+// The imagery-glyph design is explicit that this is the required move: the `horseless` row binds
+// existing ○ StateAbsent rather than minting, because "minting would fork the disposition
+// vocabulary", and it names "starved producer renders ▒ per dark != absent". The bind-existing
+// precedent it cites is econ.go's econValueStatusGlyph reusing the confidence ladder as a closed set.
 //
-// SilenceNone is deliberately NOT reachable from today's task data: an empty prior_stage means only
-// "the producer gave us nothing", so rendering "none" would assert a measurement never made.
+// TestSilenceTokensMatchTheAffordanceBadge pins these equal to the badge so they cannot drift apart.
 const (
-	SilenceUnmeasured = "? unmeas"
-	SilenceNone       = "○ none"
+	// SilenceDark: the producer emitted no fact for this subject — starved, not "no".
+	SilenceDark = "▒ dark"
+	// SilenceAbsent: the producer LOOKED and classified it out — a positive "no", a measured negative.
+	SilenceAbsent = "○ absent"
 )
 
 // padSilent pads to n, but an EMPTY value becomes structured-silence dots — the grid reads "nothing
@@ -174,10 +180,12 @@ func padSilent(s string, n int) string {
 		// F4 (dark != absent): a run of dots does not say WHICH kind of nothing this is.
 		// Name it when the column can carry the word; degrade to a bare "?" when it cannot.
 		// "?" is the universal I-don't-know and still beats dots, which read as a value.
-		if n >= len(SilenceUnmeasured) {
-			return padTo(SilenceUnmeasured, n)
+		if n >= utf8.RuneCountInString(SilenceDark) {
+			return padTo(SilenceDark, n)
 		}
-		return padTo("?", n)
+		// Too narrow for the word: the bare glyph still carries the disposition, and "▒" is the
+		// ratified starved mark. Never fall back to dots — dots read as a value.
+		return padTo("▒", n)
 	}
 	return padTo(s, n)
 }

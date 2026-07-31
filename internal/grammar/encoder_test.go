@@ -266,8 +266,8 @@ func TestEncodeCellTextEmptyNamesItsSilence(t *testing.T) {
 		if utf8.RuneCountInString(out) != 8 {
 			t.Errorf("facet %q empty cell must hold its width: got %d runes %q", facet, utf8.RuneCountInString(out), out)
 		}
-		if !strings.Contains(out, SilenceUnmeasured) {
-			t.Errorf("facet %q empty cell must name the silence (%q), got %q", facet, SilenceUnmeasured, out)
+		if !strings.Contains(out, SilenceDark) {
+			t.Errorf("facet %q empty cell must name the silence (%q), got %q", facet, SilenceDark, out)
 		}
 	}
 }
@@ -279,8 +279,8 @@ func TestEncodeCellNarrowSilenceDegradesToQuestionMark(t *testing.T) {
 	if strings.Contains(out, "·") {
 		t.Errorf("narrow empty cell must not fall back to dots, got %q", out)
 	}
-	if !strings.Contains(out, "?") {
-		t.Errorf("narrow empty cell must still mark unknown, got %q", out)
+	if !strings.Contains(out, "▒") {
+		t.Errorf("narrow empty cell must still carry the starved mark ▒, got %q", out)
 	}
 	if utf8.RuneCountInString(out) != 4 {
 		t.Errorf("narrow empty cell must hold its width: got %d runes %q", utf8.RuneCountInString(out), out)

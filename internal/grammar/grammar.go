@@ -735,20 +735,22 @@ func RenderTaskRow(t Task, airOn bool) string {
 		// log in which the task appears and never transitioned — licenses the measured-negative
 		// token. Anything else, including an older producer that omits the field, reads unmeasured.
 		if t.PriorStageState == "origin" {
-			prior = SilenceNone
+			prior = SilenceAbsent // producer looked, never transitioned: a positive "no"
 		} else {
-			prior = SilenceUnmeasured
+			prior = SilenceDark // no fact reached us, or the log cannot prove absence
 		}
 	}
-	pred := t.PredictedStage // the →next chip ("⇥ship" = terminal/arrived; "→X" = pending move)
+	pred := t.PredictedStage // the →next chip ("·ship" = terminal/arrived; "→X" = pending move)
 	switch pred {
 	case "":
-		pred = SilenceUnmeasured // F4: unmeasured, NOT "terminal" and NOT "empty"
+		pred = SilenceDark // F4: no predicted stage reached us — starved, not "no"
 	case "ship":
-		// "⇥" (U+21E5) keeps terminal in the arrow family while reading as arrive-and-stop.
-		// Verified present at advance 600 (single cell, identical to ASCII) in the installed
-		// JetBrains Mono Nerd Font; "·ship" was indistinguishable from the dots of silence.
-		pred = "⇥ship"
+		// "·ship" stays. The confusability it had was never with the dot itself — it was that
+		// SILENCE also rendered as dots, so "·ship" and "·····" shared a leading mark. Now that
+		// silence renders ▒/○, the collision is gone without minting a glyph. Minting one here
+		// would violate INV-G1 (no imagery-glyph literal in render code; the fail-closed
+		// ImageryGlyph accessor and its registry are designed, not built).
+		pred = "·ship"
 	default:
 		pred = "→" + pred
 	}

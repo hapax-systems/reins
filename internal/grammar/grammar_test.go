@@ -310,8 +310,8 @@ func TestRenderTaskRowSevenDims(t *testing.T) {
 
 func TestRenderTaskRowNamesItsSilence(t *testing.T) {
 	got := ansi.Strip(RenderTaskRow(sampleTask(), false))
-	if !strings.Contains(got, SilenceUnmeasured) {
-		t.Fatalf("an unmeasured cell must name itself %q, not draw dots: %q", SilenceUnmeasured, got)
+	if !strings.Contains(got, SilenceDark) {
+		t.Fatalf("an unmeasured cell must name itself %q, not draw dots: %q", SilenceDark, got)
 	}
 }
 
@@ -324,25 +324,29 @@ func TestTrajectoryTerminalIsNotConfusableWithSilence(t *testing.T) {
 	shipped := ansi.Strip(RenderTaskRow(tk, false))
 	tk.PredictedStage = ""
 	silent := ansi.Strip(RenderTaskRow(tk, false))
-	if !strings.Contains(shipped, "⇥ship") {
-		t.Fatalf("terminal must render as ⇥ship: %q", shipped)
+
+	// The confusability was never the dot itself — it was that SILENCE also rendered as dots, so
+	// "·ship" and "·····" shared a leading mark. Binding silence to the existing disposition
+	// vocabulary (▒ dark) dissolves the collision without minting a glyph.
+	if !strings.Contains(shipped, "·ship") {
+		t.Fatalf("terminal must remain the arrived mark ·ship: %q", shipped)
 	}
-	if strings.Contains(shipped, "·ship") {
-		t.Fatalf("terminal must not lead with the silence dot: %q", shipped)
+	if !strings.Contains(silent, SilenceDark) {
+		t.Fatalf("an unmeasured trajectory must render %q: %q", SilenceDark, silent)
 	}
-	if !strings.Contains(silent, SilenceUnmeasured) {
-		t.Fatalf("unmeasured trajectory must name itself: %q", silent)
+	if strings.Contains(silent, "·ship") {
+		t.Fatalf("silence must not read as arrived: %q", silent)
 	}
 }
 
-// SilenceNone asserts a MEASURED negative. Today's /read contract cannot distinguish "looked and
+// SilenceAbsent asserts a MEASURED negative. Today's /read contract cannot distinguish "looked and
 // found nothing" from "no value reached us", so nothing may render it — doing so would claim a
 // measurement never made. This test fails the day someone wires it up without fixing the producer.
 func TestMeasuredEmptyIsNotClaimedFromUnmeasuredData(t *testing.T) {
 	tk := sampleTask()
 	tk.PriorStage = ""
-	if strings.Contains(ansi.Strip(RenderTaskRow(tk, false)), SilenceNone) {
-		t.Fatalf("empty prior_stage must not be rendered as a measured negative (%q)", SilenceNone)
+	if strings.Contains(ansi.Strip(RenderTaskRow(tk, false)), SilenceAbsent) {
+		t.Fatalf("empty prior_stage must not be rendered as a measured negative (%q)", SilenceAbsent)
 	}
 }
 
@@ -596,13 +600,13 @@ func TestMeasuredOriginRendersTheMeasuredNegative(t *testing.T) {
 	tk.PriorStage = ""
 	tk.PriorStageState = "origin"
 	got := ansi.Strip(RenderTaskRow(tk, false))
-	if !strings.Contains(got, SilenceNone) {
-		t.Fatalf("a measured origin must render %q: %q", SilenceNone, got)
+	if !strings.Contains(got, SilenceAbsent) {
+		t.Fatalf("a measured origin must render %q: %q", SilenceAbsent, got)
 	}
 	// Scoped to the was◀ cell on purpose: other columns of this fixture are legitimately
 	// unmeasured, so asserting the token is absent from the whole ROW would be wrong.
-	was := strings.Index(got, SilenceNone)
-	nxt := strings.Index(got, SilenceUnmeasured)
+	was := strings.Index(got, SilenceAbsent)
+	nxt := strings.Index(got, SilenceDark)
 	if nxt >= 0 && nxt < was {
 		t.Fatalf("the was◀ cell must hold the measured negative, not unmeasured: %q", got)
 	}
@@ -614,7 +618,7 @@ func TestAbsentStateFieldDegradesToUnmeasured(t *testing.T) {
 	tk.PriorStage = ""
 	tk.PriorStageState = ""
 	got := ansi.Strip(RenderTaskRow(tk, false))
-	if !strings.Contains(got, SilenceUnmeasured) {
+	if !strings.Contains(got, SilenceDark) {
 		t.Fatalf("a producer without the field must read unmeasured: %q", got)
 	}
 }
