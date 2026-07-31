@@ -1587,3 +1587,39 @@ def test_to_trace_row_air_is_allowlist_classified_default_deny():
     allow_row = to_trace_row(raw, ["model", "latency_ms"])
     assert allow_row["air"]["model"] == "ok" and allow_row["air"]["latency_ms"] == "ok"
     assert allow_row["air"]["cost"] == "deny" and allow_row["air"]["trace_id"] == "deny"
+
+
+# --- F4: discriminated silence for prior_stage -------------------------------------------------
+# "" alone conflated three states. These pin each arm, and pin the fail-closed direction: a
+# degraded replay must never be allowed to assert a measured origin.
+
+
+def test_prior_stage_state_measured_when_value_present():
+    h = {"prior_stage": "S6", "seen": True}
+    assert reins_read._prior_stage_state(h, True) == reins_read.SILENCE_MEASURED
+    # a value is a value even if the log degraded
+    assert reins_read._prior_stage_state(h, False) == reins_read.SILENCE_MEASURED
+
+
+def test_prior_stage_state_origin_only_from_a_complete_log():
+    seen_never_transitioned = {"prior_stage": "", "seen": True}
+    assert reins_read._prior_stage_state(seen_never_transitioned, True) == reins_read.SILENCE_ORIGIN
+
+
+def test_prior_stage_state_unmeasured_when_task_absent_from_log():
+    assert reins_read._prior_stage_state({}, True) == reins_read.SILENCE_UNMEASURED
+
+
+def test_degraded_replay_cannot_claim_a_measured_origin():
+    """The load-bearing one. Under a degraded replay the log under-reports silently, so absence
+    proves nothing. Reporting ORIGIN here would be a false green about a measurement never made."""
+    seen_never_transitioned = {"prior_stage": "", "seen": True}
+    assert reins_read._prior_stage_state(seen_never_transitioned, False) == reins_read.SILENCE_UNMEASURED
+    assert reins_read._prior_stage_state({}, False) == reins_read.SILENCE_UNMEASURED
+
+
+def test_to_task_defaults_to_unmeasured_not_origin():
+    """to_task's log_complete defaults False: a caller that does not know provenance must not be
+    able to assert a measured origin by omission."""
+    row = reins_read.to_task("t1", {"stage": "S6"}, ["task_id", "stage", "prior_stage_state"], {}, None)
+    assert row["prior_stage_state"] == reins_read.SILENCE_UNMEASURED
