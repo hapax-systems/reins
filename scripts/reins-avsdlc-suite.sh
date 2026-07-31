@@ -19,6 +19,7 @@ PANES=(
 )
 
 command -v freeze >/dev/null 2>&1 || { echo "freeze not found (go install github.com/charmbracelet/freeze@latest)" >&2; exit 1; }
+freeze_bin="$(command -v freeze)"   # see the trap note in reins-shot.sh
 pass=0; fail=0; head="$(git -C "$REPO" rev-parse --short HEAD)"
 printf 'reins AVSDLC suite @ %s%s\n' "$head" "${LIVE:+ (live)}"
 bin="$TMP/reins"
@@ -27,7 +28,8 @@ for entry in "${PANES[@]}"; do
   spec="${entry%%|*}"; intent="${entry##*|}"
   png="$TMP/${intent}.png"
   "$bin" --drive "$spec" size:160x44 $LIVE > "$TMP/frame.ansi" 2>/dev/null
-  freeze "$TMP/frame.ansi" --language ansi --output "$png" >/dev/null 2>&1
+  env -i HOME="$HOME" PATH=/nonexistent "$freeze_bin" \
+    "$TMP/frame.ansi" --language ansi --output "$png" < /dev/null >/dev/null 2>&1
   # persist the dossier (G7: the cockpit-legibility receipt previously never reached disk — the suite
   # ran the witness but discarded it; a witness that leaves no receipt is prose, not evidence)
   if python3 "$REPO/scripts/reins-avsdlc-witness.py" --frame "$png" \
