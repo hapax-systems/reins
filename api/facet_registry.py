@@ -171,11 +171,34 @@ SENSITIVE: set[str] = {
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
 }
 
+# There are TWO independent reasons to deny a field on air, and SENSITIVE models only the first.
+# PII is about who; FINANCIAL is about how much. A spend figure carries no PII whatsoever and still
+# must never broadcast, so it cannot be filed under SENSITIVE without misnaming the policy.
+#
+# The bar is the operator's, dated, and already quoted verbatim in internal/config/config.go:
+#     operator AIR bar 2026-06-28 "air structural, DENY $cost" (§2 skeleton) ... the financial
+#     "cost" is deliberately OMITTED so $ spend never broadcasts.
+#
+# The hand-maintained Go default honours it by omission. When air_allowlist() replaced that list with
+# a derivation over the registry, the bar was lost: the derivation is (facets | edges) - SENSITIVE
+# and has no notion of "financial", so "cost" — classified `measure`, carrying no PII — fell straight
+# through and aired. Deny by CATEGORY rather than by the one name, so a future spend field added to
+# the registry is denied on arrival instead of airing until someone notices.
+FINANCIAL: set[str] = {
+    "cost", "cost_usd", "total_cost", "spend", "spend_usd", "price", "budget", "amount_usd",
+}
+
 
 def air_policy(domain: str, attr: str) -> str:
-    """The full per-attribute AIR decision: SENSITIVE attrs deny regardless of facet; otherwise the
-    per-facet default. This is what a renderer/the read API consults to build the on-air allowlist."""
-    if attr in SENSITIVE:
+    """The full per-attribute AIR decision: SENSITIVE (PII) and FINANCIAL (spend) attrs deny
+    regardless of facet; otherwise the per-facet default. This is what a renderer/the read API
+    consults to build the on-air allowlist.
+
+    Both deny-sets are checked HERE, at the single authoritative per-attribute site, so that any
+    consumer reaches the same verdict. air_allowlist() subtracts the same two sets; a fix applied to
+    only one of them leaves the other airing, which is precisely how "cost" survived — the derived
+    list was replaced without the per-attribute policy following it."""
+    if attr in SENSITIVE or attr in FINANCIAL:
         return "deny"
     return air_default(classify(domain, attr))
 
@@ -202,13 +225,13 @@ def legible_key(facet: str) -> str:
 
 def air_allowlist() -> list[str]:
     """The registry-derived flat on-air allowlist: every attr name that airs (a facet field or an
-    edge ref) MINUS the SENSITIVE deny-set — bodies/envelopes are excluded by construction (they are
+    edge ref) MINUS the SENSITIVE (PII) and FINANCIAL (spend) deny-sets — bodies/envelopes are excluded by construction (they are
     not in FACET_BY_NAME/EDGES). This REPLACES the hand-maintained _DEFAULT_ALLOW: it airs the
     structural skeleton (incl. the previously-omitted criticality/freshness/magnitude/gate/… repair)
     and denies free-text bodies + PII (path/session/subject/label/title/path-like refs). The
     (domain,attr) homonym is an ENCODER/channel concern, not an AIR one (status airs in both
     readings), so a flat allowlist is on-air-correct; safety is pinned by test_facet_registry."""
-    names = (set(FACET_BY_NAME) | EDGES) - SENSITIVE
+    names = (set(FACET_BY_NAME) | EDGES) - SENSITIVE - FINANCIAL
     return sorted(names)
 
 
