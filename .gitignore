@@ -18,3 +18,7 @@ __pycache__/
 
 # property-based testing artifact cache (regenerable)
 /.hypothesis/
+
+# coverage databases are build output, never source
+.coverage
+api/.coverage

@@ -2,6 +2,7 @@ package grammar
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hapax-systems/reins/internal/palette"
 )
@@ -154,11 +155,39 @@ func padTo(s string, n int) string {
 	return pad(s, n)
 }
 
+// Silence tokens (F4: dark != absent). A cell never renders a bare run of dots — dots are
+// indistinguishable from a value, and "·" already carries four other meanings in this grammar.
+//
+// These MINT NOTHING. They are the existing AffordanceState disposition vocabulary reused verbatim
+// (affordance.go StateDark/StateAbsent, rendered by model.affordanceStateBadge as ▒ dark / ○ absent).
+// The imagery-glyph design is explicit that this is the required move: the `horseless` row binds
+// existing ○ StateAbsent rather than minting, because "minting would fork the disposition
+// vocabulary", and it names "starved producer renders ▒ per dark != absent". The bind-existing
+// precedent it cites is econ.go's econValueStatusGlyph reusing the confidence ladder as a closed set.
+//
+// TestSilenceTokensMatchTheAffordanceBadge pins these equal to the badge so they cannot drift apart.
+const (
+	// SilenceDark: the producer emitted no fact for this subject — starved, not "no".
+	SilenceDark = "▒ dark"
+	// SilenceAbsent: the producer LOOKED and classified it out — a positive "no", a measured negative.
+	SilenceAbsent = "○ absent"
+)
+
 // padSilent pads to n, but an EMPTY value becomes structured-silence dots — the grid reads "nothing
 // here" rather than a jarring blank (the dotsOr convention, made a property of the text/family cells).
 func padSilent(s string, n int) string {
 	if strings.TrimSpace(s) == "" && n > 0 {
-		return strings.Repeat("·", n)
+		// F4 (dark != absent): a run of dots does not say WHICH kind of nothing this is.
+		// Name it when the column can carry the word; degrade to the bare "▒" glyph when it
+		// cannot. The glyph still carries the disposition and still beats dots, which read as
+		// a value. (It is "▒", not "?" — the ratified starved mark, so narrow and wide columns
+		// speak the same vocabulary.)
+		if n >= utf8.RuneCountInString(SilenceDark) {
+			return padTo(SilenceDark, n)
+		}
+		// Too narrow for the word: the bare glyph still carries the disposition, and "▒" is the
+		// ratified starved mark. Never fall back to dots — dots read as a value.
+		return padTo("▒", n)
 	}
 	return padTo(s, n)
 }

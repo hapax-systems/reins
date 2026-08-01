@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -252,12 +253,37 @@ func TestEncodeCellWidthStableAcrossStates(t *testing.T) {
 
 // An empty text/family cell at Width>0 renders structured-silence dots (the grid reads "nothing here"
 // rather than a jarring blank — the dotsOr convention, made a property of the encoder).
-func TestEncodeCellTextEmptyIsStructuredSilence(t *testing.T) {
+// The invariant is "the grid never jitters and never lies", NOT "the glyph is a dot". An empty cell
+// must hold its full width (no blank jitter) and must NAME which kind of nothing it is. Dots failed
+// the second half: a run of "·" is indistinguishable from a value, and from the four other meanings
+// "·" carries elsewhere in the grammar. This test pins the invariant, not the encoding.
+func TestEncodeCellTextEmptyNamesItsSilence(t *testing.T) {
 	for _, facet := range []string{"identity", "action", "variant", "ownership", "place"} {
-		out := ansi.Strip(EncodeCell(FacetRegistry{}, facet, CellValue{Text: "", Width: 6}, false).Rendered)
-		if !strings.Contains(out, "······") {
-			t.Errorf("facet %q empty cell must be structured-silence dots, got %q", facet, out)
+		out := ansi.Strip(EncodeCell(FacetRegistry{}, facet, CellValue{Text: "", Width: 8}, false).Rendered)
+		if strings.TrimSpace(out) == "" {
+			t.Errorf("facet %q empty cell must not be blank (grid jitter), got %q", facet, out)
 		}
+		if utf8.RuneCountInString(out) != 8 {
+			t.Errorf("facet %q empty cell must hold its width: got %d runes %q", facet, utf8.RuneCountInString(out), out)
+		}
+		if !strings.Contains(out, SilenceDark) {
+			t.Errorf("facet %q empty cell must name the silence (%q), got %q", facet, SilenceDark, out)
+		}
+	}
+}
+
+// A column too narrow to carry the word must still refuse dots: "?" beats "·" because "·" reads as
+// a value and "?" does not.
+func TestEncodeCellNarrowSilenceDegradesToStarvedGlyph(t *testing.T) {
+	out := ansi.Strip(EncodeCell(FacetRegistry{}, "action", CellValue{Text: "", Width: 4}, false).Rendered)
+	if strings.Contains(out, "·") {
+		t.Errorf("narrow empty cell must not fall back to dots, got %q", out)
+	}
+	if !strings.Contains(out, "▒") {
+		t.Errorf("narrow empty cell must still carry the starved mark ▒, got %q", out)
+	}
+	if utf8.RuneCountInString(out) != 4 {
+		t.Errorf("narrow empty cell must hold its width: got %d runes %q", utf8.RuneCountInString(out), out)
 	}
 }
 

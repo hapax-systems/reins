@@ -172,3 +172,39 @@ func TestRenderIsPureAndHandlesEmpty(t *testing.T) {
 		t.Fatal("nil spec or non-positive dims must render empty (no panic)")
 	}
 }
+
+// A Door's "no join" is the honesty floor. Truncating from the right dropped it first, leaving the
+// relation CLAIM standing without the QUALIFICATION that it is unbacked — the narrow frame asserted
+// coordination the verdict had explicitly refused.
+func TestNarrowHeaderKeepsNoJoinAndTruncatesTheRelation(t *testing.T) {
+	c := Connector{Relation: "shares owner=alpha (2) and stage and criticality", Verdict: "Door", JoinKey: ""}
+	for _, w := range []int{20, 26, 34, 48} {
+		got := relationHeader(c, w)
+		if !strings.Contains(got, "no join") {
+			t.Errorf("w=%d: the honesty clause must survive truncation, got %q", w, got)
+		}
+		if ansi.StringWidth(got) != w {
+			t.Errorf("w=%d: header must fill its width exactly, got %d (%q)", w, ansi.StringWidth(got), got)
+		}
+	}
+}
+
+func TestNarrowHeaderKeepsTheAssertedJoinKeyToo(t *testing.T) {
+	// The same rule for a real join: the key is what makes the claim checkable.
+	c := Connector{Relation: "a very long emergent relation description here", Verdict: "Standing", JoinKey: "task_id"}
+	got := relationHeader(c, 30)
+	if !strings.Contains(got, "task_id") {
+		t.Errorf("the asserted join key must survive truncation, got %q", got)
+	}
+}
+
+func TestExtremelyNarrowHeaderPrefersTheClauseOverAnUnqualifiedClaim(t *testing.T) {
+	c := Connector{Relation: "shares owner", Verdict: "Door", JoinKey: ""}
+	got := relationHeader(c, 8)
+	if strings.Contains(got, "shares") && !strings.Contains(got, "join") {
+		t.Errorf("an unqualified claim must never outlive its qualification, got %q", got)
+	}
+	if ansi.StringWidth(got) != 8 {
+		t.Errorf("width must be exact, got %d (%q)", ansi.StringWidth(got), got)
+	}
+}
