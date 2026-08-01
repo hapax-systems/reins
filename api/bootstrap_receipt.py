@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import secrets
 import json
 import os
 import re
@@ -167,6 +168,21 @@ class BootstrapReceipt(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _timestamps_are_absolute(self) -> Self:
+        """A naive datetime is not a moment. It reads like one, compares like one, and means a
+        different instant on every host that loads it -- so a chain carrying naive timestamps
+        orders differently depending on who reads it, and ratifications verified at observed_at
+        (see ratifier.verify_time) land at the wrong instant. Absolute or refused."""
+        for name in ("observed_at", "stale_after"):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is None:
+                raise ValueError(
+                    f"receipt {self.receipt_id!r}: {name} is timezone-naive. A receipt records WHEN "
+                    "something happened; without an offset that is unanswerable."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _freshness_coherent(self) -> Self:
         """HARDENING (R1.3): a receipt may not expire before it was observed.
 
@@ -193,13 +209,20 @@ def genesis_self_attest(
     observed_at: datetime | None = None,
 ) -> BootstrapReceipt:
     """The first chain link: the kernel attests its own gate set (hash + version)."""
+    digest = kernel_manifest_sha256.strip().lower()
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError(
+            f"kernel_manifest_sha256 {kernel_manifest_sha256!r} is not a sha256 digest. The genesis\n"
+            "receipt is the chain's root claim about WHICH kernel ran; an unparseable digest makes\n"
+            "every drift check downstream compare against nothing."
+        )
     return BootstrapReceipt(
         receipt_id=f"genesis-{estate_id}",
         estate_id=estate_id,
         kernel_version=kernel_version,
         phase=BootstrapPhase.K0_ACTIVE,
         act=BootstrapAct.MINTED,
-        payload_refs=[f"kernel-manifest:sha256:{kernel_manifest_sha256}"],
+        payload_refs=[f"kernel-manifest:sha256:{digest}"],
         prev_receipt_hash=None,
         observed_at=observed_at or datetime.now(UTC),
     )
@@ -270,6 +293,13 @@ def verify_chain(receipts: list[BootstrapReceipt]) -> ChainVerdict:
         if phase_error is not None:
             errors.append(f"[{index}] {phase_error}")
         seen_phases.append(receipt.phase)
+        if receipt.estate_id != receipts[0].estate_id:
+            # Two estates spliced into one chain would let a receipt from elsewhere inherit this
+            # chain's hash-linkage and read as locally attested.
+            errors.append(
+                f"[{index}] estate_id {receipt.estate_id!r} does not match the chain's "
+                f"{receipts[0].estate_id!r} — one chain belongs to exactly one estate"
+            )
         prev = receipt
 
     if BootstrapPhase.COMPLETE in seen_phases:
@@ -290,11 +320,11 @@ class DurableRootError(RuntimeError):
 def _mount_fstype(path: Path) -> str:
     """fstype of the mount containing ``path`` (longest-prefix match over /proc/mounts)."""
     resolved = path.resolve()
-    best: tuple[int, str] = (-1, "unknown")
+    best: tuple[int, str] = (-1, _UNKNOWN_FSTYPE)
     try:
         mounts = Path("/proc/mounts").read_text(encoding="utf-8").splitlines()
     except OSError:
-        return "unknown"
+        return _UNKNOWN_FSTYPE
     for line in mounts:
         parts = line.split()
         if len(parts) < 3:
@@ -366,7 +396,11 @@ class BootstrapLock:
                 "interrupted first-init owns the chain — inspect, then remove the lock "
                 "explicitly to take over"
             ) from None
-        token = f"pid:{os.getpid()} at:{datetime.now(UTC).isoformat()}"
+        # pid + timestamp is NOT unique: pids are reused, and across pid namespaces two live
+        # processes can share one. release() treats an equal token as proof of ownership, so a
+        # collision lets the wrong process delete a lock it does not hold. A random nonce makes
+        # the token unforgeable by coincidence.
+        token = f"pid:{os.getpid()} at:{datetime.now(UTC).isoformat()} nonce:{secrets.token_hex(8)}"
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(token)
         self._held = True
@@ -457,10 +491,26 @@ def append_receipt(root: Path, receipt: BootstrapReceipt) -> Path:
                 "append refused: an empty chain accepts only the genesis self-attest"
             )
         line = json.dumps(receipt.model_dump(mode="json"), sort_keys=True) + "\n"
-        os.write(fd, line.encode("utf-8"))
+        # os.write may write FEWER bytes than asked. On an append-only ledger a short write is a
+        # truncated JSON line -- the chain would fail to parse forever after, with no way to tell
+        # a torn write from tampering. Write to completion or raise.
+        _write_all(fd, line.encode("utf-8"))
         os.fsync(fd)
     _fsync_dir(chain_path.parent)
     return chain_path
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write every byte or raise. A partial append is indistinguishable from tampering later."""
+    written = 0
+    while written < len(data):
+        n = os.write(fd, data[written:])
+        if n <= 0:
+            raise OSError(
+                f"short write on the receipt chain: {written} of {len(data)} bytes. The chain is "
+                "append-only and must not carry a truncated record."
+            )
+        written += n
 
 
 def _load_chain_fd(fd: int) -> list[BootstrapReceipt]:
@@ -469,7 +519,17 @@ def _load_chain_fd(fd: int) -> list[BootstrapReceipt]:
     chunks: list[bytes] = []
     while chunk := os.read(fd, 65536):
         chunks.append(chunk)
-    return _parse_chain(b"".join(chunks).decode("utf-8"))
+    try:
+        text = b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as e:
+        # The chain is written as UTF-8 JSON lines, so undecodable bytes mean the ledger itself is
+        # damaged. Say that, rather than surfacing a codec error the caller must interpret.
+        raise ValueError(
+            f"receipt chain is corrupt: not valid UTF-8 at byte {e.start} ({e.reason}). "
+            "The chain is append-only; a damaged chain is restored from backup, never repaired "
+            "in place."
+        ) from e
+    return _parse_chain(text)
 
 
 def _parse_chain(text: str) -> list[BootstrapReceipt]:

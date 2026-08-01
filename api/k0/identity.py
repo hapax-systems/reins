@@ -83,9 +83,18 @@ class EstateIdentity:
         for k in ("estate_id", "minted_at"):
             if not str(d.get(k, "")).strip():
                 raise IdentitySeedError(f"identity seed missing {k}")
+        try:
+            minted_at = datetime.fromisoformat(str(d["minted_at"]))
+        except ValueError as e:
+            # Every other corruption in this loader raises IdentitySeedError. A bare ValueError
+            # here escapes the seed-error contract, so a caller catching IdentitySeedError to
+            # refuse cleanly would instead crash on this one field.
+            raise IdentitySeedError(
+                f"identity seed has an unparseable minted_at {d['minted_at']!r}: {e}"
+            ) from e
         return cls(
             estate_id=str(d["estate_id"]),
-            minted_at=datetime.fromisoformat(str(d["minted_at"])),
+            minted_at=minted_at,
             seed_schema=1,
         )
 
@@ -161,8 +170,20 @@ def load_or_mint(durable_root: Path, *, chain_exists: bool | None = None) -> Est
 
     identity = EstateIdentity(estate_id=mint_estate_id(), minted_at=datetime.now(UTC))
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(identity.to_json(), encoding="utf-8")
+    # ATOMIC IS NOT DURABLE. os.replace guarantees no reader sees a torn file; it guarantees
+    # nothing about surviving power loss. Without the fsyncs, a crash seconds after minting can
+    # leave the rename recorded and the CONTENTS empty -- and the estate identity is the one file
+    # that cannot be re-derived: a lost seed orphans every receipt in the chain.
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(identity.to_json())
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, path)  # atomic: a torn seed file is an unattributable chain
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)  # the RENAME itself must reach disk, not just the bytes
+    finally:
+        os.close(dir_fd)
     return identity
 
 

@@ -83,7 +83,9 @@ def test_concurrent_appends_serialise_and_cannot_fork_the_chain(tmp_path: Path) 
         proc.start()
     for proc in procs:
         proc.join()
-    outcomes = [queue.get() for _ in procs]
+    # BOUNDED. An unbounded queue.get() blocks forever if a child dies before reporting, turning
+    # a failed test into a hung CI job that reports nothing at all.
+    outcomes = [queue.get(timeout=60) for _ in procs]
 
     assert outcomes.count("appended") == 1, f"more than one writer admitted: {outcomes}"
     chain = load_chain(tmp_path)

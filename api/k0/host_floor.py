@@ -119,7 +119,12 @@ def require() -> None:
     undeterminable. Returns None when every declared dependency is satisfied."""
     for entry in FLOOR:
         found = _detect(entry)
-        if found is None:
+        if found is None and entry.min_version is None:
+            # We do not need this binary's VERSION, only the binary. Refusing because an
+            # unfamiliar build prints an unfamiliar banner would deny on a fact the floor never
+            # claimed to care about -- fail-closed on the wrong question is still a wrong answer.
+            ev = Evaluation.SATISFIED if shutil.which(entry.binary) else Evaluation.UNEVALUABLE
+        elif found is None:
             ev = Evaluation.UNEVALUABLE
         elif entry.min_version is None or found >= entry.min_version:
             ev = Evaluation.SATISFIED

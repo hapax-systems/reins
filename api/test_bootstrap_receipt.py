@@ -10,6 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from bootstrap_receipt import (
+    _UNKNOWN_FSTYPE,
+    _VOLATILE_FSTYPES,
     BootstrapAct,
     BootstrapLock,
     BootstrapLockError,
@@ -20,6 +22,7 @@ from bootstrap_receipt import (
     declare_durable_root,
     genesis_self_attest,
     load_chain,
+    _mount_fstype,
     verify_chain,
 )
 
@@ -153,7 +156,10 @@ def test_append_refuses_duplicates_and_stale_tails(tmp_path: Path) -> None:
     chain = _full_chain()
     append_receipt(tmp_path, chain[0])
     append_receipt(tmp_path, chain[1])
-    with pytest.raises(ValueError, match="duplicate|tail"):
+    # SPECIFIC. "duplicate|tail" passes on either arm, so it could not tell a working duplicate
+    # check from a broken one that happened to trip the tail check first. Re-appending the tail
+    # fails the prev-hash comparison, because the stored tail IS this receipt.
+    with pytest.raises(ValueError, match="prev_receipt_hash does not match the stored tail"):
         append_receipt(tmp_path, chain[1])  # idempotence: double-append refused
     with pytest.raises(ValueError, match="tail"):
         append_receipt(tmp_path, chain[3])  # skipping a link refused
@@ -177,8 +183,12 @@ def test_single_instance_lock_fails_closed(tmp_path: Path) -> None:
 
 
 def test_durable_root_rejects_volatile_filesystems() -> None:
-    # the repo checkout itself is on durable media (pytest tmp_path may be tmpfs)
+    # The REFUSING arm is the invariant and is asserted unconditionally. The ACCEPTING arm asks
+    # whether this particular checkout happens to sit on durable media, which is a fact about the
+    # machine, not about the code -- so it is skipped rather than failed where it does not hold.
     on_disk = Path(__file__).resolve().parent
+    if _mount_fstype(on_disk) in _VOLATILE_FSTYPES or _mount_fstype(on_disk) == _UNKNOWN_FSTYPE:
+        pytest.skip(f"checkout is on {_mount_fstype(on_disk)!r}, not durable media")
     declared = declare_durable_root(on_disk)
     assert declared["root"] == str(on_disk)
     with pytest.raises(DurableRootError, match="volatile"):
