@@ -178,8 +178,10 @@ const (
 func padSilent(s string, n int) string {
 	if strings.TrimSpace(s) == "" && n > 0 {
 		// F4 (dark != absent): a run of dots does not say WHICH kind of nothing this is.
-		// Name it when the column can carry the word; degrade to a bare "?" when it cannot.
-		// "?" is the universal I-don't-know and still beats dots, which read as a value.
+		// Name it when the column can carry the word; degrade to the bare "▒" glyph when it
+		// cannot. The glyph still carries the disposition and still beats dots, which read as
+		// a value. (It is "▒", not "?" — the ratified starved mark, so narrow and wide columns
+		// speak the same vocabulary.)
 		if n >= utf8.RuneCountInString(SilenceDark) {
 			return padTo(SilenceDark, n)
 		}

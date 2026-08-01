@@ -274,7 +274,7 @@ func TestEncodeCellTextEmptyNamesItsSilence(t *testing.T) {
 
 // A column too narrow to carry the word must still refuse dots: "?" beats "·" because "·" reads as
 // a value and "?" does not.
-func TestEncodeCellNarrowSilenceDegradesToQuestionMark(t *testing.T) {
+func TestEncodeCellNarrowSilenceDegradesToStarvedGlyph(t *testing.T) {
 	out := ansi.Strip(EncodeCell(FacetRegistry{}, "action", CellValue{Text: "", Width: 4}, false).Rendered)
 	if strings.Contains(out, "·") {
 		t.Errorf("narrow empty cell must not fall back to dots, got %q", out)

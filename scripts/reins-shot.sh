@@ -26,8 +26,18 @@ for a in "$@"; do
   esac
 done
 
-command -v freeze >/dev/null 2>&1 || { echo "freeze not found (go install github.com/charmbracelet/freeze@latest)" >&2; exit 1; }
+command -v freeze >/dev/null 2>&1 || { echo "freeze not found (go install github.com/charmbracelet/freeze@v0.2.2)" >&2; exit 1; }
 freeze_bin="$(command -v freeze)"
+# PIN THE VERSION. The two guards below encode defects measured in freeze v0.2.2 (the stdin
+# trap and the host-rsvg font substitution). A different build may fix, move or reintroduce
+# them, so a raster taken with an unverified freeze is not evidence. Fail loud, never render.
+freeze_want="v0.2.2"
+freeze_have="$("$freeze_bin" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+[ "$freeze_have" = "$freeze_want" ] || {
+  echo "freeze $freeze_want required for a reproducible AVSDLC raster, found '${freeze_have:-unknown}'" >&2
+  echo "  go install github.com/charmbracelet/freeze@$freeze_want" >&2
+  exit 1
+}
 
 bindir="$(mktemp -d)"
 go -C "$REPO" build -o "$bindir/reins" ./cmd/reins

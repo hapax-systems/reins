@@ -734,10 +734,13 @@ func RenderTaskRow(t Task, airOn bool) string {
 		// F4: name which kind of nothing this is. Only a producer that says "origin" — a COMPLETE
 		// log in which the task appears and never transitioned — licenses the measured-negative
 		// token. Anything else, including an older producer that omits the field, reads unmeasured.
-		if t.PriorStageState == "origin" {
+		// AIR gates the STATE too. prior_stage_state is itself a field the policy can deny, and a
+		// denied field's value must not steer the render: "○ absent" would tell the operator the
+		// producer looked and found nothing — precisely the fact the deny withheld. Fail closed.
+		if t.PriorStageState == "origin" && !(airOn && d("prior_stage_state")) {
 			prior = SilenceAbsent // producer looked, never transitioned: a positive "no"
 		} else {
-			prior = SilenceDark // no fact reached us, or the log cannot prove absence
+			prior = SilenceDark // no fact reached us, the log cannot prove absence, or AIR denied it
 		}
 	}
 	pred := t.PredictedStage // the →next chip ("·ship" = terminal/arrived; "→X" = pending move)
