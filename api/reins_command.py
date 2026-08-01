@@ -16,6 +16,7 @@ check), so the discipline is enforced HERE, at the only place it can be: this fi
 composes + verifies + forwards, and physically cannot append.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -25,6 +26,8 @@ from pydantic import BaseModel
 
 from k0.fail_closed import Evaluation
 from k0.refusal import Refusal, RefusalError
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -99,7 +102,13 @@ def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation | N
     except RefusalError as exc:
         return None, "", exc.refusal
     except Exception as exc:  # noqa: BLE001 — ANY failure to evaluate is UNEVALUABLE, and denies
-        return Evaluation.UNEVALUABLE, f"the predicate could not be evaluated ({type(exc).__name__}: {exc})", None
+        # The TYPE goes to the caller; the MESSAGE goes only to the log. A predicate raises with
+        # whatever it was holding — packet contents, filesystem paths, upstream error bodies — and
+        # `reason` is serialized straight into the HTTP body. k0.Refusal states the rule this obeys:
+        # a refusal never carries the value it refused, because that value is frequently the thing
+        # under restriction.
+        _log.warning("predicate could not be evaluated", exc_info=exc)
+        return Evaluation.UNEVALUABLE, f"the predicate could not be evaluated ({type(exc).__name__})", None
     if isinstance(verdict, Evaluation):
         return verdict, "", None
     if verdict is None:
@@ -202,7 +211,8 @@ def route_command(
         receipt = transport(envelope)
     except Exception as exc:  # noqa: BLE001 — the owning surface's failure is ours to report, not to leak
         receipt = None
-        why = f"the owning surface failed ({type(exc).__name__}: {exc})"
+        _log.warning("transport failed for verb %s", envelope.verb, exc_info=exc)
+        why = f"the owning surface failed ({type(exc).__name__})"
     else:
         why = "the owning surface returned no receipt, so nothing is known to have been written"
     if receipt is None:
@@ -250,8 +260,8 @@ def _resp_to_dict(resp: Response) -> dict:
 def build_command_app(
     *,
     verb: str,
-    verify_authority: Callable[[Any, str], bool],
-    preflight: Callable[[Envelope], bool],
+    verify_authority: Callable[[Any, str], bool | Evaluation],
+    preflight: Callable[[Envelope], bool | Evaluation],
     transport: Callable[[Envelope], Response | None],
 ) -> FastAPI:
     """A thin HTTP wrapper around route_command for one wired verb. All effectful

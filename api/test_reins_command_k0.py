@@ -109,6 +109,22 @@ def test_every_refusing_arm_states_a_legal_next_move(kwargs):
     assert resp.reason and resp.reason.strip()
 
 
+def test_a_refusal_never_carries_the_value_it_refused():
+    """k0.Refusal states the rule: a refusal never carries the value it refused, because that value
+    is frequently the thing under restriction. `reason` is serialized straight into the HTTP body, so
+    interpolating an exception's MESSAGE publishes whatever the predicate happened to be holding —
+    packet contents, filesystem paths, upstream error bodies. The TYPE is kept for auditability; the
+    message goes to the log."""
+
+    def leaks(*_args):
+        raise ValueError("authority_packet={'secret_token': 'hunter2'} at /srv/hapax/keys/id_ed25519")
+
+    for resp in (_route(verify=leaks), _route(preflight=leaks), _route(transport=leaks)):
+        assert "hunter2" not in (resp.reason or "")
+        assert "id_ed25519" not in (resp.reason or "")
+        assert "ValueError" in (resp.reason or "")
+
+
 # --- a predicate that refuses in the kernel's own idiom -----------------------------------------
 
 

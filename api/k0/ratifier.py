@@ -40,6 +40,10 @@ than restated: this module calls `decide()` directly.
 The payload is signed over stdin and never written to disk. A ratification payload may name the
 thing being ratified, and temp files leak.
 
+The declared floor is OpenSSH 9.1, not the 8.0 that SSHSIG alone would need: verify-time and
+allowed_signers validity windows arrived in 8.7, and the UTC 'Z' suffix this module emits arrived in
+9.1. See host_floor for the release-note citations.
+
 KEY LOSS AND ROTATION are handled in recovery.py (R0.11's third clause). Note the coupling: once a
 key is rotated its allowed_signers window closes, so verifying a HISTORICAL ratification requires
 passing that receipt's own `observed_at` as `verify_time`. Verified at "now" a retired key looks
@@ -63,7 +67,7 @@ RATIFICATION_NAMESPACE = "hapax-ratification"
 _TIMEOUT_S = 20
 
 _LEGAL_NEXT = (
-    "install OpenSSH >= 8.2 (see host_floor) and register the sovereign's public key in the allowed-signers file "
+    "install OpenSSH >= 9.1 (see host_floor) and register the sovereign's public key in the allowed-signers file "
     "under the durable root"
 )
 
@@ -76,7 +80,7 @@ def _ssh_keygen() -> str:
     path = shutil.which("ssh-keygen")
     if not path:
         raise RatifierError(
-            "ssh-keygen not found. The ratifier key requires OpenSSH >= 8.0, which R1.4's "
+            "ssh-keygen not found. The ratifier key requires OpenSSH >= 9.1, which R1.4's "
             "supported-host matrix must declare explicitly."
         )
     return path

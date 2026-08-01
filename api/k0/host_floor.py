@@ -9,12 +9,24 @@ DECLARED, NOT DISCOVERED. Each entry names the binary, why the kernel needs it, 
 version where the required behaviour exists. `probe()` reports what is actually present;
 `require()` applies the K0 law to the result.
 
-THE VERSION MINIMUMS ARE CLAIMS ABOUT BEHAVIOUR, not preferences:
+THE VERSION MINIMUMS ARE CLAIMS ABOUT BEHAVIOUR, not preferences. Each was checked against the
+OpenSSH release notes rather than inferred:
   * OpenSSH 8.0 (2019) — `ssh-keygen -Y sign|verify` (SSHSIG) first appears here. The ratifier key
     is unimplementable below it.
-  * OpenSSH 8.2 (2020) — allowed_signers `valid-after`/`valid-before` and the `verify-time` option,
-    which the key-rotation ceremony REQUIRES: without verify-time, retiring a key invalidates every
-    ratification it ever made.
+  * OpenSSH 8.7 (2021) — "allowed signers files ... now support listing key validity intervals
+    alongside the key, and ssh-keygen(1) can optionally check during signature verification whether
+    a specified time falls inside this interval". That is `valid-after`/`valid-before` plus
+    `verify-time`, which the key-rotation ceremony REQUIRES: without verify-time, retiring a key
+    invalidates every ratification it ever made.
+  * OpenSSH 9.1 (2022) — "YYYYMMDD and YYMMDDHHMM[SS] dates/times will be interpreted as UTC if
+    suffixed with a 'Z' character". ratifier and recovery BOTH emit Z-suffixed timestamps, because a
+    ratification chain that means different things in different time zones is not a chain.
+
+THE FLOOR WAS WRONG UNTIL CORRECTED, AND THE TESTS COULD NOT HAVE CAUGHT IT. It declared 8.2 —
+a number inferred from "validity windows exist by now" rather than read. A host running 8.2 to 9.0
+would have been ADMITTED, then failed on the Z suffix the moment anyone rotated a key or verified a
+historical ratification. The machine this was written on runs 10.3, so every test passed. A floor is
+a claim about OTHER people's machines; it cannot be validated by the machine making it.
 
 UNEVALUABLE DENIES, here as everywhere. A probe that cannot determine a version does not get to
 assume it is new enough — the same arm that made declare_durable_root accept /dev/shm.
@@ -56,9 +68,9 @@ FLOOR: tuple[FloorEntry, ...] = (
         why=(
             "the ratifier key binds ratifications to the sovereign via SSHSIG "
             "(ssh-keygen -Y sign|verify), and key rotation needs allowed_signers validity "
-            "windows plus the verify-time option"
+            "windows plus the verify-time option, with UTC 'Z'-suffixed timestamps"
         ),
-        min_version=(8, 2),
+        min_version=(9, 1),
         version_argv=("-V",),
         version_re=r"OpenSSH[_ ](\d+)\.(\d+)",
         version_binary="ssh",

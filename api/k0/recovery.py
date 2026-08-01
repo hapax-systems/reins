@@ -35,7 +35,8 @@ from pathlib import Path
 
 from .ratifier import RatifierError
 
-#: OpenSSH allowed_signers timestamp format (UTC-suffixed so it is timezone-unambiguous).
+#: OpenSSH allowed_signers timestamp format (UTC-suffixed so it is timezone-unambiguous). The
+#: trailing Z requires OpenSSH >= 9.1 -- see host_floor, which declares that floor for this reason.
 _TS = "%Y%m%d%H%M%SZ"
 
 

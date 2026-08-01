@@ -12,7 +12,10 @@ from k0.host_floor import FLOOR, probe, require
 
 def test_the_floor_declares_ssh_keygen_with_a_reason_and_a_minimum():
     e = next(x for x in FLOOR if x.binary == "ssh-keygen")
-    assert e.min_version == (8, 2), "8.2 is where verify-time and validity windows exist"
+    assert e.min_version == (9, 1), (
+        "9.1 is where Z-suffixed UTC timestamps are accepted; validity windows and verify-time "
+        "arrived in 8.7. Both modules emit the Z suffix, so 9.1 is the real floor."
+    )
     assert "verify-time" in e.why or "rotation" in e.why
 
 
