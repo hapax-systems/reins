@@ -548,7 +548,11 @@ def verify_chain_at(root: Path) -> ChainVerdict:
     traceback instead of ``ok=False``. Corruption is now a verdict."""
     try:
         receipts = load_chain(root)
-    except (json.JSONDecodeError, ValidationError, OSError) as exc:
+    # ValueError covers BOTH _parse_chain's malformed-line rejections and the undecodable-bytes
+    # arm added above. Omitting it would mean the ONE corruption this verifier exists to report
+    # is the one that escapes as a traceback. (JSONDecodeError subclasses ValueError; it is kept
+    # named for the reader.)
+    except (json.JSONDecodeError, ValueError, ValidationError, OSError) as exc:
         return ChainVerdict(
             ok=False, length=0, errors=[f"chain at {root} is unreadable or corrupt: {exc}"]
         )

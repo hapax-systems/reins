@@ -169,7 +169,12 @@ def load_or_mint(durable_root: Path, *, chain_exists: bool | None = None) -> Est
     )
 
     identity = EstateIdentity(estate_id=mint_estate_id(), minted_at=datetime.now(UTC))
-    tmp = path.with_suffix(".json.tmp")
+    # EXCLUSIVE CREATION, NOT CHECK-THEN-WRITE. Two processes can both pass the existence check
+    # above before either writes. With os.replace, both would mint, the last write would win, and
+    # the loser would return an identity that is NOT the one on disk -- attributing its receipts to
+    # an estate that does not exist. os.link fails atomically if the destination is already there,
+    # so exactly one minter can win, and the loser ADOPTS the winner's seed rather than its own.
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     # ATOMIC IS NOT DURABLE. os.replace guarantees no reader sees a torn file; it guarantees
     # nothing about surviving power loss. Without the fsyncs, a crash seconds after minting can
     # leave the rename recorded and the CONTENTS empty -- and the estate identity is the one file
@@ -178,10 +183,16 @@ def load_or_mint(durable_root: Path, *, chain_exists: bool | None = None) -> Est
         handle.write(identity.to_json())
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, path)  # atomic: a torn seed file is an unattributable chain
+    try:
+        os.link(tmp, path)  # atomic: a torn seed file is an unattributable chain
+    except FileExistsError:
+        # Another minter won the race. Its seed is the estate's identity; ours never existed.
+        os.unlink(tmp)
+        return EstateIdentity.from_json(path.read_text(encoding="utf-8"))
+    os.unlink(tmp)
     dir_fd = os.open(path.parent, os.O_RDONLY)
     try:
-        os.fsync(dir_fd)  # the RENAME itself must reach disk, not just the bytes
+        os.fsync(dir_fd)  # the LINK itself must reach disk, not just the bytes
     finally:
         os.close(dir_fd)
     return identity

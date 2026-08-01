@@ -105,7 +105,7 @@ def test_one_chain_belongs_to_exactly_one_estate() -> None:
 def test_a_corrupt_minted_at_raises_the_seed_error(tmp_path: Path) -> None:
     """Every other corruption in the loader raises IdentitySeedError. A bare ValueError here escapes
     the contract, so a caller catching IdentitySeedError to refuse cleanly would crash instead."""
-    seed = tmp_path / "identity.json"
+    seed = tmp_path / "estate-identity.json"
     seed.write_text('{"seed_schema": 1, "estate_id": "abc", "minted_at": "not-a-date"}', encoding="utf-8")
     with pytest.raises(IdentitySeedError, match="unparseable minted_at"):
         EstateIdentity.from_json(seed.read_text(encoding="utf-8"))
@@ -136,3 +136,40 @@ def test_a_version_agnostic_dependency_is_satisfied_by_presence(monkeypatch) -> 
         hf, "FLOOR", tuple(e for e in hf.FLOOR if e.min_version is None)
     )
     hf.require()  # must NOT raise: presence is all this entry ever required
+
+
+def test_corruption_reaches_the_verdict_not_the_callers_stack(tmp_path: Path) -> None:
+    """verify_chain_at exists to REPORT corruption as ok=False. The undecodable-bytes arm added a
+    new ValueError; without it in the tuple, the one corruption this verifier exists for is the one
+    that escapes as a traceback."""
+    from bootstrap_receipt import verify_chain_at
+
+    append_receipt(tmp_path, _genesis())
+    (tmp_path / "bootstrap-receipts.jsonl").write_bytes(b"\xff\xfe not utf8\n")
+    verdict = verify_chain_at(tmp_path)
+    assert verdict.ok is False
+    assert any("unreadable or corrupt" in e for e in verdict.errors)
+
+
+def test_only_one_minter_can_win_the_seed(tmp_path: Path) -> None:
+    """Two processes can both pass the existence check before either writes. With os.replace both
+    would mint and the loser would return an identity that is NOT on disk — attributing its receipts
+    to an estate that does not exist."""
+    import multiprocessing as mp
+
+    from k0 import identity as ident
+
+    def mint(root: str, q) -> None:
+        q.put(ident.load_or_mint(Path(root), chain_exists=False).estate_id)
+
+    ctx = mp.get_context("fork")
+    q = ctx.Queue()
+    procs = [ctx.Process(target=mint, args=(str(tmp_path), q)) for _ in range(6)]
+    for p in procs:
+        p.start()
+    got = [q.get(timeout=60) for _ in procs]
+    for p in procs:
+        p.join(timeout=60)
+
+    on_disk = ident.EstateIdentity.from_json((tmp_path / ident.SEED_FILENAME).read_text(encoding="utf-8"))
+    assert set(got) == {on_disk.estate_id}, f"minters disagreed with the persisted seed: {set(got)}"
