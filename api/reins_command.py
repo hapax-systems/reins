@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from k0.fail_closed import Evaluation
-from k0.refusal import Refusal
+from k0.refusal import Refusal, RefusalError
 
 
 @dataclass
@@ -67,8 +67,19 @@ class Response:
     teaches: str | None = None
 
 
-def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation, str]:
-    """Run a governed predicate under the K0 fail-closed law. Returns (verdict, why).
+def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation | None, str, Refusal | None]:
+    """Run a governed predicate under the K0 fail-closed law. Returns (verdict, why, refusal).
+
+    A predicate written in the kernel's OWN idiom calls ``decide()``, which raises RefusalError
+    carrying a Refusal — and RefusalError exists so "callers receive data, never a parsed string".
+    Catching it as a generic failure would stringify that Refusal into a `why` and throw away the
+    gate, the legal_next and the teaches pointer the predicate had already stated correctly. So a
+    RefusalError propagates its Refusal verbatim, signalled by a ``None`` verdict.
+
+    ``decide()`` collapses VIOLATED and UNEVALUABLE into the same exception, so a propagated refusal
+    CANNOT be re-classified into either. It is reported as what it is — the predicate refused, on its
+    own terms — rather than guessed at. Claiming "we checked and it failed" about a check that may
+    never have run is exactly the collapse the two separate `*_why` arguments exist to prevent.
 
     THE LAW HAS THREE OUTCOMES, NOT TWO. A ``bool`` predicate can only say yes or no; it has no way
     to say "I could not tell". That third case is the dangerous one, and the naive implementation
@@ -85,13 +96,15 @@ def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation, st
     """
     try:
         verdict = predicate(*args)
+    except RefusalError as exc:
+        return None, "", exc.refusal
     except Exception as exc:  # noqa: BLE001 — ANY failure to evaluate is UNEVALUABLE, and denies
-        return Evaluation.UNEVALUABLE, f"the predicate could not be evaluated ({type(exc).__name__}: {exc})"
+        return Evaluation.UNEVALUABLE, f"the predicate could not be evaluated ({type(exc).__name__}: {exc})", None
     if isinstance(verdict, Evaluation):
-        return verdict, ""
+        return verdict, "", None
     if verdict is None:
-        return Evaluation.UNEVALUABLE, "the predicate returned None — it stated no verdict"
-    return (Evaluation.SATISFIED if verdict else Evaluation.VIOLATED), ""
+        return Evaluation.UNEVALUABLE, "the predicate returned None — it stated no verdict", None
+    return (Evaluation.SATISFIED if verdict else Evaluation.VIOLATED), "", None
 
 
 def _refuse(*, gate: str, why: str, legal_next: str, status: str, http: int, teaches: str) -> Response:
@@ -101,7 +114,11 @@ def _refuse(*, gate: str, why: str, legal_next: str, status: str, http: int, tea
     through it means this module cannot emit a refusal that fails to teach the caller what to do —
     the guarantee is structural, not a convention reviewers must remember to check.
     """
-    refusal = Refusal(gate=gate, why=why, legal_next=legal_next, teaches=teaches)
+    return _as_response(Refusal(gate=gate, why=why, legal_next=legal_next, teaches=teaches), status, http)
+
+
+def _as_response(refusal: Refusal, status: str, http: int) -> Response:
+    """Render a Refusal — ours or one a predicate raised — as the router's verdict."""
     return Response(
         status=status,
         http=http,
@@ -135,7 +152,9 @@ def route_command(
     lives in the body, where a new field breaks nothing.
     """
     # 1. Verify-only authority — the packet must be checkable; never trusted blind.
-    verdict, why = _evaluate(verify_authority, envelope.authority_packet, envelope.target)
+    verdict, why, refusal = _evaluate(verify_authority, envelope.authority_packet, envelope.target)
+    if refusal is not None:
+        return _as_response(refusal, "authority-refused", 403)
     if verdict is not Evaluation.SATISFIED:
         unevaluable = verdict is Evaluation.UNEVALUABLE
         return _refuse(
@@ -151,7 +170,9 @@ def route_command(
         )
     # 2. Preflight — the transition must be legal GIVEN valid authority (distinct
     #    from authority-rejected: the stubs' doorVerbLegal / intentStatusFor gate).
-    verdict, why = _evaluate(preflight, envelope)
+    verdict, why, refusal = _evaluate(preflight, envelope)
+    if refusal is not None:
+        return _as_response(refusal, "preflight-refused", 409)
     if verdict is not Evaluation.SATISFIED:
         unevaluable = verdict is Evaluation.UNEVALUABLE
         return _refuse(

@@ -18,7 +18,7 @@ the reason "BLOCKED always escapes" is a law about the SHAPE of a denial, not me
 import pytest
 from fastapi.testclient import TestClient
 
-from k0.fail_closed import Evaluation
+from k0.fail_closed import Evaluation, decide
 from k0.refusal import DeadEndRefusalError, Refusal
 from reins_command import Envelope, Response, build_command_app, route_command
 
@@ -107,6 +107,47 @@ def test_every_refusing_arm_states_a_legal_next_move(kwargs):
     assert resp.http >= 400
     assert resp.legal_next and resp.legal_next.strip()
     assert resp.reason and resp.reason.strip()
+
+
+# --- a predicate that refuses in the kernel's own idiom -----------------------------------------
+
+
+def _decides(*_args):
+    """A predicate written the way K0 writes them: it calls decide(), which raises RefusalError."""
+    decide(
+        "ratifier-verify",
+        Evaluation.UNEVALUABLE,
+        legal_next="register the sovereign's public key in the allowed-signers file",
+        unevaluable_why="ssh-keygen is absent; the ratification is unverified",
+        teaches="doctrine/ratifier-key",
+    )
+
+
+def test_a_predicates_own_refusal_is_forwarded_not_restated():
+    """RefusalError exists so callers receive DATA, never a parsed string. Catching it as a generic
+    failure would stringify the Refusal and discard the gate, legal_next and teaches the predicate
+    had already stated correctly."""
+    resp = _route(verify=_decides)
+    assert resp.http == 403
+    assert resp.status == "authority-refused"
+    assert resp.reason == "ssh-keygen is absent; the ratification is unverified"
+    assert resp.legal_next == "register the sovereign's public key in the allowed-signers file"
+    assert resp.teaches == "doctrine/ratifier-key"
+
+
+def test_a_forwarded_refusal_is_not_reclassified():
+    """decide() collapses VIOLATED and UNEVALUABLE into one exception, so a propagated refusal
+    cannot be sorted back into either. It is reported as the predicate's own refusal rather than
+    guessed at — claiming 'we checked and it failed' about a check that may never have run is the
+    exact collapse the two separate *_why arguments exist to prevent."""
+    assert _route(verify=_decides).status == "authority-refused"
+    assert _route(preflight=_decides).status == "preflight-refused"
+    assert _route(preflight=_decides).http == 409
+
+
+def test_a_forwarded_refusal_still_states_a_legal_next_move():
+    for kwargs in ({"verify": _decides}, {"preflight": _decides}):
+        assert _route(**kwargs).legal_next.strip()
 
 
 def test_the_dead_end_ban_is_structural_not_conventional():
