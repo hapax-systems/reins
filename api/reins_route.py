@@ -57,7 +57,29 @@ def gate_events_path() -> str:
 #: estate. Tied to the read model's own freshness convention (`_freshness` decays with tau = 6h in
 #: reins_read.py), so a feed is stale once it is well past the point where any row would still read
 #: as fresh. Overridable per-instance; engine holds no instance policy.
-GATE_EVENTS_STALE_AFTER_S = float(os.environ.get("REINS_GATE_EVENTS_TTL_S", "") or 6 * 3600)
+_GATE_EVENTS_STALE_AFTER_S_DEFAULT = 6 * 3600.0
+
+
+def _stale_after_s(raw: str | None) -> float:
+    """Parse the TTL override, falling back to the default on anything unusable.
+
+    A threshold that is nan, inf, negative or unparseable cannot gate anything: nan loses every
+    comparison, so a feed would ALWAYS read fresh — the exact failure this module exists to prevent
+    — and inf means nothing is ever stale. Unparseable text previously raised at IMPORT, taking the
+    whole module down. Misconfiguration must not silently disable the freshness gate, nor crash it.
+    """
+    if not raw or not raw.strip():
+        return _GATE_EVENTS_STALE_AFTER_S_DEFAULT
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return _GATE_EVENTS_STALE_AFTER_S_DEFAULT
+    if v != v or v in (float("inf"), float("-inf")) or v < 0:  # nan / +-inf / negative
+        return _GATE_EVENTS_STALE_AFTER_S_DEFAULT
+    return v
+
+
+GATE_EVENTS_STALE_AFTER_S = _stale_after_s(os.environ.get("REINS_GATE_EVENTS_TTL_S"))
 
 
 def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
@@ -69,6 +91,10 @@ def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
     """
     newest = None
     for r in rows:
+        # Defensive: the loader filters to dicts, but this helper is the one place an age is
+        # derived, so it must not crash if a caller ever hands it something else.
+        if not isinstance(r, dict):
+            continue
         raw = str(r.get("ts") or "").strip()
         if not raw:
             continue
@@ -79,6 +105,12 @@ def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
         if t.tzinfo is None:
             t = t.replace(tzinfo=UTC)
         ts = t.timestamp()
+        # A row stamped in the FUTURE is not evidence of freshness — clamping its age to 0
+        # would let one bad row make a stopped feed read live, the very failure this gate
+        # exists to stop. Ignore it; if nothing non-future remains the age is unverifiable,
+        # and unverifiable means stale.
+        if ts > now:
+            continue
         if newest is None or ts > newest:
             newest = ts
     return None if newest is None else max(0.0, now - newest)
@@ -104,9 +136,13 @@ def _read_gate_events(
                 if not line:
                     continue
                 try:
-                    rows.append(json.loads(line))
+                    row = json.loads(line)
                 except Exception:
                     continue  # skip a corrupt line, never crash
+                # A JSONL feed's rows are objects. An array/string/null parses fine but carries no
+                # `ts` and is not a row; keeping it would dilute the age computation with junk.
+                if isinstance(row, dict):
+                    rows.append(row)
         return rows, False, "", _newest_row_age_s(rows, now if now is not None else time.time())
     except OSError as e:
         return [], True, str(e), None
@@ -119,7 +155,17 @@ def read_route_posture(path: str | None = None) -> dict:
             "dark": True,
             "error": err,
             "decision": NO_DECISION,
-            "sources": [{"name": "gate_events", "state": "dark"}, {"name": "edt", "state": "dark"}],
+            "sources": [
+                # Same shape as the non-dark branch so a consumer never special-cases dark.
+                {
+                    "name": "gate_events",
+                    "state": "dark",
+                    "events": 0,
+                    "age_s": None,
+                    "stale_after_s": GATE_EVENTS_STALE_AFTER_S,
+                },
+                {"name": "edt", "state": "dark"},
+            ],
         }
     # Stale is its own state. "live" here previously meant only "the file exists".
     stale = age_s is None or age_s > GATE_EVENTS_STALE_AFTER_S
@@ -174,7 +220,7 @@ def read_route_candidates(path: str | None = None) -> dict:
     """Measured DEMAND evidence per routing_class — the latest measured requirement_vector per observed
     class (raw measured, no computed score). task_reqvec ABSENT (no producer). Candidate RANKING is a
     spine decision (DARK)."""
-    rows, dark, err, age_s = _read_gate_events(path or gate_events_path())
+    rows, dark, err, _age_s = _read_gate_events(path or gate_events_path())
     if dark:
         return {"dark": True, "error": err, "decision": NO_DECISION, "candidates": [],
                 "task_reqvec": "absent"}

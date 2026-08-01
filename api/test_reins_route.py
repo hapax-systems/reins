@@ -3,6 +3,10 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+import reins_route
+
 from reins_route import (
     NO_DECISION,
     REQVEC_DIMS,
@@ -192,3 +196,63 @@ def test_newest_row_wins_even_when_older_rows_precede_it(tmp_path):
     path = _write_feed(tmp_path, rows)
     gate = next(s for s in read_route_posture(path)["sources"] if s["name"] == "gate_events")
     assert gate["state"] == "live", gate
+
+
+# ---------------------------------------------------------------------------------------------
+# Freshness-gate hardening (PR #12 review): a misconfigured threshold or a bad row must never
+# make a stopped feed read live. Every case below fails CLOSED.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "-5", "garbage", "", "   ", None])
+def test_unusable_ttl_override_falls_back_to_the_default(raw):
+    """nan loses every comparison, so a nan threshold would report EVERY feed live — the exact
+    failure this gate exists to prevent. inf means nothing is ever stale. Unparseable text used to
+    raise at import. All of them fall back rather than disable the gate."""
+    assert reins_route._stale_after_s(raw) == reins_route._GATE_EVENTS_STALE_AFTER_S_DEFAULT
+
+
+def test_valid_ttl_override_is_honoured():
+    assert reins_route._stale_after_s("900") == 900.0
+
+
+def test_future_row_does_not_mask_a_stale_feed(tmp_path):
+    """A row stamped in the future is not evidence of freshness. Clamping its age to 0 would let
+    one bad row make a weeks-old feed read live."""
+    now = datetime.now(UTC)
+    path = _write_feed(
+        tmp_path,
+        [_row((now - timedelta(days=17)).isoformat()), _row((now + timedelta(days=3)).isoformat())],
+    )
+    out = read_route_posture(path)
+    gate = next(s for s in out["sources"] if s["name"] == "gate_events")
+    assert gate["state"] == "stale", gate
+    assert gate["age_s"] > 17 * 24 * 3600 - 60
+
+
+def test_only_future_rows_read_unverifiable_hence_stale(tmp_path):
+    now = datetime.now(UTC)
+    path = _write_feed(tmp_path, [_row((now + timedelta(days=3)).isoformat())])
+    out = read_route_posture(path)
+    gate = next(s for s in out["sources"] if s["name"] == "gate_events")
+    assert gate["state"] == "stale", gate
+
+
+def test_non_object_rows_are_not_counted_as_rows(tmp_path):
+    """A JSONL array/string/null parses fine but is not a row; it must not dilute the age."""
+    path = tmp_path / "gate-events.jsonl"
+    old = (datetime.now(UTC) - timedelta(days=17)).isoformat()
+    path.write_text('[1,2]\n"nope"\nnull\n' + json.dumps({"ts": old}) + "\n", encoding="utf-8")
+    rows, dark, _err, age_s = reins_route._read_gate_events(str(path))
+    assert dark is False
+    assert all(isinstance(r, dict) for r in rows)
+    assert len(rows) == 1
+    assert age_s > 17 * 24 * 3600 - 60
+
+
+def test_dark_source_carries_the_same_shape_as_a_live_one(tmp_path):
+    """A consumer must not have to special-case the dark branch to read the feed's fields."""
+    out = read_route_posture(str(tmp_path / "does-not-exist.jsonl"))
+    gate = next(s for s in out["sources"] if s["name"] == "gate_events")
+    assert gate["state"] == "dark"
+    assert gate["events"] == 0
+    assert gate["age_s"] is None
+    assert gate["stale_after_s"] == reins_route.GATE_EVENTS_STALE_AFTER_S
