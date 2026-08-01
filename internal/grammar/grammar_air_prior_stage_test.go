@@ -22,7 +22,9 @@ func airAllOK() map[string]string {
 // other field; when it is denied, its value must not choose the glyph. Rendering "○ absent" would
 // leak the very fact the deny withheld — that the producer looked and found nothing.
 func TestDeniedPriorStageStateCannotRenderAMeasuredNegative(t *testing.T) {
-	base := Task{TaskID: "t1", Stage: "build", PriorStage: "", PriorStageState: "origin"}
+	// PredictedStage is non-empty so the SilenceDark assertion below can only be satisfied by the
+	// prior-stage cell — an empty predicted stage renders its own silence and would mask the miss.
+	base := Task{TaskID: "t1", Stage: "build", PredictedStage: "ship", PriorStage: "", PriorStageState: "origin"}
 
 	allowed := base
 	allowed.AIR = airAllOK()
