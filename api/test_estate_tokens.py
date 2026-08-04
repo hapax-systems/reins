@@ -208,7 +208,70 @@ def test_the_unarmed_message_is_itself_free_of_estate_fingerprints() -> None:
     tokens = estate_tokens()
     if tokens is None:
         pytest.skip("cannot check against real fingerprints while unarmed; shape check above holds")
-    for token in tokens:
-        assert token not in UNARMED, (
-            "an estate fingerprint appears in the skip reason, which is printed to public CI logs"
-        )
+
+    # THE TOKEN IS NEVER AN ASSERTION OPERAND.
+    #
+    # `assert token not in UNARMED` reads correctly and republishes the token when it fails: pytest
+    # rewrites assertions to render their operands, so the run that DETECTS the leak prints it.
+    # Measured, not argued — planting a token in UNARMED and failing this test put it in the output.
+    #
+    # It is the same defect as a report that quotes its finding, arriving in the assertion idiom
+    # itself, and it is why "the failure report is clean" has to be checked per assertion rather
+    # than per file: an earlier pass measured the OTHER test in this module, found it clean, and
+    # concluded about the file. One assertion is not all assertions.
+    leaked = [index for index, token in enumerate(tokens) if token in UNARMED]
+    assert not leaked, (
+        f"estate fingerprint(s) at token index {leaked} appear in the skip reason, which is "
+        f"printed into public CI logs. The tokens are not named here for the same reason."
+    )
+
+
+def test_a_failing_estate_scan_does_not_print_the_token_it_found(tmp_path) -> None:
+    """RUNS PYTEST IN A SUBPROCESS AND READS THE RENDERED OUTPUT.
+
+    Every other test here asserts on values. This one asserts on what a HUMAN AND A CI LOG actually
+    see, because that is where a disclosure would happen and no in-process assertion can observe
+    it. A reviewer asked for exactly this after the property had been verified twice by hand — and
+    hand-verification is what let the `assert token not in UNARMED` leak survive two passes, since
+    the check that was run covered a different assertion in the same file.
+
+    THE PROBE LOADS THE TOKEN FROM A FILE rather than inlining it. The first version wrote the
+    token as a literal into the probe's source, and pytest echoes the source of a failing test —
+    so it failed, on its own construction rather than on the property. That is worth keeping in the
+    record: it is the same rule one layer further out. The real scan has no token literal in its
+    source either; the tokens arrive from outside, which is the whole design.
+
+    Synthetic token throughout, so this is safe in any clone and proves the IDIOM rather than this
+    estate's particular data.
+    """
+    import subprocess
+    import sys
+
+    token = "zzq-subprocess-canary"
+    (tmp_path / "planted.py").write_text(f"# {token}\n", encoding="utf-8")
+    (tmp_path / "token.txt").write_text(token, encoding="utf-8")
+    (tmp_path / "test_probe.py").write_text(
+        "import pathlib, sys\n"
+        f"sys.path.insert(0, {str(pathlib.Path(__file__).parent)!r})\n"
+        "from conftest import scan_tree_for_tokens\n"
+        "HERE = pathlib.Path(__file__).parent\n"
+        "def test_probe():\n"
+        "    tok = (HERE / 'token.txt').read_text()\n"
+        "    hits = scan_tree_for_tokens(HERE, (tok,))\n"
+        "    assert not hits, f'found in {sorted({p.name for p, _ in hits})}'\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tmp_path / "test_probe.py"), "-q", "--no-header"],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+
+    assert proc.returncode != 0, "fixture precondition: the probe test must FAIL so output exists"
+    rendered = proc.stdout + proc.stderr
+    assert "planted.py" in rendered, "fixture precondition: the failure must name the guilty file"
+    assert token not in rendered, (
+        "the rendered pytest failure printed the token. The run that detects a leak must not be "
+        "the run that publishes it."
+    )

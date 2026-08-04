@@ -122,8 +122,11 @@ class DisclosureError(RuntimeError):
     rather than left as a reference to a document they do not have.)
     """
 
-    def __init__(self, message: str, refusal: Refusal) -> None:
-        super().__init__(message)
+    def __init__(self, refusal: Refusal) -> None:
+        # Same shape as the kernel's RefusalError: the refusal IS the message, so the two can
+        # never disagree. The previous signature took a separate summary string, which invited a
+        # caller to write one thing in the exception and another in the refusal a surface renders.
+        super().__init__(refusal.render())
         self.refusal = refusal
 
 
@@ -140,8 +143,12 @@ class PatternSet:
     def __post_init__(self) -> None:
         for cls, pats in self.patterns.items():
             if not isinstance(cls, Sensitivity):
+                # The key is not echoed: it is caller-supplied data, and by this module's own
+                # rule caller data does not appear in messages that reach logs. Its TYPE plus the
+                # valid names is enough to fix a wrong key.
                 raise ValueError(
-                    f"pattern key {cls!r} is not a Sensitivity class; use one of "
+                    f"a pattern key of type {type(cls).__name__} is not a Sensitivity class (the "
+                    f"key itself is not repeated here). Use one of: "
                     f"{', '.join(s.value for s in Sensitivity)}"
                 )
             for index, p in enumerate(pats):
@@ -308,7 +315,6 @@ def assert_transmittable(
 
     if destination is None:
         raise DisclosureError(
-            f"destination {destination_name!r} has no disclosure class",
             Refusal(
                 gate="k0.disclosure",
                 why=(
@@ -331,7 +337,6 @@ def assert_transmittable(
     if blind:
         names = ", ".join(sorted(s.value for s in blind))
         raise DisclosureError(
-            f"cannot certify {destination_name} for: {names}",
             Refusal(
                 gate="k0.disclosure",
                 why=(
@@ -350,7 +355,6 @@ def assert_transmittable(
     if width(destination) > width(verdict.ceiling):
         classes = ", ".join(sorted({f.sensitivity.value for f in verdict.findings}))
         raise DisclosureError(
-            f"{destination_name} is wider than this payload permits",
             Refusal(
                 gate="k0.disclosure",
                 why=(

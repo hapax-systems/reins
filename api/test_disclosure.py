@@ -303,10 +303,17 @@ def test_a_pattern_key_that_is_not_a_sensitivity_class_is_refused() -> None:
     the caller thought they had supplied it. Fail-closed at construction, with the valid names in
     the message so the caller can fix it without reading the source.
     """
+    bad_key = "zzq-mistyped-key"
     with pytest.raises(ValueError, match="is not a Sensitivity class") as exc:
-        PatternSet(patterns={"operator_pii": (r"x",)})
+        PatternSet(patterns={bad_key: (r"x",)})
+
     for name in ("operator_pii", "host_fingerprint", "transcript", "credential"):
         assert name in str(exc.value), "the message must list the valid classes"
+
+    # AND THE KEY ITSELF IS NOT ECHOED. It is caller-supplied data reaching a log, which is the
+    # same rule the patterns follow. Its TYPE plus the valid names is enough to fix a wrong key.
+    assert bad_key not in str(exc.value), "the caller's key was echoed into the error message"
+    assert "str" in str(exc.value), "the type is what identifies the mistake, so it must be named"
 
 
 def test_the_frame_locals_limitation_is_real_and_pinned() -> None:
