@@ -25,7 +25,11 @@ FULL = PatternSet(
     patterns={
         Sensitivity.OPERATOR_PII: (r"\bADHD\b", r"\bautis(m|tic)\b", r"\bmortality\b"),
         Sensitivity.HOST_FINGERPRINT: (r"\bexample-host-\w+\b",),
-        Sensitivity.TRANSCRIPT: (r"^\s*(operator|assistant):",),
+        # (?m) INLINE, not a global re.MULTILINE. `scan` passes only IGNORECASE, so a bare `^`
+        # anchors to the START OF THE PAYLOAD — the class would report as covered while missing
+        # every transcript line that is not the first. Which flags apply is a per-pattern decision
+        # belonging to the estate that wrote the pattern, not a global the kernel imposes.
+        Sensitivity.TRANSCRIPT: (r"(?m)^\s*(operator|assistant):",),
         Sensitivity.CREDENTIAL: (r"\bsk-[A-Za-z0-9]{8,}\b",),
     }
 )
@@ -407,3 +411,71 @@ def test_matching_is_case_insensitive_because_a_fingerprint_is_still_one_in_caps
         v = scan(f"deployed on {variant} today", patterns)
         assert v.findings, f"{variant!r} was not matched; case-insensitivity was lost"
         assert v.ceiling is Disclosure.ESTATE_INTERNAL
+
+
+def test_a_bare_string_of_patterns_is_refused_not_split_into_characters() -> None:
+    """ONE MISSING COMMA AWAY, AND CATASTROPHIC IF ACCEPTED.
+
+    `{CREDENTIAL: "abc"}` instead of `{CREDENTIAL: ("abc",)}`. A str is a Sequence[str], so the
+    tuple coercion yields ("a", "b", "c") — three single-character regexes, each of which compiles,
+    each of which matches nearly everything. The guard would then find "credentials" in every
+    payload, and be switched off by whoever had to triage that.
+
+    Silently doing something catastrophic AND plausible is worse than failing, so it fails. Third
+    member of this module's "the annotation is not enforcement" family, after the aliased dict and
+    the aliased list, which is why it belongs beside them.
+    """
+    with pytest.raises(ValueError, match="not a single string"):
+        PatternSet(patterns={Sensitivity.CREDENTIAL: "abc"})  # type: ignore[dict-item]
+
+    # The correct spelling still works, so the refusal is about the shape and not the content.
+    assert PatternSet(patterns={Sensitivity.CREDENTIAL: ("abc",)}).covered == frozenset(
+        {Sensitivity.CREDENTIAL}
+    )
+
+
+def test_a_wire_string_destination_is_normalized_and_an_unknown_one_refuses() -> None:
+    """THE REFUSAL PATH IS WHERE THIS MUST BE STURDIEST, and it was the part that broke.
+
+    `Disclosure` is a StrEnum, so a caller passing the wire string "public" slipped through
+    `width()` — LADDER.index finds it, since members compare equal to their values. Then the
+    refusal path read `destination.value` and raised AttributeError, while an UNKNOWN string raised
+    ValueError out of LADDER.index. Both replace a DisclosureError carrying a Refusal with a bare
+    exception, exactly when the answer is "no": failing, but not closed, and not legibly.
+    """
+    # A valid wire string is accepted and behaves identically to the enum member.
+    v = assert_transmittable(
+        BENIGN, patterns=FULL, destination="public", destination_name="public repo"
+    )
+    assert v.findings == ()
+
+    # And it still REFUSES the incident payload when spelled as a string.
+    with pytest.raises(DisclosureError):
+        assert_transmittable(
+            PERSONAL, patterns=FULL, destination="public", destination_name="public repo"
+        )
+
+    # An unknown class is a refusal, not a ValueError, and it does not echo the bad value.
+    with pytest.raises(DisclosureError) as exc:
+        assert_transmittable(
+            BENIGN, patterns=FULL, destination="zzq-not-a-class", destination_name="somewhere"
+        )
+    assert "does not know" in exc.value.refusal.why
+    assert "zzq-not-a-class" not in exc.value.refusal.render()
+    assert exc.value.refusal.legal_next, "INV-3: a refusal must leave a legal next move"
+
+
+def test_a_transcript_line_is_found_mid_payload_not_only_at_the_start() -> None:
+    """`^` without (?m) anchors to the START OF THE PAYLOAD.
+
+    The class would report as covered while missing every transcript line that is not the first —
+    a scanned-and-clean answer over a payload nobody actually searched. The flag is inline in the
+    ESTATE's pattern rather than global in `scan`, because which anchors apply belongs to whoever
+    wrote the pattern, not to a kernel imposing one policy on every estate.
+    """
+    payload = "A heading.\n\nSome prose.\n  operator: what did you find?\n"
+    v = scan(payload, FULL)
+    assert any(f.sensitivity is Sensitivity.TRANSCRIPT for f in v.findings), (
+        "a transcript line below the first line was not found"
+    )
+    assert v.ceiling is Disclosure.OPERATOR_PRIVATE

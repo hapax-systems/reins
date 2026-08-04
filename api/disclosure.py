@@ -160,6 +160,21 @@ class PatternSet:
                     f"key itself is not repeated here). Use one of: "
                     f"{', '.join(s.value for s in Sensitivity)}"
                 )
+            if isinstance(pats, (str, bytes)):
+                # A BARE STRING IS A Sequence[str], so `tuple("abc")` is ("a", "b", "c") --
+                # three single-character regexes, each of which compiles, each of which matches
+                # almost everything. The guard would then report findings on every payload and be
+                # switched off by whoever had to look at them.
+                #
+                # It is one missing comma away at every call site: {CREDENTIAL: "abc"} instead of
+                # {CREDENTIAL: ("abc",)}. Silently doing something catastrophic and plausible is
+                # worse than failing, so this fails.
+                raise ValueError(
+                    f"{cls.value}: patterns must be a sequence of strings, not a single string. "
+                    f"A bare string is iterated CHARACTER BY CHARACTER, giving one regex per "
+                    f"character and matching nearly everything. Write ('...',) with the comma, or "
+                    f"['...'], instead of '...'."
+                )
             for index, p in enumerate(pats):
                 # THE RAISE IS OUTSIDE THE `except` BLOCK, DELIBERATELY.
                 #
@@ -338,7 +353,7 @@ def assert_transmittable(
     text: str,
     *,
     patterns: PatternSet,
-    destination: Disclosure | None,
+    destination: Disclosure | str | None,
     destination_name: str,
 ) -> Verdict:
     """THE CHECK THAT WAS MISSING. Refuse unless this payload may go THERE.
@@ -354,6 +369,38 @@ def assert_transmittable(
         are different answers and only one of them is a pass.
     """
     verdict = scan(text, patterns)
+
+    # NORMALIZE AT THE BOUNDARY, because the refusal path is where this must be sturdiest.
+    #
+    # `Disclosure` is a StrEnum, so a caller passing the wire string "public" slips through
+    # `width()` -- LADDER.index finds it, since the members compare equal to their values. Then the
+    # refusal path reads `destination.value` and raises AttributeError, and an UNKNOWN string
+    # raises ValueError out of LADDER.index. Both replace a DisclosureError carrying a Refusal with
+    # a bare exception, exactly when the answer is "no": the guard would fail, but not closed, and
+    # not legibly.
+    if destination is not None and not isinstance(destination, Disclosure):
+        known = None
+        try:
+            known = Disclosure(destination)
+        except ValueError:
+            pass
+        if known is None:
+            raise DisclosureError(
+                Refusal(
+                    gate="disclosure",
+                    why=(
+                        f"{destination_name} was given a disclosure class this kernel does not "
+                        f"know (the value is not repeated here). An unrecognised class is refused "
+                        f"rather than guessed: guessing would decide where private material may go."
+                    ),
+                    legal_next=(
+                        f"classify {destination_name} as one of "
+                        f"{', '.join(d.value for d in LADDER)} and retry"
+                    ),
+                    teaches="disclosure: an unknown classification is not a permissive one",
+                )
+            )
+        destination = known
 
     if destination is None:
         raise DisclosureError(
