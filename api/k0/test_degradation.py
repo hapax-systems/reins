@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -264,3 +265,58 @@ def test_a_body_present_without_ratification_still_does_not_take_effect(tmp_path
         "a DECLARED degradation with a body on disk took effect without the sovereign's signature. "
         "Consent is the act that degrades the estate — never the presence of a file."
     )
+
+
+def test_a_ratified_body_edited_after_consent_is_refused_not_reported(tmp_path: Path) -> None:
+    """THE LEDGER MUST NOT PROVE CONSENT WAS GIVEN WHILE LYING ABOUT WHAT IT WAS GIVEN TO.
+
+    `_accept_body` hashes the artifact at WRITE time against the digest the chain pins. Until this
+    was also checked at READ time, editing the `.body` afterwards changed what the estate believed
+    had been accepted — a different level, a different tradeoff, a different lift condition — while
+    the chain still said `ratified` and still pointed at the original digest. Found in review.
+
+    AND IT REFUSES RATHER THAN DROPPING THE SUBJECT. Returning None on mismatch would remove the
+    subject from `state()`, so a silently-edited degradation would read as FULL: the estate would
+    report itself healthy precisely because its record of being unhealthy had been tampered with.
+    That is absence-into-zero aimed at the worst available answer.
+    """
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert "review-floor" in state(root), "fixture precondition: it must be in effect first"
+
+    # THE TAMPER LEAVES A STRUCTURALLY VALID DEGRADATION, deliberately.
+    #
+    # An earlier version of this test set level=FULL, which `Degradation.__post_init__` rejects
+    # downstream — so the mutant died on someone else's guard and this test proved nothing about
+    # the digest check. Rewriting `why`, `tradeoff` and `lift_condition` keeps the object valid,
+    # so without the check `state()` reports attacker-chosen terms as what the operator accepted:
+    # silently, with the chain still saying `ratified`.
+    body_path = root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body"
+    tampered = json.loads(body_path.read_text(encoding="utf-8"))
+    tampered["why"] = "no deficit worth mentioning"
+    tampered["tradeoff"] = "none"
+    tampered["lift_condition"] = "already lifted"
+    body_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(DegradationError, match="changed after consent") as exc:
+        state(root)
+    assert REVIEW_FLOOR.stipulation_id() in str(exc.value), "the refusal must name the artifact"
+
+
+def test_a_ratified_row_that_pins_no_artifact_is_refused(tmp_path: Path) -> None:
+    """"The row names no artifact" is not "the artifact is fine".
+
+    An unpinnable body cannot be checked, and an uncheckable degradation must not be reported as
+    current state — the same rule as an unscanned class not being a clean one.
+    """
+    from k0 import degradation as deg
+
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    with pytest.raises(DegradationError, match="pins no artifact digest"):
+        deg._body_for(root, REVIEW_FLOOR.stipulation_id(), digest=None)

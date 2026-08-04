@@ -57,6 +57,7 @@ from .ratification import (
     RatificationError,
     Stipulation,
     _id_of,
+    artifact_digest,
     propose,
     ratify,
 )
@@ -348,7 +349,9 @@ def state(root: Path) -> dict[str, Degradation]:
         sid = _id_of(receipt)
         if not sid.startswith("degradation."):
             continue
-        body = _body_for(root, sid)
+        # The digest comes from the CHAIN, not from the body's neighbourhood on disk. Reading it
+        # from a file beside the body would let whoever edited one edit the other.
+        body = _body_for(root, sid, digest=artifact_digest(receipt))
         if body is None:
             continue
         subject = body["subject"]
@@ -365,19 +368,50 @@ def state(root: Path) -> dict[str, Degradation]:
     return out
 
 
-def _body_for(root: Path, stipulation_id: str) -> dict | None:
-    """Recover the consented body from the stored payload.
+def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict | None:
+    """Recover the consented body, VERIFYING it against the digest the chain pins.
 
     The payload is `id\\nsubject\\ndigest\\n`; the BODY is the artifact that digest is over, stored
-    beside it. Returns None rather than raising when a ledger predates this module — an old chain is
-    not a corrupt one.
+    beside it. `_accept_body` checks that hash at WRITE time — and until this function checked it
+    at READ time, editing a `.body` afterwards changed what the estate believed had been consented
+    to, while the chain still said `ratified` and still pointed at the old digest. The ledger would
+    have proved that consent was given, and lied about what it was given to. Found in review.
+
+    ABSENT IS TOLERATED; PRESENT-AND-WRONG IS NOT.
+
+      no body file      -> None. An old chain is not a corrupt one, and a ledger predating this
+                           module has nothing to verify.
+      unreadable/       -> None, for the same reason: nothing here claims to be the artifact.
+      not JSON
+      digest mismatch   -> RAISES. This is the tampering case, and returning None would drop the
+                           subject from `state()` — making a silently-edited degradation read as
+                           FULL. A corrupted deficit must never resolve to "no deficit"; that is
+                           absence-into-zero pointed at the worst possible answer.
+      no pinned digest  -> RAISES. "The row names no artifact" is not "the artifact is fine".
     """
     path = root / "ratifications" / f"{stipulation_id}.body"
     if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if digest is None:
+        raise DegradationError(
+            f"{stipulation_id}: a body is stored but the ratified row pins no artifact digest, so "
+            f"what was consented to cannot be established. Refusing to report it as current state."
+        )
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != digest:
+        raise DegradationError(
+            f"{stipulation_id}: the stored body hashes to {actual[:12]}… but the chain pins "
+            f"{digest[:12]}… — the artifact changed after consent. The ledger can prove consent "
+            f"was given and not what it was given to, so this refuses rather than reporting a "
+            f"degradation the operator never accepted."
+        )
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return None
 
 

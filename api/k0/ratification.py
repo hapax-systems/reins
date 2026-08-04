@@ -224,6 +224,24 @@ def _id_of(receipt: BootstrapReceipt) -> str:
     return ""
 
 
+def artifact_digest(receipt: BootstrapReceipt) -> str | None:
+    """The digest of the ARTIFACT a receipt consented to, or None if it does not pin exactly one.
+
+    ONE PARSE OF THIS REF, NOT TWO. The stipulation ref is `stipulation:sha256:<hex>`, and any
+    caller that stores the artifact separately from the signed payload must re-check the artifact
+    against it — otherwise the chain proves that consent was given and not WHAT it was given to.
+    A second hand-rolled parse elsewhere is a second thing that can disagree with this one about
+    what the chain says, which is the failure this kernel keeps being written to remove.
+
+    None means "the row does not name exactly one artifact", which callers must treat as
+    unverifiable rather than as permission.
+    """
+    refs = [r for r in receipt.payload_refs if r.startswith(f"{STIPULATION_REF_SCHEME}:")]
+    if len(refs) != 1:
+        return None
+    return refs[0].rsplit(":", 1)[-1]
+
+
 def pending(root: Path) -> tuple[str, ...]:
     """Stipulations proposed and not yet ratified — DERIVED, never stored.
 
@@ -446,12 +464,14 @@ def verify_ratifications(
             )
             continue
         # The stipulation ref is checked for SHAPE — exactly one — and its digest is deliberately
-        # not re-derived; see the "NO ARTIFACT-DIGEST RECHECK" note below for why the byte pin is
-        # strictly stronger. An earlier version bound that digest to a local, and when the recheck
-        # was removed the binding stayed behind: a variable named for a check that no longer
-        # happens, which reads to a later reader as though the digest were being verified.
-        refs = [r for r in receipt.payload_refs if r.startswith(f"{STIPULATION_REF_SCHEME}:")]
-        if len(refs) != 1:
+        # not re-derived HERE; see the "NO ARTIFACT-DIGEST RECHECK" note below for why the byte pin
+        # is strictly stronger for THIS function. An earlier version bound that digest to a local,
+        # and when the recheck was removed the binding stayed behind: a variable named for a check
+        # that no longer happens, which reads as though the digest were being verified.
+        #
+        # Callers that store the artifact SEPARATELY from the signed payload do need it — see
+        # `artifact_digest` below and its use in degradation._body_for.
+        if artifact_digest(receipt) is None:
             unverified.append((sid, "the ratified row does not reference exactly one stipulation"))
             continue
         # THE SIGNED BYTES ARE STORED, NOT RECONSTRUCTED. A receipt carries refs, never values, so
