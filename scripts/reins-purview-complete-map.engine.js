@@ -58,11 +58,47 @@ const REQUIRED_FRAME_TERMS = [
 function loadCensus(intakePath) {
   const censusPath = intakePath + CENSUS_SUFFIX;
   if (!fs.existsSync(censusPath)) return null;
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(censusPath, "utf8"));
+    raw = JSON.parse(fs.readFileSync(censusPath, "utf8"));
   } catch (err) {
     throw new Error(`census at ${censusPath} is unreadable: ${err.message}`);
   }
+  // A CENSUS THAT CHECKS NOTHING MUST NOT REPORT ITSELF AS CHECKED. `{}` parsed fine, left
+  // item_floor undefined and every floor map empty, and still set censusChecked: true — so a
+  // REDUCED intake could pass with no anti-re-narrowing protection at all, which is precisely the
+  // absence-into-zero this census exists to prevent. Validate the shape before trusting it.
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`census at ${censusPath} must be a JSON object`);
+  }
+  if (!Number.isInteger(raw.item_floor) || raw.item_floor < 0) {
+    throw new Error(
+      `census at ${censusPath} has no integer item_floor. A census without a floor enforces ` +
+        `nothing while looking like it does — omit the file entirely if that is the intent.`
+    );
+  }
+  for (const group of ["programs", "axes", "sources"]) {
+    const m = raw[group];
+    if (m === undefined) continue;
+    if (m === null || typeof m !== "object" || Array.isArray(m)) {
+      throw new Error(`census at ${censusPath}: ${group} must be an object of name -> count`);
+    }
+    for (const [k, v] of Object.entries(m)) {
+      if (!Number.isInteger(v) || v < 0) {
+        throw new Error(`census at ${censusPath}: ${group}.${k} must be a non-negative integer`);
+      }
+    }
+  }
+  return raw;
+}
+
+// ONE effective critic set, resolved once and used by BOTH validate() and printCheck(). They read
+// different sets before: validate honoured census.required_critics while printCheck always counted
+// ADVERSARIAL_CRITICS, so a custom census produced a numerator and denominator describing a set
+// that was never enforced.
+function effectiveCritics(census) {
+  const required = census && Array.isArray(census.required_critics) ? census.required_critics : null;
+  return { set: required || ADVERSARIAL_CRITICS, enforced: Boolean(required) };
 }
 
 function usage(exitCode = 0) {
@@ -302,14 +338,12 @@ function validate(parsed, census) {
   // unconditionally made the engine unusable against any intake but one estate's — a generic tool
   // cannot know how many adversarial passes a given purview ran. Absent a census the shortfall is
   // reported, not failed: silence would be the absence-into-zero this file's own law forbids.
-  const requiredCritics = census && Array.isArray(census.required_critics)
-    ? census.required_critics
-    : null;
-  for (const critic of requiredCritics || ADVERSARIAL_CRITICS) {
+  const critics = effectiveCritics(census);
+  for (const critic of critics.set) {
     if ((sourceCounts.get(critic) || 0) === 0) {
       const msg = `adversarial critic did not contribute: ${critic}`;
-      if (requiredCritics) errors.push(msg);
-      else warnings.push(`${msg} (no census: reported, not enforced)`);
+      if (critics.enforced) errors.push(msg);
+      else warnings.push(`${msg} (census declares no required_critics: reported, not enforced)`);
     }
   }
 
