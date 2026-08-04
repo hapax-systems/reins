@@ -1,0 +1,86 @@
+"""Test-time access to ESTATE DATA that must never be committed to an exportable repository.
+
+## Why this exists
+
+`test_k0.py` guarded the kernel's estate-independence with a denylist written inline in the
+source — a tuple of literal strings naming this estate's home path, its host nicknames, and the
+operator's referent — and asserted none of them appeared in the package.
+
+That guard was correct in intent and self-defeating in form. **A denylist names the things it
+forbids.** So the check that kept the estate out of the exportable kernel WAS an estate
+fingerprint, published on a PUBLIC repository, sitting in the one file the scan skipped over
+(`if p.name != "test_k0.py"`). It could not have caught itself.
+
+This docstring does not quote that tuple. The first draft of this file did, which reintroduced the
+whole defect inside the explanation of why not to — a fix for a fail-quiet defect is a likely
+source of the next one, and prose is not exempt from the rule it describes.
+
+This is the same split R0.10 draws for the disclosure guard, and it is drawn here for the same
+reason: **the guard is law and ships; what it matches is estate data and does not.**
+
+## How an estate arms it
+
+Write one token per line to `.estate-tokens` at the repository root (gitignored, same class as
+`config.toml` — "instance config, never commit real paths/secrets"), or point
+`REINS_ESTATE_TOKENS_FILE` at a file elsewhere. Blank lines and `#` comments are ignored.
+
+## What happens when it is not armed
+
+The scan does not run, and it says so loudly — a skip, never a pass. A stranger cloning this repo
+has their own estate and none of our tokens, so the check is meaningless for them; what would NOT
+be acceptable is reporting "estate-independent: PASSED" after looking for nothing. That is the
+absence-into-zero defect this whole kernel exists to remove.
+
+A declared-but-missing file is a hard ERROR, not a skip. An estate that says where its tokens live
+and is wrong has a guard it believes is running; that is worse than no guard at all.
+"""
+
+from __future__ import annotations
+
+import os
+import pathlib
+
+DEFAULT_TOKENS_FILE = pathlib.Path(__file__).resolve().parent.parent / ".estate-tokens"
+TOKENS_ENV = "REINS_ESTATE_TOKENS_FILE"
+
+#: Told to the operator when the scan cannot run, so "skipped" is never mistaken for "clean".
+UNARMED = (
+    f"estate-independence NOT CHECKED: no estate tokens supplied. This is not a pass — nothing was "
+    f"scanned. To arm it, write one token per line to {DEFAULT_TOKENS_FILE} (gitignored) or set "
+    f"{TOKENS_ENV} to a file elsewhere. A stranger's clone has no tokens of ours and may leave "
+    f"this unarmed."
+)
+
+
+def estate_tokens() -> tuple[str, ...] | None:
+    """The strings that identify THIS estate. `None` means unsupplied — which is not `()`.
+
+    `()` would mean "an estate with no identifying strings", and would make every scan pass. `None`
+    means "we did not look", and callers must report that as an unchecked outcome.
+    """
+    declared = os.environ.get(TOKENS_ENV)
+    if declared:
+        path = pathlib.Path(declared)
+        if not path.is_file():
+            raise RuntimeError(
+                f"{TOKENS_ENV}={declared!r} names a file that does not exist. A guard that is "
+                f"declared and absent is worse than one that is undeclared: the estate believes it "
+                f"is being checked and it is not. Create the file or unset {TOKENS_ENV}."
+            )
+    else:
+        path = DEFAULT_TOKENS_FILE
+        if not path.is_file():
+            return None
+
+    tokens = tuple(
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    if not tokens:
+        raise RuntimeError(
+            f"{path} exists but contains no tokens. An empty denylist passes everything, so an "
+            f"empty file would silently disarm the scan while looking armed. Remove the file to "
+            f"declare the check unarmed, or write the tokens."
+        )
+    return tokens

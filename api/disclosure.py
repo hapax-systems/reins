@@ -1,0 +1,275 @@
+"""The portable disclosure guard: what may never leave, and where it may never go. (R0.10)
+
+## This is NOT a kernel member, deliberately
+
+The ratified K0 manifest (pin b604b52b, 2026-08-01) classifies this mechanism in its EXCLUSION
+ledger, and the classification is correct:
+
+    "pii-consent-scanner": R0.10 — installed by `install`, its patterns by `ratify`. Mandatory
+    before the first model call (a MEASURED_PROBE precondition), which is later than K0.
+
+A scanner is installable; it is not presupposed by every bootstrap act. So it lives here, outside
+`k0/`, as ordinary code that DEPENDS on the kernel (it raises a kernel `Refusal`) rather than
+being part of it. The first draft of this module was written into `k0/` under a heading arguing
+for its membership — which would have moved the drift pin as a side effect of an edit. Kernel
+membership changes only under enforce-flip (P5) with a KERNEL_UPGRADE receipt, never because a new
+file looked kernel-shaped.
+
+## Why it exists at all, given the estate already has a guard
+
+The estate already has `pii-guard.sh`. It is fail-closed and it is good, and it did not prevent the
+incident that motivated this module, for two structural reasons:
+
+1. **Its patterns are tuned to one operator.** A guard whose contents are one estate's secrets
+   cannot ship to a stranger, so a stranger's first-init has no guard at all.
+2. **It gates FILE WRITES, not DESTINATIONS.** Every write was to a legitimate file. The harm came
+   from where those files were then *published*.
+
+Recorded plainly because it is the whole reason this exists: operator-personal material — a health
+diagnosis, family content, mortality planning — was pushed to a PUBLIC repository. Nothing in the
+estate objected. The content was correct, the file was correct, the branch was correct; the
+DESTINATION was not, and destination was the one thing no guard modelled.
+
+## The split R0.10 asks for
+
+    guard-as-law            -> here, portable, no estate content
+    pattern-contents        -> supplied by the caller, per estate, never in the kernel
+
+The LAW is that four classes must never be transmitted beyond their permitted disclosure: operator
+PII, raw host fingerprints, transcripts, and credentials. That law is universal and ships. WHICH
+strings match those classes is entirely an estate's own data and must not be in a kernel a stranger
+runs — that is the same error as the purview engine carrying one estate's census, and the same fix.
+
+## Disclosure classes are ordered, and a payload carries its own ceiling
+
+`SECRET < OPERATOR_PRIVATE < ESTATE_INTERNAL < PUBLIC`, widening left to right. A payload's ceiling
+is the LEAST-disclosing class among everything it contains: one credential in an otherwise public
+document makes the whole document SECRET. Transmission is permitted only when the destination's
+class does not exceed the payload's ceiling.
+
+This is the check that was missing. "Is this file safe?" has no answer on its own. "Is this file
+safe **to send there**?" does.
+
+## Fail-closed, and honest about what it cannot know
+
+An unclassified destination is REFUSED, not assumed private — the estate's absence-into-zero defect
+is exactly what turns "I don't know where this goes" into "it's fine". And a scan with no patterns
+supplied does not return "clean"; it returns UNSCANNED, which is not a pass. A guard that cannot
+see must not report safety.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from enum import StrEnum
+
+from k0.refusal import Refusal
+
+
+class Disclosure(StrEnum):
+    """Where something may go. Ordered by how widely it may be disclosed."""
+
+    SECRET = "secret"
+    OPERATOR_PRIVATE = "operator_private"
+    ESTATE_INTERNAL = "estate_internal"
+    PUBLIC = "public"
+
+
+#: Explicit order, as data — never derived from declaration order. Deriving it would make the law an
+#: artifact of source layout, which an alphabetising refactor could silently redefine.
+LADDER: tuple[Disclosure, ...] = (
+    Disclosure.SECRET,
+    Disclosure.OPERATOR_PRIVATE,
+    Disclosure.ESTATE_INTERNAL,
+    Disclosure.PUBLIC,
+)
+
+
+def width(level: Disclosure) -> int:
+    """How widely `level` may be disclosed. SECRET is 0; PUBLIC is widest."""
+    return LADDER.index(level)
+
+
+class Sensitivity(StrEnum):
+    """THE LAW: the four classes that may never exceed their permitted disclosure.
+
+    These are named here because they are universal. What MATCHES them is estate data and lives
+    outside the kernel — see `PatternSet`.
+    """
+
+    OPERATOR_PII = "operator_pii"
+    HOST_FINGERPRINT = "host_fingerprint"
+    TRANSCRIPT = "transcript"
+    CREDENTIAL = "credential"
+
+
+#: The ceiling each class may never exceed. This mapping IS the law and ships with the kernel.
+CEILING: dict[Sensitivity, Disclosure] = {
+    Sensitivity.CREDENTIAL: Disclosure.SECRET,
+    Sensitivity.OPERATOR_PII: Disclosure.OPERATOR_PRIVATE,
+    Sensitivity.TRANSCRIPT: Disclosure.OPERATOR_PRIVATE,
+    Sensitivity.HOST_FINGERPRINT: Disclosure.ESTATE_INTERNAL,
+}
+
+
+class DisclosureError(RuntimeError):
+    """Refusal to transmit. Carries a `Refusal` so a surface can project it, per RX.1."""
+
+    def __init__(self, message: str, refusal: Refusal) -> None:
+        super().__init__(message)
+        self.refusal = refusal
+
+
+@dataclass(frozen=True)
+class PatternSet:
+    """ESTATE DATA, supplied by the caller. Never shipped in the kernel.
+
+    Maps a sensitivity class to the regexes that identify it *for this estate*. A stranger supplies
+    their own; the kernel supplies none, so it can carry no one's secrets.
+    """
+
+    patterns: dict[Sensitivity, tuple[str, ...]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for cls, pats in self.patterns.items():
+            if not isinstance(cls, Sensitivity):
+                raise ValueError(f"pattern key {cls!r} is not a Sensitivity class")
+            for p in pats:
+                try:
+                    re.compile(p)
+                except re.error as exc:
+                    raise ValueError(f"{cls}: pattern {p[:32]!r} does not compile: {exc}") from exc
+
+    @property
+    def covered(self) -> frozenset[Sensitivity]:
+        """Classes this estate can actually detect. The rest are UNSCANNED, not clean."""
+        return frozenset(c for c, p in self.patterns.items() if p)
+
+
+@dataclass(frozen=True)
+class Finding:
+    sensitivity: Sensitivity
+    pattern: str
+    #: The MATCHED TEXT IS NEVER STORED. A findings report that quotes the credential it found is
+    #: itself a disclosure, and reports travel further than the payloads they describe.
+    count: int
+
+
+@dataclass(frozen=True)
+class Verdict:
+    findings: tuple[Finding, ...]
+    unscanned: frozenset[Sensitivity]
+
+    @property
+    def ceiling(self) -> Disclosure:
+        """The widest disclosure this payload may receive, given what was FOUND.
+
+        Not a claim about what is present — only about what was detected. `unscanned` says where
+        that claim is blind.
+        """
+        if not self.findings:
+            return Disclosure.PUBLIC
+        return min((CEILING[f.sensitivity] for f in self.findings), key=width)
+
+    @property
+    def scanned_everything(self) -> bool:
+        return not self.unscanned
+
+
+def scan(text: str, patterns: PatternSet) -> Verdict:
+    """Find sensitive content. Reports what it could NOT look for as well as what it found."""
+    findings: list[Finding] = []
+    for sensitivity in Sensitivity:
+        for pattern in patterns.patterns.get(sensitivity, ()):
+            hits = len(re.findall(pattern, text, re.IGNORECASE))
+            if hits:
+                findings.append(Finding(sensitivity=sensitivity, pattern=pattern, count=hits))
+    return Verdict(
+        findings=tuple(findings),
+        unscanned=frozenset(set(Sensitivity) - patterns.covered),
+    )
+
+
+def assert_transmittable(
+    text: str,
+    *,
+    patterns: PatternSet,
+    destination: Disclosure | None,
+    destination_name: str,
+) -> Verdict:
+    """THE CHECK THAT WAS MISSING. Refuse unless this payload may go THERE.
+
+    "Is this content safe?" is unanswerable alone. "Is this content safe to send to a PUBLIC
+    repository?" is decidable, and it is the question whose absence caused the incident.
+
+    Fail-closed on both unknowns:
+      * an UNCLASSIFIED destination is refused — not assumed private. Turning "I do not know where
+        this goes" into "it is fine" is the estate's absence-into-zero defect at its most costly.
+      * a class with NO PATTERNS is refused for any destination wider than that class's ceiling.
+        A guard that cannot see must never report safety; "we found nothing" and "we did not look"
+        are different answers and only one of them is a pass.
+    """
+    verdict = scan(text, patterns)
+
+    if destination is None:
+        raise DisclosureError(
+            f"destination {destination_name!r} has no disclosure class",
+            Refusal(
+                gate="k0.disclosure",
+                why=(
+                    f"{destination_name} is not classified, so whether this payload may go there is "
+                    "unknown. An unclassified destination is refused rather than assumed private — "
+                    "treating 'I cannot tell' as 'it is fine' is how private material reaches a "
+                    "public place."
+                ),
+                legal_next=(
+                    f"classify {destination_name} as one of "
+                    f"{', '.join(d.value for d in LADDER)} and retry"
+                ),
+                teaches="k0.disclosure: destination is part of the payload's safety, not context for it",
+            ),
+        )
+
+    blind = [
+        s for s in verdict.unscanned if width(destination) > width(CEILING[s])
+    ]
+    if blind:
+        names = ", ".join(sorted(s.value for s in blind))
+        raise DisclosureError(
+            f"cannot certify {destination_name} for: {names}",
+            Refusal(
+                gate="k0.disclosure",
+                why=(
+                    f"no patterns were supplied for {names}, so this payload was never checked for "
+                    f"them — and {destination_name} ({destination.value}) is wider than those "
+                    "classes permit. 'We found nothing' and 'we did not look' are different answers."
+                ),
+                legal_next=(
+                    f"supply patterns for {names}, or send to a destination no wider than "
+                    f"{min((CEILING[s] for s in blind), key=width).value}"
+                ),
+                teaches="k0.disclosure: an unscanned class is not a clean one",
+            ),
+        )
+
+    if width(destination) > width(verdict.ceiling):
+        classes = ", ".join(sorted({f.sensitivity.value for f in verdict.findings}))
+        raise DisclosureError(
+            f"{destination_name} is wider than this payload permits",
+            Refusal(
+                gate="k0.disclosure",
+                why=(
+                    f"this payload contains {classes}, so it may go no wider than "
+                    f"{verdict.ceiling.value}; {destination_name} is {destination.value}. "
+                    "Publication is not reversible: deleting a branch does not unpublish it."
+                ),
+                legal_next=(
+                    f"send to a {verdict.ceiling.value} destination, or remove the "
+                    f"{classes} content and re-check"
+                ),
+                teaches="k0.disclosure: the least-disclosing thing inside sets the ceiling for all of it",
+            ),
+        )
+
+    return verdict

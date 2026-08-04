@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import UNARMED, estate_tokens
+
 from k0 import (
     DeadEndRefusalError,
     Evaluation,
@@ -97,15 +99,62 @@ def test_none_is_unevaluable_not_false():
     assert evaluate_optional("x") is Evaluation.SATISFIED
 
 
-def test_the_kernel_module_is_estate_independent():
-    """K0 must carry no estate. If this fails, the extraction has leaked."""
+def test_the_kernel_package_is_estate_independent():
+    """K0 must carry no estate. If this fails, the extraction has leaked.
+
+    THE TOKENS ARE NOT WRITTEN HERE, AND THE SCAN NO LONGER SKIPS ITS OWN FILE.
+
+    Both of those are the same fix for the same defect. The previous version of this test held the
+    denylist inline — the estate's home path, both host nicknames, and the operator's referent —
+    and then excluded itself from the scan (`if p.name != "test_k0.py"`). So the guard against
+    publishing estate fingerprints WAS a published estate fingerprint, in the one file it could
+    not see. It was live on the public repository and could never have caught itself.
+
+    A denylist names what it forbids. That makes an inline denylist unexportable by construction,
+    which is precisely R0.10's split: the guard is law and ships; what it matches is estate data
+    and is supplied from outside the tree (see api/conftest.py). With the tokens external, the
+    scan can now cover every file in the package including this one.
+    """
     import pathlib
-    src = "".join(
-        p.read_text() for p in pathlib.Path(__file__).parent.glob("*.py")
-        if p.name != "test_k0.py"
-    )
-    for token in ("/home/hapax", "podium", "appendix", "council_root", "hapax-council", "oudepode"):
-        assert token not in src, f"estate leaked into K0: {token}"
+
+    tokens = estate_tokens()
+    if tokens is None:
+        pytest.skip(UNARMED)
+
+    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        src = path.read_text()
+        for token in tokens:
+            assert token not in src, (
+                f"estate fingerprint in an exportable kernel file: {path.name} contains a token "
+                f"from this estate's identity list. K0 ships to strangers; it must carry none of "
+                f"this estate. (The token is not quoted here — a failure report travels further "
+                f"than the file it describes.)"
+            )
+
+
+def test_the_kernel_package_is_uncoupled_from_the_substrate_it_was_extracted_from():
+    """A SEPARATE CHECK FROM THE ONE ABOVE, on purpose.
+
+    `council_root` is a config key and `hapax-council` is a public repository name. Neither
+    discloses anything, so neither belongs in the estate-fingerprint list — a denylist padded with
+    non-secrets produces findings nobody reads, and a guard nobody reads does not work. But K0 must
+    still be free of them, for a different reason: the kernel was extracted FROM that substrate and
+    must not have carried its vocabulary out. That is a coupling defect, not a disclosure one, and
+    the two have different remedies (rename vs. redact), so they are asserted apart and named apart.
+
+    These literals are safe to write inline precisely because they are not secrets.
+    """
+    import pathlib
+
+    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        src = path.read_text()
+        if path.name == "test_k0.py":
+            src = ""  # this docstring names them by necessity; see above for why that is sound
+        for token in ("council_root", "hapax-council"):
+            assert token not in src, (
+                f"{path.name} references {token!r}: the kernel still carries the vocabulary of the "
+                f"substrate it was extracted from. Generalize the name."
+            )
 
 
 # --- the loop closes: the law reproduces the worked example --------------------------------
