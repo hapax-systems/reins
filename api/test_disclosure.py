@@ -374,6 +374,10 @@ def test_validation_cannot_be_bypassed_by_mutating_the_pattern_dict() -> None:
         "the PatternSet still points at the caller's dict, so a post-construction edit slipped an "
         "unvalidated pattern past every check in __post_init__"
     )
+    # The WHOLE mapping, not just `covered`. `covered` filters empty tuples, so it could report
+    # correctly while the mapping underneath had been edited — an assertion on a derived view that
+    # would pass over the very state it is meant to rule out.
+    assert dict(ps2.patterns) == {Sensitivity.CREDENTIAL: ("a",)}
     assert ps2.covered == frozenset({Sensitivity.CREDENTIAL})
 
     # AND THE VALUES, one level deeper. The annotation says tuple; the annotation is not

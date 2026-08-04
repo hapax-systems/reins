@@ -94,7 +94,12 @@ def width(level: Disclosure) -> int:
 
 
 class Sensitivity(StrEnum):
-    """THE LAW: the four classes that may never exceed their permitted disclosure.
+    """THE LAW: the classes that may never exceed their permitted disclosure.
+
+    There are four today. The count is not the law and is not written into any check — `CEILING`
+    must cover this enum exactly, and a test asserts that equality rather than a number, so adding
+    a class fails loudly until its ceiling is declared instead of silently defaulting to something.
+
 
     These are named here because they are universal. What MATCHES them is estate data and lives
     outside the kernel — see `PatternSet`.

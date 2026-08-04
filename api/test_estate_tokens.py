@@ -95,6 +95,22 @@ def test_an_absent_default_file_returns_none_which_is_not_an_empty_tuple(
     assert estate_tokens() is None
 
 
+def test_the_default_file_is_read_when_the_environment_is_silent(monkeypatch, tmp_path) -> None:
+    """THE PATH THIS ESTATE ACTUALLY TAKES, and it had no test.
+
+    Every other loader test sets the environment variable, so the branch that reads
+    DEFAULT_TOKENS_FILE was exercised only by the ambient real run — which SKIPS in any clone that
+    is unarmed. So in CI the estate's own loading path was never executed at all, and a change
+    breaking it would surface as a silent skip rather than a failure: the unarmed-is-not-clean
+    confusion, one level up, in the code that implements it.
+    """
+    monkeypatch.delenv(TOKENS_ENV, raising=False)
+    default = tmp_path / TOKENS_FILE_NAME
+    default.write_text(f"# heading\n{FAKE}\n\n{FAKE_2}\n", encoding="utf-8")
+    monkeypatch.setattr("conftest.DEFAULT_TOKENS_FILE", default)
+    assert estate_tokens() == (FAKE, FAKE_2)
+
+
 def test_the_environment_declaration_wins_over_the_default_file(monkeypatch, tmp_path) -> None:
     """Otherwise a stale default silently shadows the file the estate actually named."""
     monkeypatch.setattr("conftest.DEFAULT_TOKENS_FILE", _tokens_file(tmp_path, f"{FAKE_2}\n"))
