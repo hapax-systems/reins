@@ -91,9 +91,25 @@ def estate_tokens() -> tuple[str, ...] | None:
         if not path.is_file():
             return None
 
+    # Raised OUTSIDE the handler, for the reason given in _text_of: an OSError carries `.filename`,
+    # and neither `from exc` nor `from None` stops it being reachable through the chain.
+    body: str | None = None
+    read_failure: str | None = None
+    try:
+        body = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        read_failure = type(exc).__name__
+    if body is None:
+        raise RuntimeError(
+            f"the tokens file named by {TOKENS_ENV} (or {TOKENS_FILE_NAME} at the repository root) "
+            f"exists but could not be read ({read_failure}; the path is not repeated here). The "
+            f"scan cannot run, and an unrunnable guard must not report a pass. Fix its "
+            f"permissions, or remove it to declare the check unarmed."
+        )
+
     tokens = tuple(
         line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in body.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
     if not tokens:
@@ -121,16 +137,39 @@ _NOT_SOURCE = frozenset({"__pycache__", "node_modules", "site-packages", "build"
 
 
 def _text_of(path: pathlib.Path) -> str:
-    """File contents, or "" for anything that is not decodable text.
+    """File contents, or "" if the file is NOT TEXT. Unreadable is a different answer entirely.
 
-    A guard that CRASHES on the first binary asset is a guard that stops running, and a stopped
-    guard reports nothing at all — which this module's own law says must never read as clean. An
-    undecodable file cannot contain a token as text, so empty is the honest answer for it.
+    THESE TWO CASES WERE THE SAME LINE AND MUST NOT BE.
+
+      UnicodeDecodeError   the bytes are not text, so they cannot contain a token AS TEXT.
+                           "" is the honest answer, and a guard that crashed on the first binary
+                           asset would stop running — a stopped guard reports nothing at all.
+      OSError              WE COULD NOT LOOK. Permissions, a broken symlink, a vanished file.
+                           Returning "" here says "scanned, clean" about a file nobody read, which
+                           is the exact absence-into-zero defect this module exists to remove,
+                           committed inside the module's own helper.
+
+    So the second one fails closed. A source tree the scan cannot read is exceptional and should
+    stop the guard loudly rather than be absorbed into a green run. The FILENAME is named, never
+    the path, for the same reason every other message here names no path.
     """
+    # The raise happens OUTSIDE the handler. `from None` suppresses only the DISPLAY: __context__
+    # would still reference the OSError, which carries `.filename` — the protected path, reachable
+    # again. Exactly the trap the regex validator fell into twice, and this file's own comment
+    # described it while the first draft here did it anyway.
+    failure: str | None = None
     try:
         return path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
+    except UnicodeDecodeError:
         return ""
+    except OSError as exc:
+        failure = type(exc).__name__
+    raise RuntimeError(
+        f"could not read {path.name} while scanning for estate fingerprints "
+        f"({failure}; the path is not repeated here). A file that was not read is NOT a file that "
+        f"is clean, so this refuses rather than reporting a pass over it. Make it readable, or "
+        f"remove it from the scanned tree."
+    )
 
 
 def _skipped(relative: pathlib.Path) -> bool:

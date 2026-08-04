@@ -370,3 +370,55 @@ def test_the_scan_skips_caches_and_vendored_trees_but_says_which(tmp_path) -> No
     assert [str(p) for p, _ in hits] == ["real.py"], (
         f"expected only the source file; got {sorted(str(p) for p, _ in hits)}"
     )
+
+
+def test_an_unreadable_file_refuses_rather_than_reporting_it_clean(tmp_path) -> None:
+    """UNREADABLE AND UNDECODABLE ARE DIFFERENT ANSWERS, and they were the same line.
+
+    Undecodable bytes cannot contain a token AS TEXT, so "" is honest for them. A file we could not
+    OPEN is a file nobody looked at, and returning "" for that says "scanned, clean" about it —
+    absence turned into zero, inside the helper belonging to the module written to remove that.
+
+    A reviewer separated the two cases. The permission case now refuses, naming the FILENAME and
+    never the path, because a source tree the scan cannot read is exceptional and should stop the
+    guard loudly rather than dissolve into a green run.
+    """
+    import os
+
+    blocked = tmp_path / "unreadable.py"
+    blocked.write_text(f"# {FAKE}\n", encoding="utf-8")
+    os.chmod(blocked, 0o000)
+    try:
+        if os.access(blocked, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions (root?)")
+        with pytest.raises(RuntimeError, match="NOT a file that is clean") as exc:
+            scan_tree_for_tokens(tmp_path, (FAKE,))
+        assert "unreadable.py" in str(exc.value), "the operator must be told which file"
+        assert str(tmp_path) not in str(exc.value), "the containing path leaked into the error"
+    finally:
+        os.chmod(blocked, 0o644)
+
+
+def test_an_unreadable_tokens_file_refuses_and_names_no_path(monkeypatch, tmp_path) -> None:
+    """The same distinction one layer up: the guard's own input.
+
+    An OSError carries `.filename`, so the error is raised WITHOUT chaining — the same reasoning as
+    the regex validator, where `from exc` and `from None` both left the original reachable.
+    """
+    import os
+
+    tokens_file = tmp_path / "tokens"
+    tokens_file.write_text(f"{FAKE}\n", encoding="utf-8")
+    os.chmod(tokens_file, 0o000)
+    monkeypatch.setenv(TOKENS_ENV, str(tokens_file))
+    try:
+        if os.access(tokens_file, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions (root?)")
+        with pytest.raises(RuntimeError, match="could not be read") as exc:
+            estate_tokens()
+        assert str(tokens_file) not in str(exc.value), "the tokens path leaked into the error"
+        assert exc.value.__cause__ is None and exc.value.__context__ is None, (
+            "the OSError is still reachable, and it carries .filename"
+        )
+    finally:
+        os.chmod(tokens_file, 0o644)

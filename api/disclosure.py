@@ -358,7 +358,7 @@ def assert_transmittable(
     if destination is None:
         raise DisclosureError(
             Refusal(
-                gate="k0.disclosure",
+                gate="disclosure",
                 why=(
                     f"{destination_name} is not classified, so whether this payload may go there is "
                     "unknown. An unclassified destination is refused rather than assumed private — "
@@ -369,7 +369,7 @@ def assert_transmittable(
                     f"classify {destination_name} as one of "
                     f"{', '.join(d.value for d in LADDER)} and retry"
                 ),
-                teaches="k0.disclosure: destination is part of the payload's safety, not context for it",
+                teaches="disclosure: destination is part of the payload's safety, not context for it",
             ),
         )
 
@@ -380,7 +380,7 @@ def assert_transmittable(
         names = ", ".join(sorted(s.value for s in blind))
         raise DisclosureError(
             Refusal(
-                gate="k0.disclosure",
+                gate="disclosure",
                 why=(
                     f"no patterns were supplied for {names}, so this payload was never checked for "
                     f"them — and {destination_name} ({destination.value}) is wider than those "
@@ -390,7 +390,7 @@ def assert_transmittable(
                     f"supply patterns for {names}, or send to a destination no wider than "
                     f"{min((CEILING[s] for s in blind), key=width).value}"
                 ),
-                teaches="k0.disclosure: an unscanned class is not a clean one",
+                teaches="disclosure: an unscanned class is not a clean one",
             ),
         )
 
@@ -398,7 +398,7 @@ def assert_transmittable(
         classes = ", ".join(sorted({f.sensitivity.value for f in verdict.findings}))
         raise DisclosureError(
             Refusal(
-                gate="k0.disclosure",
+                gate="disclosure",
                 why=(
                     f"this payload contains {classes}, so it may go no wider than "
                     f"{verdict.ceiling.value}; {destination_name} is {destination.value}. "
@@ -408,7 +408,7 @@ def assert_transmittable(
                     f"send to a {verdict.ceiling.value} destination, or remove the "
                     f"{classes} content and re-check"
                 ),
-                teaches="k0.disclosure: the least-disclosing thing inside sets the ceiling for all of it",
+                teaches="disclosure: the least-disclosing thing inside sets the ceiling for all of it",
             ),
         )
 
