@@ -22,3 +22,7 @@ __pycache__/
 # coverage databases are build output, never source
 .coverage
 api/.coverage
+
+# estate identity tokens for the estate-independence scan (instance, never exportable).
+# The guard is law and ships; what it matches is estate data and does not. See api/conftest.py.
+/.estate-tokens
