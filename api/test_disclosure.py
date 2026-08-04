@@ -291,3 +291,44 @@ def test_the_guard_and_its_own_support_files_are_estate_independent() -> None:
                 f"estate fingerprint in {name}, which ships to strangers. The token is not quoted "
                 f"here: a failure report travels further than the file it describes."
             )
+
+
+def test_a_pattern_key_that_is_not_a_sensitivity_class_is_refused() -> None:
+    """An unrecognised key would silently never be scanned for.
+
+    `scan` iterates the Sensitivity enum, so a typo'd or string key is not merely ignored — the
+    patterns under it are never applied, and the class reports as UNSCANNED with no indication that
+    the caller thought they had supplied it. Fail-closed at construction, with the valid names in
+    the message so the caller can fix it without reading the source.
+    """
+    with pytest.raises(ValueError, match="is not a Sensitivity class") as exc:
+        PatternSet(patterns={"operator_pii": (r"x",)})
+    for name in ("operator_pii", "host_fingerprint", "transcript", "credential"):
+        assert name in str(exc.value), "the message must list the valid classes"
+
+
+def test_the_frame_locals_limitation_is_real_and_pinned() -> None:
+    """PINS A KNOWN, DOCUMENTED LIMITATION so it cannot change unnoticed.
+
+    The module states its boundary: the exception's message, chain, and default traceback carry no
+    pattern content, but FRAME LOCALS do, because `PatternSet.__post_init__` is the constructor
+    that holds the patterns. glm asked for the acknowledged gap to be tested, which is right — an
+    untested caveat is a comment, and comments drift.
+
+    This asserts the limitation EXISTS, not that it is acceptable. If a future change makes frame
+    locals clean, this test fails and the docstring must be corrected to claim the stronger
+    property. A caveat that silently became false would leave the module under-claiming, which
+    misleads a caller in the opposite direction.
+    """
+    literal = "zzq-frame-local-probe("
+    with pytest.raises(ValueError) as exc:
+        PatternSet(patterns={Sensitivity.CREDENTIAL: (literal,)})
+
+    tb = exc.value.__traceback__
+    while tb.tb_next:
+        tb = tb.tb_next
+    assert "zzq-frame-local-probe" in repr(tb.tb_frame.f_locals), (
+        "frame locals no longer carry the pattern. That is an IMPROVEMENT, not a failure — but the "
+        "module documents this as an explicit limitation, so update that docstring to claim the "
+        "stronger guarantee rather than leaving it under-claimed."
+    )

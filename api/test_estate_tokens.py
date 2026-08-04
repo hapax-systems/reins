@@ -37,10 +37,23 @@ def test_a_declared_but_missing_file_is_an_error_not_a_skip(monkeypatch, tmp_pat
 
     Skipping here would be silent — the estate declared where its tokens live, got the path wrong,
     and would see a green run forever.
+
+    AND THE ERROR MUST NOT ECHO THE PATH. A path under a home directory is a host fingerprint by
+    this module's own ladder, and this message reaches CI logs and pasted tracebacks. Naming the
+    ENVIRONMENT VARIABLE is fully actionable — the operator set it and can read it — while
+    disclosing nothing. Removing the absolute path from the skip reason and leaving it here would
+    have been the same defect kept alive in a sibling branch, which is how it reached four separate
+    channels before anyone counted them.
     """
-    monkeypatch.setenv(TOKENS_ENV, str(tmp_path / "does-not-exist"))
-    with pytest.raises(RuntimeError, match="worse than one that is undeclared"):
+    missing = tmp_path / "does-not-exist"
+    monkeypatch.setenv(TOKENS_ENV, str(missing))
+    with pytest.raises(RuntimeError, match="worse than one that is undeclared") as exc:
         estate_tokens()
+    assert TOKENS_ENV in str(exc.value), "the operator must be told WHICH variable to fix"
+    assert str(missing) not in str(exc.value), (
+        "the error echoed the caller-supplied path; it must name only the variable"
+    )
+    assert str(tmp_path) not in str(exc.value), "a parent directory leaked through the message"
 
 
 def test_an_empty_file_is_an_error_not_an_empty_denylist(monkeypatch, tmp_path) -> None:
@@ -91,6 +104,25 @@ def test_the_scan_finds_a_planted_token(tmp_path) -> None:
     (tmp_path / "dirty.py").write_text(f"# {FAKE}\n", encoding="utf-8")
     hits = scan_tree_for_tokens(tmp_path, (FAKE,))
     assert [p.name for p, _ in hits] == ["dirty.py"]
+
+
+def test_the_scan_returns_relative_paths_so_a_failure_cannot_publish_the_checkout(
+    tmp_path,
+) -> None:
+    """An absolute path under a home directory is a host fingerprint.
+
+    These land in the rendered operands of a failing assertion, so returning them would make the
+    report disclose where the estate keeps its checkout — the same shape as returning the token
+    itself, one field over. Relative to the directory the caller passed: the caller knows what they
+    passed, and a log reader learns nothing.
+    """
+    (tmp_path / "dirty.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+    hits = scan_tree_for_tokens(tmp_path, (FAKE,))
+
+    assert hits, "fixture precondition: the planted token must be found"
+    for path, _ in hits:
+        assert not path.is_absolute(), f"the scan returned an absolute path: {path.name}"
+    assert str(tmp_path) not in repr(hits), "the containing directory leaked through the result"
 
 
 def test_the_scan_excludes_no_file_by_name_including_the_scanners_own(tmp_path) -> None:

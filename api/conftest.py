@@ -71,10 +71,18 @@ def estate_tokens() -> tuple[str, ...] | None:
     if declared:
         path = pathlib.Path(declared)
         if not path.is_file():
+            # THE PATH IS NOT ECHOED, only the variable that holds it.
+            #
+            # The operator supplied it and can read their own environment; a CI log, a pasted
+            # traceback, or an issue comment cannot. A path under a home directory is a host
+            # fingerprint by this module's own ladder, and leaving it here while removing it from
+            # the skip reason would have been the same defect kept alive in a sibling branch --
+            # which is exactly how it reached four channels before anyone counted them.
             raise RuntimeError(
-                f"{TOKENS_ENV}={declared!r} names a file that does not exist. A guard that is "
-                f"declared and absent is worse than one that is undeclared: the estate believes it "
-                f"is being checked and it is not. Create the file or unset {TOKENS_ENV}."
+                f"the file named by {TOKENS_ENV} does not exist (the path is not repeated here; "
+                f"read the variable). A guard that is declared and absent is worse than one that "
+                f"is undeclared: the estate believes it is being checked and it is not. Create the "
+                f"file, correct {TOKENS_ENV}, or unset it to declare the check unarmed."
             )
     else:
         path = DEFAULT_TOKENS_FILE
@@ -117,16 +125,19 @@ def scan_tree_for_tokens(
     only against the real package would mean the regression witness depended on a gitignored file,
     and would vanish into a skip in any clone that does not have it.
 
-    THE TOKEN IS NOT RETURNED — ITS INDEX IS.
+    THE TOKEN IS NOT RETURNED — ITS INDEX IS, AND THE PATH IS RELATIVE.
 
     A returned token lands in a pytest assertion's rendered repr, a CI log, a pasted failure. So
     the report saying "an estate fingerprint is present here" would itself publish the fingerprint.
     That is the same defect as a Finding that stores its pattern, and it was found the same way: by
     a reviewer reading what the failure path would actually print rather than what its message
     claimed. The caller supplied the list and can map an index back; a log reader gets an integer.
+
+    Paths are relative to `directory` for the same reason: an absolute path under a home directory
+    is a host fingerprint, and these land in failing-assertion output.
     """
     return [
-        (path, index)
+        (path.relative_to(directory), index)
         for path in sorted(directory.glob(f"*{suffix}"))
         for index, token in enumerate(tokens)
         if token in path.read_text(encoding="utf-8")
