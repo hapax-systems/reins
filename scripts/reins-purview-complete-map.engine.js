@@ -14,7 +14,12 @@
 const fs = require("fs");
 const path = require("path");
 
-const DEFAULT_INTAKE = path.join(__dirname, "..", "docs", "PURVIEW-INTAKE.md");
+// NO ESTATE-CONTENT DEFAULT. This engine previously defaulted to ../docs/PURVIEW-INTAKE.md — a
+// file that carries operator-personal material and therefore lives in the PRIVATE repo, never
+// here. The default made the public tool unrunnable (the path does not exist) while implying the
+// data belonged alongside it. The intake path is now a required argument: the tool is generic, the
+// census is the caller's.
+const CENSUS_SUFFIX = ".census.json";
 
 const SOURCE_CLUSTERS = [
   "memory-ssots",
@@ -42,48 +47,23 @@ const REQUIRED_FRAME_TERMS = [
   "OBLIGATIONS",
 ];
 
-const EXPECTED_PROGRAM_COUNTS = new Map([
-  ["core-operator-life", 3],
-  ["hos-program", 8],
-  ["continuity-substrate", 18],
-  ["n-DLC-consolidation", 11],
-  ["capability-routing / EDT", 22],
-  ["token-economics", 7],
-  ["measurement-loop-token-economics", 3],
-  ["capability-harnesses", 4],
-  ["representational-framework", 3],
-  ["avsdlc-visual-eval", 5],
-  ["ldlc-tenant", 4],
-  ["packaging", 5],
-  ["reins-cockpit-overhaul", 18],
-]);
-
-const EXPECTED_AXIS_COUNTS = new Map([
-  ["obligation", 26],
-  ["altitude-substrate", 23],
-  ["program", 23],
-  ["projection-hapax", 13],
-  ["altitude-telos", 6],
-  ["projection-operator", 6],
-  ["projection-coord", 5],
-  ["decision", 4],
-  ["altitude-surface", 3],
-  ["representational", 1],
-  ["lifecycle", 1],
-]);
-
-const EXPECTED_SOURCE_COUNTS = new Map([
-  ["critic:program", 21],
-  ["operator-inflections", 16],
-  ["critic:meta-completeness", 15],
-  ["council-interfaces", 14],
-  ["reins-purview-complete-2026-06-28", 9],
-  ["critic:altitude", 9],
-  ["critic:lifecycle-obligation", 9],
-  ["critic:projection", 8],
-  ["vault-reins-design", 7],
-  ["reins-purview-intake-anti-re-narrowing-2026-06-28", 3],
-]);
+// CENSUS AS DATA, NOT AS CODE. The per-program / per-axis / per-source counts describe ONE
+// estate's purview — its program names are that estate's vocabulary, not
+// this tool's. Baking them in made a generic checker carry a specific estate's shape, which is the
+// same category error as the intake default above.
+//
+// The census now lives beside the intake as <intake>.census.json and is supplied by the caller.
+// Absent, the engine still checks structure and internal consistency and SAYS the census was not
+// checked — it does not silently pass.
+function loadCensus(intakePath) {
+  const censusPath = intakePath + CENSUS_SUFFIX;
+  if (!fs.existsSync(censusPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(censusPath, "utf8"));
+  } catch (err) {
+    throw new Error(`census at ${censusPath} is unreadable: ${err.message}`);
+  }
+}
 
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? process.stdout : process.stderr;
@@ -94,7 +74,8 @@ function usage(exitCode = 0) {
   node scripts/reins-purview-complete-map.engine.js --list-eids [file]
   node scripts/reins-purview-complete-map.engine.js --diff <baseline> <candidate>
 
-Default file: docs/PURVIEW-INTAKE.md
+The intake path is REQUIRED — this tool carries no estate-content default.
+An optional census sidecar at <intake>.census.json supplies the anti-re-narrowing floors.
 `);
   process.exit(exitCode);
 }
@@ -214,32 +195,54 @@ function countBy(items, field) {
   return counts;
 }
 
-function compareCounts(name, actual, expected, errors) {
-  for (const [key, expectedCount] of expected.entries()) {
+// FLOOR, NOT EQUALITY. These counts pin against RE-NARROWING, and re-narrowing is LOSS. A floor
+// catches loss absolutely while letting the file grow — which the intake mandates as the normal
+// path ("New asks land as new items here first"). Equality refused that path outright: adding one
+// item failed with "expected N, got N+1", so the document's own operating procedure was blocked by
+// its own validator.
+//
+// Equality also fused two different claims — "an item was legitimately added" and "the census
+// drifted" — into one error. Split: shrinkage is a hard error; growth is reported for review.
+function compareCounts(name, actual, expected, errors, growth) {
+  for (const key of Object.keys(expected)) {
+    const expectedCount = expected[key];
     const actualCount = actual.get(key) || 0;
-    if (actualCount !== expectedCount) {
-      errors.push(`${name} count mismatch for ${key}: expected ${expectedCount}, got ${actualCount}`);
+    if (actualCount < expectedCount) {
+      errors.push(
+        `${name} count REGRESSED for ${key}: floor ${expectedCount}, got ${actualCount} ` +
+          `(items may be added, never lost — this is the re-narrowing the floor exists to catch)`
+      );
+    } else if (actualCount > expectedCount) {
+      growth.push(`${name} ${key}: ${expectedCount} -> ${actualCount}`);
     }
   }
   for (const [key, actualCount] of actual.entries()) {
-    if (!expected.has(key)) {
-      errors.push(`${name} has unexpected key ${key}: got ${actualCount}`);
-    }
+    if (!(key in expected)) growth.push(`${name} NEW key ${key}: ${actualCount}`);
   }
 }
 
-function validate(parsed) {
+function validate(parsed, census) {
   const errors = [];
   const warnings = [];
+  const growth = [];
   const programCounts = countBy(parsed.items, "program");
   const axisCounts = countBy(parsed.items, "axis");
   const sourceCounts = countBy(parsed.items, "source");
 
-  if (parsed.programs.length !== EXPECTED_PROGRAM_COUNTS.size) {
-    errors.push(`program heading count mismatch: expected ${EXPECTED_PROGRAM_COUNTS.size}, got ${parsed.programs.length}`);
-  }
-  if (parsed.items.length !== 111) {
-    errors.push(`item count mismatch: expected 111, got ${parsed.items.length}`);
+  if (census) {
+    if (parsed.items.length < census.item_floor) {
+      errors.push(
+        `item count REGRESSED: floor ${census.item_floor}, got ${parsed.items.length} ` +
+          `(the purview may only grow; loss is re-narrowing)`
+      );
+    } else if (parsed.items.length > census.item_floor) {
+      growth.push(`items: ${census.item_floor} -> ${parsed.items.length}`);
+    }
+  } else {
+    warnings.push(
+      "no census sidecar supplied, so the item/program/axis/source FLOORS were NOT checked. " +
+        "Structure and internal consistency were. Absence of a census is not a passing census."
+    );
   }
 
   for (const program of parsed.programs) {
@@ -249,9 +252,11 @@ function validate(parsed) {
     }
   }
 
-  compareCounts("program", programCounts, EXPECTED_PROGRAM_COUNTS, errors);
-  compareCounts("axis", axisCounts, EXPECTED_AXIS_COUNTS, errors);
-  compareCounts("source/critic", sourceCounts, EXPECTED_SOURCE_COUNTS, errors);
+  if (census) {
+    compareCounts("program", programCounts, census.programs || {}, errors, growth);
+    compareCounts("axis", axisCounts, census.axes || {}, errors, growth);
+    compareCounts("source/critic", sourceCounts, census.sources || {}, errors, growth);
+  }
 
   for (const [eid, locations] of parsed.duplicateIds) {
     errors.push(`duplicate eid ${eid} at lines ${locations.join(", ")}`);
@@ -269,11 +274,22 @@ function validate(parsed) {
     }
   }
 
-  if (!parsed.markdown.includes("**Orphan-check:** 111/111")) {
-    errors.push("coverage matrix orphan-check does not read 111/111");
-  }
-  if (!parsed.markdown.includes("Source / critic provenance")) {
-    errors.push("source / critic provenance coverage table missing");
+  // THE ORPHAN MARKER IS PARSED, NOT MATCHED AGAINST A LITERAL. This previously required the exact
+  // string "**Orphan-check:** 111/111", which is one estate's item count baked into a generic
+  // checker. Worse, it desynchronised from the floor: once growth to 112 was permitted, a document
+  // correctly updated to 112/112 FAILED, while one left at 111/111 PASSED while the run reported
+  // 112. The marker must agree with what was actually parsed, whatever the number is.
+  const orphanMarker = parsed.markdown.match(/\*\*Orphan-check:\*\*\s*(\d+)\s*\/\s*(\d+)/);
+  if (orphanMarker) {
+    const [, mapped, covered] = orphanMarker;
+    if (Number(mapped) !== parsed.items.length || Number(covered) !== parsed.items.length) {
+      errors.push(
+        `orphan-check marker reads ${mapped}/${covered} but ${parsed.items.length} items were ` +
+          `parsed — the document's own claim disagrees with its contents`
+      );
+    }
+  } else {
+    warnings.push("no **Orphan-check:** marker found; the document does not state its own coverage");
   }
   if (!parsed.markdown.includes("Program coverage")) {
     errors.push("program coverage table missing");
@@ -282,9 +298,18 @@ function validate(parsed) {
     errors.push("axis coverage table missing");
   }
 
-  for (const critic of ADVERSARIAL_CRITICS) {
+  // WHICH CRITICS ARE REQUIRED IS A CENSUS CONCERN, NOT A STRUCTURAL ONE. Demanding all five
+  // unconditionally made the engine unusable against any intake but one estate's — a generic tool
+  // cannot know how many adversarial passes a given purview ran. Absent a census the shortfall is
+  // reported, not failed: silence would be the absence-into-zero this file's own law forbids.
+  const requiredCritics = census && Array.isArray(census.required_critics)
+    ? census.required_critics
+    : null;
+  for (const critic of requiredCritics || ADVERSARIAL_CRITICS) {
     if ((sourceCounts.get(critic) || 0) === 0) {
-      errors.push(`adversarial critic did not contribute: ${critic}`);
+      const msg = `adversarial critic did not contribute: ${critic}`;
+      if (requiredCritics) errors.push(msg);
+      else warnings.push(`${msg} (no census: reported, not enforced)`);
     }
   }
 
@@ -296,6 +321,8 @@ function validate(parsed) {
     ok: errors.length === 0,
     errors,
     warnings,
+    growth,
+    censusChecked: Boolean(census),
     counts: {
       items: parsed.items.length,
       programs: parsed.programs.length,
@@ -314,10 +341,10 @@ function renderTable(title, rows) {
   return lines.join("\n");
 }
 
-function renderMatrix(parsed) {
-  const validation = validate(parsed);
+function renderMatrix(parsed, census) {
+  const validation = validate(parsed, census);
   const axisRows = sortedEntries(countBy(parsed.items, "axis"));
-  const programRows = Array.from(EXPECTED_PROGRAM_COUNTS.keys()).map((program) => [
+  const programRows = parsed.programs.map((p) => p.name).map((program) => [
     program,
     countBy(parsed.items, "program").get(program) || 0,
   ]);
@@ -346,14 +373,46 @@ function diffEids(baseParsed, candidateParsed) {
 
 function printCheck(filePath) {
   const parsed = parseIntake(readText(filePath), filePath);
-  const validation = validate(parsed);
-  if (validation.ok) {
-    process.stdout.write(`ok: ${filePath}: 111 items across 13 programs; orphan-check 111/111; 5 critics contributed\n`);
-    return 0;
+  const census = loadCensus(filePath);
+  const validation = validate(parsed, census);
+  if (!validation.ok) {
+    for (const error of validation.errors) process.stderr.write(`ERROR: ${error}
+`);
+    for (const warning of validation.warnings) process.stderr.write(`WARN: ${warning}
+`);
+    return 1;
   }
-  for (const error of validation.errors) process.stderr.write(`ERROR: ${error}\n`);
-  for (const warning of validation.warnings) process.stderr.write(`WARN: ${warning}\n`);
-  return 1;
+  // COUNTS ARE COMPUTED, NOT ASSERTED. This line previously hardcoded "111 items across 13
+  // programs; orphan-check 111/111; 5 critics contributed" as string literals, so it reported
+  // those figures for ANY input. The numbers were computed and then discarded.
+  const c = validation.counts;
+  const critics = ADVERSARIAL_CRITICS.filter((x) => (c.sourceCritic[x] || 0) > 0).length;
+  process.stdout.write(
+    `ok: ${filePath}: ${c.items} items across ${c.programs} programs; ` +
+      `orphan-check ${c.items}/${c.items}; ${critics}/${ADVERSARIAL_CRITICS.length} critics contributed
+`
+  );
+  if (validation.growth.length > 0) {
+    process.stdout.write(`growth: ${validation.growth.length} delta(s) above the census floor:
+`);
+    for (const g of validation.growth) process.stdout.write(`  + ${g}
+`);
+  }
+  for (const warning of validation.warnings) process.stdout.write(`WARN: ${warning}
+`);
+  // SCOPE OF WHAT WAS VERIFIED. This engine performs exactly one read — the intake file — so every
+  // check above compares the document to ITSELF. SOURCE_CLUSTERS is validated only by
+  // `length !== 6`, i.e. that a hardcoded array has six strings; not one cluster is read. An
+  // element never written into the file is invisible here by construction, which is the single
+  // failure mode the ORPHAN=leak rule exists to catch. Saying so is the intake's own law — render
+  // partial with the missing reasons — applied to its own tooling.
+  process.stdout.write(
+    `partial: terrain coverage NOT verified — this run read only ${path.basename(filePath)} and ` +
+      `cannot detect an element that was never mapped into it. Source clusters ` +
+      `(${SOURCE_CLUSTERS.join(", ")}) are declared, not scanned. Re-enumeration is a separate build.
+`
+  );
+  return 0;
 }
 
 function main(argv) {
@@ -371,19 +430,28 @@ function main(argv) {
   }
 
   const mode = args[0] && args[0].startsWith("--") ? args.shift() : "--check";
-  const filePath = args[0] || DEFAULT_INTAKE;
+  const filePath = args[0];
+  if (!filePath) {
+    process.stderr.write(
+      "ERROR: an intake file path is required. This tool carries no default: the census it checks " +
+        "is the caller's data, and a public tool must not point at a private estate's file.\n"
+    );
+    usage(2);
+  }
   const parsed = parseIntake(readText(filePath), filePath);
 
   if (mode === "--check") return printCheck(filePath);
   if (mode === "--json") {
-    process.stdout.write(JSON.stringify({ items: parsed.items, validation: validate(parsed) }, null, 2));
+    process.stdout.write(
+      JSON.stringify({ items: parsed.items, validation: validate(parsed, loadCensus(filePath)) }, null, 2)
+    );
     process.stdout.write("\n");
     return 0;
   }
   if (mode === "--matrix") {
-    process.stdout.write(renderMatrix(parsed));
+    process.stdout.write(renderMatrix(parsed, loadCensus(filePath)));
     process.stdout.write("\n");
-    return validate(parsed).ok ? 0 : 1;
+    return validate(parsed, loadCensus(filePath)).ok ? 0 : 1;
   }
   if (mode === "--list-eids") {
     for (const item of parsed.items) process.stdout.write(`${item.eid}\n`);

@@ -1,0 +1,46 @@
+name: purview
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  purview-engine:
+    name: purview-engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # The engine is verified against a SYNTHETIC fixture committed here. A real purview is
+      # estate-personal and lives in a private repository; this repo must never carry one, and the
+      # tool no longer defaults to a path that implies otherwise.
+      - name: Engine checks the fixture (census floors enforced)
+        run: node scripts/reins-purview-complete-map.engine.js scripts/fixtures/example-intake.md
+      - name: Engine refuses without an intake path
+        run: |
+          if node scripts/reins-purview-complete-map.engine.js >/dev/null 2>&1; then
+            echo "::error::the engine accepted no intake path; it must refuse rather than guess"
+            exit 1
+          fi
+          echo "refused as required"
+      - name: Census floor catches loss (negative control)
+        run: |
+          set -eu
+          tmp="$RUNNER_TEMP/lost.md"
+          python3 - "$tmp" <<'PY'
+          import pathlib, sys
+          t = pathlib.Path("scripts/fixtures/example-intake.md").read_text()
+          t = t.replace("### example-program-one  (2 items)", "### example-program-one  (1 items)")
+          i = t.index("- **ex-beta**"); j = t.index("### example-program-two")
+          t = (t[:i] + t[j:]).replace("**Orphan-check:** 3/3", "**Orphan-check:** 2/2")
+          pathlib.Path(sys.argv[1]).write_text(t)
+          pathlib.Path(sys.argv[1] + ".census.json").write_text(
+              pathlib.Path("scripts/fixtures/example-intake.md.census.json").read_text())
+          PY
+          if node scripts/reins-purview-complete-map.engine.js "$tmp" >/dev/null 2>&1; then
+            echo "::error::a shrunken purview passed the census floor — re-narrowing would be silent"
+            exit 1
+          fi
+          echo "loss refused as required"
