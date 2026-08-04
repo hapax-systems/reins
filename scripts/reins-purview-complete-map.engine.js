@@ -89,6 +89,23 @@ function loadCensus(intakePath) {
       }
     }
   }
+  // A MALFORMED POLICY IS NOT AN ABSENT POLICY. `"required_critics": "critic:custom"` (a string,
+  // not an array) previously slipped through here and then failed the Array.isArray test
+  // downstream, so the census SILENTLY DEGRADED from enforcing a declared critic policy to merely
+  // advising — the author's stated requirement quietly stopped applying. If the key is present it
+  // must be usable.
+  if (raw.required_critics !== undefined) {
+    if (
+      !Array.isArray(raw.required_critics) ||
+      raw.required_critics.some((c) => typeof c !== "string" || !c.trim())
+    ) {
+      throw new Error(
+        `census at ${censusPath}: required_critics must be an array of non-empty strings. ` +
+          `A malformed policy would silently downgrade to advisory, which is the opposite of ` +
+          `declaring one.`
+      );
+    }
+  }
   return raw;
 }
 

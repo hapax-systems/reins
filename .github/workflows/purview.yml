@@ -49,6 +49,23 @@ jobs:
             echo "::error::failed, but not on the census floor:"; cat /tmp/loss.txt; exit 1; }
           echo "loss refused on the census floor, as required"
 
+      - name: A malformed critic policy is REFUSED (not silently downgraded)
+        run: |
+          set -eu
+          cp scripts/fixtures/example-intake.md "$RUNNER_TEMP/mal.md"
+          python3 - "$RUNNER_TEMP/mal.md.census.json" <<'PY'
+          import json, pathlib, sys
+          c = json.loads(pathlib.Path("scripts/fixtures/example-intake.md.census.json").read_text())
+          c["required_critics"] = "critic:custom"   # a string, not an array
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(c))
+          PY
+          if node scripts/reins-purview-complete-map.engine.js "$RUNNER_TEMP/mal.md" >/tmp/m.txt 2>&1; then
+            echo "::error::a malformed required_critics passed; the declared policy would silently downgrade to advisory"; exit 1
+          fi
+          grep -q "required_critics must be an array" /tmp/m.txt || {
+            echo "::error::refused, but not on the critic policy:"; cat /tmp/m.txt; exit 1; }
+          echo "malformed critic policy refused, as required"
+
       - name: A census that enforces nothing is REFUSED
         run: |
           set -eu
