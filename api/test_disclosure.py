@@ -152,31 +152,68 @@ def test_a_finding_never_carries_the_pattern_because_patterns_are_often_literal(
         assert f.pattern_index == 0, "the caller must still be able to map back to its own list"
 
 
-def test_a_pattern_that_does_not_compile_is_named_by_position_not_by_content() -> None:
-    """The error message reaches logs and tickets, so it must not carry the pattern either."""
-    literal = "zzq-secret-in-a-broken-pattern("
-    with pytest.raises(ValueError) as exc:
-        PatternSet(patterns={Sensitivity.CREDENTIAL: (literal,)})
-    assert "index 0" in str(exc.value)
-    assert "zzq-secret" not in str(exc.value), "the failing pattern leaked into the exception"
+#: Malformed patterns whose `re.error` message ECHOES the pattern's own content. Measured, not
+#: assumed — `str(re.error)` is clean for some error classes and not others, and an earlier version
+#: of this test used only a clean-half pattern. It passed while the code interpolated str(exc), so
+#: a mutant restoring that interpolation SURVIVED the whole suite. "This message did not leak" is
+#: not "no message leaks"; the same existential-for-universal slip the module's docstring warns
+#: about, committed in the test meant to catch it.
+LEAKING_PATTERNS = [
+    "(?P<zzqsecret>a)(?P<zzqsecret>b)",  # -> "redefinition of group name 'zzqsecret' ..."
+    "(?P=zzqsecret)",                    # -> "unknown group name 'zzqsecret' at position 4"
+]
+#: The other half, where re.error says nothing about the content. Included so the test covers both
+#: behaviours of the engine rather than whichever one happened to be sampled.
+QUIET_PATTERNS = ["zzqsecret(", r"\pzzqsecret"]
 
-    # THE WHOLE CHAIN, not just the message. Found by two reviewers on the second pass: the first
-    # fix produced a clean message and then chained `from exc`, and `re.error.pattern` holds the
-    # full pattern. `str(re.error)` does NOT contain it and neither does a default traceback, which
-    # is what made it easy to miss -- but the object stays reachable as `err.__cause__.pattern`,
-    # and Sentry, pytest --showlocals and rich tracebacks all print attributes.
-    #
-    # So the assertion is over every exception reachable from the one raised, not over its text.
+
+@pytest.mark.parametrize("pattern", LEAKING_PATTERNS + QUIET_PATTERNS)
+def test_a_pattern_that_does_not_compile_is_named_by_position_not_by_content(pattern) -> None:
+    """The error must disclose nothing, for EVERY class of regex error — not a sampled one.
+
+    An estate's patterns are often literal secrets, and this message reaches logs and tickets.
+    """
+    with pytest.raises(ValueError) as exc:
+        PatternSet(patterns={Sensitivity.CREDENTIAL: (pattern,)})
+    assert "index 0" in str(exc.value)
+    assert "zzqsecret" not in str(exc.value), (
+        "the failing pattern's content reached the exception message"
+    )
+
+    # THE WHOLE CHAIN, not just the message. `from None` suppresses only the DISPLAY: it sets
+    # __suppress_context__ while leaving __context__ pointing at the re.error, whose `.pattern`
+    # attribute holds the full pattern. Sentry, pytest --showlocals and rich tracebacks all read
+    # attributes. So the assertion is over every exception reachable from the one raised.
     seen, err = [], exc.value
     while err is not None:
         seen.append(err)
         err = err.__cause__ or err.__context__
     for link in seen:
-        assert "zzq-secret" not in repr(vars(link) if hasattr(link, "__dict__") else {}), (
+        assert "zzqsecret" not in repr(vars(link) if hasattr(link, "__dict__") else {}), (
             "an exception in the chain carries the pattern in its attributes"
         )
-        assert "zzq-secret" not in repr(getattr(link, "pattern", "")), (
+        assert "zzqsecret" not in repr(getattr(link, "pattern", "")), (
             "the failing regex is still reachable through the exception chain"
+        )
+
+
+def test_the_leaking_fixtures_really_do_leak_or_this_test_proves_nothing() -> None:
+    """A GUARD ON THE GUARD.
+
+    If a future Python changed those messages to stop quoting group names, the parametrized test
+    above would keep passing while testing nothing — coverage theater with a green tick. So the
+    premise is asserted directly: these patterns must still produce engine messages that echo their
+    own content, or this file must be told so and updated.
+    """
+    import re
+
+    for pattern in LEAKING_PATTERNS:
+        with pytest.raises(re.error) as exc:
+            re.compile(pattern)
+        assert "zzqsecret" in str(exc.value), (
+            f"{pattern!r} no longer produces a content-echoing re.error message on this Python. "
+            f"The disclosure test above is now vacuous — find a pattern that still does, or drop "
+            f"the distinction if the engine no longer echoes content at all."
         )
 
 

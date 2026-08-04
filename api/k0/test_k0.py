@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import UNARMED, estate_tokens, scan_tree_for_tokens
+from conftest import SUBSTRATE_TOKENS, UNARMED, estate_tokens, scan_tree_for_tokens
 
 from k0 import (
     DeadEndRefusalError,
@@ -130,28 +130,35 @@ def test_the_kernel_package_is_estate_independent():
 
 
 def test_the_kernel_package_is_uncoupled_from_the_substrate_it_was_extracted_from():
-    """A SEPARATE CHECK FROM THE ONE ABOVE, on purpose.
+    """A SEPARATE CHECK FROM THE ONE ABOVE, on purpose, AND WITH NO SELF-EXEMPTION.
 
-    `council_root` is a config key and `hapax-council` is a public repository name. Neither
-    discloses anything, so neither belongs in the estate-fingerprint list — a denylist padded with
-    non-secrets produces findings nobody reads, and a guard nobody reads does not work. But K0 must
-    still be free of them, for a different reason: the kernel was extracted FROM that substrate and
-    must not have carried its vocabulary out. That is a coupling defect, not a disclosure one, and
-    the two have different remedies (rename vs. redact), so they are asserted apart and named apart.
+    The two tokens this looks for are a config key and a public repository name. Neither discloses
+    anything, so neither belongs in the estate-fingerprint list — a denylist padded with non-secrets
+    produces findings nobody reads, and a guard nobody reads does not work. But K0 must still be
+    free of them for a different reason: the kernel was extracted FROM that substrate and must not
+    have carried its vocabulary out. That is a coupling defect, not a disclosure one, and the two
+    have different remedies (rename vs. redact), so they are asserted apart and named apart.
 
-    These literals are safe to write inline precisely because they are not secrets.
+    THE TOKENS LIVE IN conftest.py, WHICH IS OUTSIDE THE PACKAGE THIS SCANS.
+
+    An earlier version wrote them inline here and then skipped this file by name — which is the
+    exact exemption the estate-independence scan above was rewritten to remove, reintroduced two
+    tests later for tokens that merely happen not to be secret. A reviewer caught it, correctly:
+    the shape is the defect, independent of what the tokens are worth.
+
+    Being non-secret changes where the list may live; it does not license an exemption. So the list
+    moved out of the scanned package instead, and this scan, like the one above, exempts nothing.
+    That is the general rule both tests now follow: a guard's data must not sit inside what the
+    guard reads.
     """
     import pathlib
 
-    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
-        src = path.read_text()
-        if path.name == "test_k0.py":
-            src = ""  # this docstring names them by necessity; see above for why that is sound
-        for token in ("council_root", "hapax-council"):
-            assert token not in src, (
-                f"{path.name} references {token!r}: the kernel still carries the vocabulary of the "
-                f"substrate it was extracted from. Generalize the name."
-            )
+    hits = scan_tree_for_tokens(pathlib.Path(__file__).parent, SUBSTRATE_TOKENS)
+    assert not hits, (
+        f"kernel files still carrying substrate vocabulary: "
+        f"{sorted({p.name for p, _ in hits})}. K0 was extracted from that substrate and must not "
+        f"have carried its names out. Generalize them."
+    )
 
 
 # --- the loop closes: the law reproduces the worked example --------------------------------

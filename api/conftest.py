@@ -86,10 +86,18 @@ def estate_tokens() -> tuple[str, ...] | None:
     return tokens
 
 
+#: Substrate vocabulary K0 must not carry. NOT secrets -- a config key and a public repository
+#: name -- so they are written inline, unlike the estate fingerprints. They live HERE, outside the
+#: k0 package, for the same structural reason the fingerprints live outside the tree: a guard's
+#: data must not sit in what the guard scans, or the guard needs an exemption to avoid finding
+#: itself, and that exemption is the original defect.
+SUBSTRATE_TOKENS: tuple[str, ...] = ("council_root", "hapax-council")
+
+
 def scan_tree_for_tokens(
     directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ".py"
-) -> list[tuple[pathlib.Path, str]]:
-    """Every (file, token) pair in `directory`. EXCLUDES NOTHING, including the scanner's own file.
+) -> list[tuple[pathlib.Path, int]]:
+    """Every (file, token-index) pair in `directory`. EXCLUDES NOTHING, including its own file.
 
     The exclusion is the whole reason this is a function instead of a loop inside one test. The
     version this replaces skipped the file it lived in, which is exactly where the tokens were —
@@ -98,10 +106,18 @@ def scan_tree_for_tokens(
     Factored out so it can be tested against a temporary tree with SYNTHETIC tokens. Testing it
     only against the real package would mean the regression witness depended on a gitignored file,
     and would vanish into a skip in any clone that does not have it.
+
+    THE TOKEN IS NOT RETURNED — ITS INDEX IS.
+
+    A returned token lands in a pytest assertion's rendered repr, a CI log, a pasted failure. So
+    the report saying "an estate fingerprint is present here" would itself publish the fingerprint.
+    That is the same defect as a Finding that stores its pattern, and it was found the same way: by
+    a reviewer reading what the failure path would actually print rather than what its message
+    claimed. The caller supplied the list and can map an index back; a log reader gets an integer.
     """
     return [
-        (path, token)
+        (path, index)
         for path in sorted(directory.glob(f"*{suffix}"))
-        for token in tokens
+        for index, token in enumerate(tokens)
         if token in path.read_text(encoding="utf-8")
     ]

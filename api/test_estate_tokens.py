@@ -114,7 +114,25 @@ def test_the_scan_excludes_no_file_by_name_including_the_scanners_own(tmp_path) 
 def test_the_scan_reports_every_token_not_merely_the_first(tmp_path) -> None:
     """A scan that stops at the first hit under-reports, and the operator fixes one of three."""
     (tmp_path / "a.py").write_text(f"# {FAKE}\n# {FAKE_2}\n", encoding="utf-8")
-    assert {tok for _, tok in scan_tree_for_tokens(tmp_path, (FAKE, FAKE_2))} == {FAKE, FAKE_2}
+    assert {i for _, i in scan_tree_for_tokens(tmp_path, (FAKE, FAKE_2))} == {0, 1}
+
+
+def test_the_scan_returns_indices_so_a_failure_report_cannot_publish_the_token() -> None:
+    """THE REPORT MUST NOT BE THE LEAK.
+
+    pytest renders the operands of a failing assertion, so a scan returning the matched TOKEN would
+    print the estate's fingerprints into the CI log of the very run that found them — the report
+    becoming the disclosure, which is the defect this whole change exists to remove, arriving by a
+    third route after the inline denylist and the stored pattern.
+    """
+    import pathlib as _p
+
+    hints = scan_tree_for_tokens.__annotations__.get("return")
+    assert hints is not None, "the return type must be stated, since it is the security property"
+    assert "int" in str(hints) and "str" not in str(hints), (
+        f"scan_tree_for_tokens returns {hints}; it must yield an index, never the token"
+    )
+    assert _p is not None
 
 
 def test_a_clean_tree_yields_nothing(tmp_path) -> None:

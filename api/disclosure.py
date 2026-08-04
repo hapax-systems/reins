@@ -157,17 +157,39 @@ class PatternSet:
                 # Raising after the handler has exited means there is no exception being handled,
                 # so no context is attached and no reference survives. Only the clean message text
                 # crosses the boundary; the caller holds the pattern list, so a position is enough.
-                why: str | None = None
+                # NOTHING FROM THE EXCEPTION CROSSES THIS BOUNDARY EXCEPT AN INTEGER.
+                #
+                # Measured, because the third review pass turned on exactly this: `str(re.error)`
+                # echoes pattern content for some error classes and not others.
+                #
+                #   "(?P<s>a)(?P<s>b)"  -> "redefinition of group name 's' ..."      LEAKS
+                #   "(?P=s)"            -> "unknown group name 's' at position 4"    LEAKS
+                #   "s("                -> "missing ), unterminated subpattern ..."  clean
+                #   r"\ps"              -> "bad escape \p at position 0"             clean
+                #
+                # An earlier version interpolated str(exc) and was verified against ONE malformed
+                # pattern that happened to fall in the clean half. That is an existential check
+                # standing in for a universal one: "this message did not leak" is not "no message
+                # leaks". Only `.pos` is taken, and an int cannot carry pattern content.
+                bad_at: int | None = None
+                failed = False
                 try:
                     re.compile(p)
                 except re.error as exc:
-                    why = str(exc)
-                if why is not None:
+                    failed, bad_at = True, exc.pos
+                if failed:
+                    # Raised OUTSIDE the handler: `from None` suppresses only the DISPLAY, leaving
+                    # `err.__context__.pattern` readable. Raising after the handler exits means no
+                    # exception is being handled, so no reference survives at all.
+                    where = "" if bad_at is None else f", at offset {bad_at} within it"
                     raise ValueError(
-                        f"{cls.value}: pattern at index {index} does not compile ({why}). "
-                        f"A pattern that does not compile matches nothing, which would make this "
-                        f"guard silently pass everything in that class. Correct the regex at that "
-                        f"position, or remove it and let the class report as unscanned."
+                        f"{cls.value}: the pattern at index {index} does not compile{where}. "
+                        f"Neither the pattern nor the regex engine's message is repeated here: an "
+                        f"estate's patterns are often literal secrets and some of those messages "
+                        f"quote the text they failed on. A pattern that does not compile matches "
+                        f"nothing, which would make this guard silently pass everything in that "
+                        f"class. Correct the regex at that index, or remove it and let the class "
+                        f"report as unscanned."
                     )
 
     @property
