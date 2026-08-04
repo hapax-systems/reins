@@ -221,6 +221,15 @@ def test_the_leaking_fixtures_really_do_leak_or_this_test_proves_nothing() -> No
     """
     import re
 
+    for pattern in QUIET_PATTERNS:
+        with pytest.raises(re.error) as exc:
+            re.compile(pattern)
+        assert "zzqsecret" not in str(exc.value), (
+            f"{pattern!r} now DOES echo its content on this Python. That is not a failure of the "
+            f"module — it is the split between the two halves moving. Reclassify it into "
+            f"LEAKING_PATTERNS so the distinction this file documents stays true."
+        )
+
     for pattern in LEAKING_PATTERNS:
         with pytest.raises(re.error) as exc:
             re.compile(pattern)
@@ -366,3 +375,15 @@ def test_validation_cannot_be_bypassed_by_mutating_the_pattern_dict() -> None:
         "unvalidated pattern past every check in __post_init__"
     )
     assert ps2.covered == frozenset({Sensitivity.CREDENTIAL})
+
+    # AND THE VALUES, one level deeper. The annotation says tuple; the annotation is not
+    # enforcement, and a caller passing a LIST keeps a live reference to it. Freezing the mapping
+    # alone left every value aliased — which is why the shallow fix looked complete, and is the
+    # same lesson as the guard's six output channels: closing one level says nothing about the next.
+    mutable = ["a"]
+    ps3 = PatternSet(patterns={Sensitivity.CREDENTIAL: mutable})
+    mutable.append("([never-validated")
+    assert ps3.patterns[Sensitivity.CREDENTIAL] == ("a",), (
+        "a list passed as a pattern sequence stayed aliased to the caller, so appending to it "
+        "inserted an unvalidated pattern after construction"
+    )

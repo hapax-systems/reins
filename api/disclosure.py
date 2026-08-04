@@ -240,7 +240,19 @@ class PatternSet:
         #
         # dict() breaks the alias; MappingProxyType blocks the direct write. Validation now holds
         # for the life of the object rather than for the instant of construction.
-        object.__setattr__(self, "patterns", MappingProxyType(dict(self.patterns)))
+        # NOTE `tuple(pats)`, not just `dict(...)`. The annotation says tuple; the annotation is
+        # not enforcement. A caller passing a LIST kept a live reference to it:
+        #
+        #     pats = ["a"]; ps = PatternSet(patterns={CREDENTIAL: pats}); pats.append("([bad")
+        #
+        # and the unvalidated pattern was inside the PatternSet. Freezing the mapping one level
+        # deep left every value aliased -- the same defect as the previous commit, one level in,
+        # which is why the shallow fix looked complete and was not.
+        object.__setattr__(
+            self,
+            "patterns",
+            MappingProxyType({cls: tuple(pats) for cls, pats in self.patterns.items()}),
+        )
 
     @property
     def covered(self) -> frozenset[Sensitivity]:

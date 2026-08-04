@@ -18,7 +18,13 @@ import pathlib
 
 import pytest
 
-from conftest import TOKENS_ENV, UNARMED, estate_tokens, scan_tree_for_tokens
+from conftest import (
+    TOKENS_ENV,
+    TOKENS_FILE_NAME,
+    UNARMED,
+    estate_tokens,
+    scan_tree_for_tokens,
+)
 
 #: Invented for these tests. Deliberately unlike anything real.
 FAKE = "zzq-token-alpha"
@@ -201,10 +207,15 @@ def test_the_unarmed_message_is_itself_free_of_estate_fingerprints() -> None:
     Asserted against the estate's real tokens when armed, so it is this estate's actual
     fingerprints being excluded and not a stand-in.
     """
-    assert "/" not in UNARMED.split("write one token per line to ")[1].split(" ")[0], (
-        "the unarmed message names a PATH; it must name only a filename, since this string is "
-        "printed into public CI logs"
+    # Asserted over the WHOLE message, not a slice of it. An earlier version located the filename
+    # by splitting on a fixed phrase — so rewording the message would have made the check pass
+    # while inspecting nothing, and a reviewer flagged it. Nothing in this string should ever
+    # contain a path separator, so that is what is checked.
+    assert "/" not in UNARMED, (
+        "the unarmed message contains a path separator; it must name only a bare filename, since "
+        "this string is printed into public CI logs"
     )
+    assert TOKENS_FILE_NAME in UNARMED, "the operator must still be told what file to create"
     tokens = estate_tokens()
     if tokens is None:
         pytest.skip("cannot check against real fingerprints while unarmed; shape check above holds")
