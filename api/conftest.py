@@ -136,6 +136,28 @@ SUBSTRATE_TOKENS: tuple[str, ...] = ("council_root", "hapax-council")
 _NOT_SOURCE = frozenset({"__pycache__", "node_modules", "site-packages", "build", "dist"})
 
 
+def _readable_file(path: pathlib.Path, root: pathlib.Path) -> bool:
+    """True for a plain file to scan. REFUSES on a symlinked directory instead of ignoring it.
+
+    `rglob` does not descend directory symlinks, so anything behind one is outside the scan while
+    the scan reports success — silence about a region it never entered, which is the shape this
+    module exists to remove. Symlinked FILES are read normally: they resolve to bytes the tree
+    genuinely contains.
+
+    Refusing rather than following is the conservative choice: following would let a link out of
+    the tree pull in an arbitrary amount of unrelated content, and could loop. The operator is told
+    which entry to resolve or remove.
+    """
+    if path.is_symlink() and path.is_dir():
+        raise RuntimeError(
+            f"{path.relative_to(root)} is a symlink to a directory, and the scan does not descend "
+            f"through it. Anything behind it would be unscanned while this reported success, and "
+            f"unscanned is not clean. Replace it with a real directory, or move it out of the "
+            f"scanned tree."
+        )
+    return path.is_file()
+
+
 def _text_of(path: pathlib.Path) -> str:
     """File contents, or "" if the file is NOT TEXT. Unreadable is a different answer entirely.
 
@@ -187,11 +209,16 @@ def _skipped(relative: pathlib.Path) -> bool:
 def scan_tree_for_tokens(
     directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ""
 ) -> list[tuple[pathlib.Path, int]]:
-    """Every (file, token-index) pair in `directory`. EXCLUDES NOTHING, including its own file.
+    """Every (file, token-index) pair in `directory`. Exempts no SOURCE file, including its own.
 
-    The exclusion is the whole reason this is a function instead of a loop inside one test. The
-    version this replaces skipped the file it lived in, which is exactly where the tokens were —
-    so a scan that excludes any file by name is a scan that cannot see its own denylist.
+    The claim is deliberately narrower than "excludes nothing", which is what this said before a
+    reviewer pointed out that it is not true: caches, virtualenvs and vendored trees ARE skipped,
+    by the enumerable `_NOT_SOURCE` list. Over-claiming in a docstring is the same defect as
+    over-claiming in a guarantee, and this module has corrected three of those already.
+
+    What it never does is exempt a file it was asked to read. The version this replaces skipped the
+    file it lived in, which is exactly where the tokens were — so a scan that excludes any source
+    file by name is a scan that cannot see its own denylist.
 
     Factored out so it can be tested against a temporary tree with SYNTHETIC tokens. Testing it
     only against the real package would mean the regression witness depended on a gitignored file,
@@ -223,7 +250,7 @@ def scan_tree_for_tokens(
     return [
         (path.relative_to(directory), index)
         for path in sorted(directory.rglob(f"*{suffix}"))
-        if path.is_file() and not _skipped(path.relative_to(directory))
+        if _readable_file(path, directory) and not _skipped(path.relative_to(directory))
         for index, token in enumerate(tokens)
         if token in _text_of(path)
     ]

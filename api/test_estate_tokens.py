@@ -422,3 +422,29 @@ def test_an_unreadable_tokens_file_refuses_and_names_no_path(monkeypatch, tmp_pa
         )
     finally:
         os.chmod(tokens_file, 0o644)
+
+
+def test_a_symlinked_directory_refuses_rather_than_being_silently_unscanned(tmp_path) -> None:
+    """`rglob` does not descend directory symlinks, so it would report success over a blind spot."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "hidden.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="unscanned is not clean") as exc:
+        scan_tree_for_tokens(root, (FAKE,))
+    assert "linked" in str(exc.value), "the operator must be told which entry to resolve"
+    assert str(tmp_path) not in str(exc.value), "the containing path leaked into the error"
+
+
+def test_a_symlinked_file_is_scanned_normally(tmp_path) -> None:
+    """A link to a file resolves to bytes the tree genuinely contains, so it is read, not refused."""
+    real = tmp_path / "real.py"
+    real.write_text(f"# {FAKE}\n", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "aliased.py").symlink_to(real)
+
+    assert [str(p) for p, _ in scan_tree_for_tokens(root, (FAKE,))] == ["aliased.py"]
