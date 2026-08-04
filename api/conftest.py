@@ -62,7 +62,9 @@ UNARMED = (
 
 
 def estate_tokens() -> tuple[str, ...] | None:
-    """The strings that identify THIS estate. `None` means unsupplied — which is not `()`.
+    """The strings that identify THIS estate, or `None` when none were supplied.
+
+    `None` means unsupplied — which is NOT `()`.
 
     `()` would mean "an estate with no identifying strings", and would make every scan pass. `None`
     means "we did not look", and callers must report that as an unchecked outcome.
@@ -112,6 +114,16 @@ def estate_tokens() -> tuple[str, ...] | None:
 SUBSTRATE_TOKENS: tuple[str, ...] = ("council_root", "hapax-council")
 
 
+#: Directories that are not the estate's source: caches, virtualenvs, vendored trees. Excluded by
+#: NAME rather than by a depth limit, so the exclusion is legible and enumerable — the point of the
+#: recursion is that nothing is skipped silently, and a skip list you can read is not a silent one.
+_NOT_SOURCE = frozenset({"__pycache__", "node_modules", "site-packages", "build", "dist"})
+
+
+def _skipped(relative: pathlib.Path) -> bool:
+    return any(part in _NOT_SOURCE or part.startswith(".") for part in relative.parts)
+
+
 def scan_tree_for_tokens(
     directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ".py"
 ) -> list[tuple[pathlib.Path, int]]:
@@ -124,6 +136,12 @@ def scan_tree_for_tokens(
     Factored out so it can be tested against a temporary tree with SYNTHETIC tokens. Testing it
     only against the real package would mean the regression witness depended on a gitignored file,
     and would vanish into a skip in any clone that does not have it.
+
+    IT RECURSES. A non-recursive glob would leave any sub-package silently out of scope: the
+    package has none today, so the scan passed and would have kept passing the day someone added
+    one. That is the by-name exemption again wearing a different hat — an exemption by DEPTH — and
+    the rule is the same, that a scan which cannot see part of what it claims to cover is a scan
+    whose green means less than it appears to.
 
     THE TOKEN IS NOT RETURNED — ITS INDEX IS, AND THE PATH IS RELATIVE.
 
@@ -138,7 +156,8 @@ def scan_tree_for_tokens(
     """
     return [
         (path.relative_to(directory), index)
-        for path in sorted(directory.glob(f"*{suffix}"))
+        for path in sorted(directory.rglob(f"*{suffix}"))
+        if not _skipped(path.relative_to(directory))
         for index, token in enumerate(tokens)
         if token in path.read_text(encoding="utf-8")
     ]

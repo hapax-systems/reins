@@ -286,3 +286,39 @@ def test_a_failing_estate_scan_does_not_print_the_token_it_found(tmp_path) -> No
         "the rendered pytest failure printed the token. The run that detects a leak must not be "
         "the run that publishes it."
     )
+
+
+def test_the_scan_descends_into_sub_packages(tmp_path) -> None:
+    """A NON-RECURSIVE SCAN IS AN EXEMPTION BY DEPTH.
+
+    The package had no sub-directories when this guard was written, so a flat glob passed — and
+    would have kept passing the day someone added one. That is the by-name exemption in a different
+    hat: a scan that cannot see part of what it claims to cover has a green that means less than it
+    looks like. This is the eighth variation on that theme in this change, which is why it gets a
+    test rather than a comment.
+    """
+    nested = tmp_path / "sub" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "hidden.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+    hits = scan_tree_for_tokens(tmp_path, (FAKE,))
+    assert [str(p) for p, _ in hits] == ["sub/deeper/hidden.py"], (
+        "the scan did not descend; a token in a sub-package was invisible to it"
+    )
+
+
+def test_the_scan_skips_caches_and_vendored_trees_but_says_which(tmp_path) -> None:
+    """The skip list is by NAME and enumerable, so nothing is skipped silently.
+
+    A depth limit or a bare exclusion would be the same silent narrowing the recursion just fixed.
+    These are directories that are not the estate's source at all; a token inside a virtualenv is
+    the dependency's business, and scanning them would bury real findings in noise.
+    """
+    for directory in ("__pycache__", ".venv", "node_modules"):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / "vendored.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+    (tmp_path / "real.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+
+    hits = scan_tree_for_tokens(tmp_path, (FAKE,))
+    assert [str(p) for p, _ in hits] == ["real.py"], (
+        f"expected only the source file; got {sorted(str(p) for p, _ in hits)}"
+    )

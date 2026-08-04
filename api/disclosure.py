@@ -119,9 +119,10 @@ class DisclosureError(RuntimeError):
     """Refusal to transmit, carrying a kernel `Refusal` so any surface can project it.
 
     A refusal is DATA, not a message: it names the gate, says why, and states a legal next move, so
-    a caller can render it, log it, or act on it without parsing prose. (The estate tracks this as
-    requirement RX.1; a stranger needs only the property, which is why it is spelled out here
-    rather than left as a reference to a document they do not have.)
+    a caller can render it, log it, or act on it without parsing prose. An earlier version stated
+    this by citing an internal requirement number, which means nothing to a stranger holding the
+    code and not the register it refers to. The property is written out instead — a portable module
+    that can only be understood alongside private documents is not portable.
     """
 
     def __init__(self, refusal: Refusal) -> None:
