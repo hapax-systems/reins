@@ -40,7 +40,7 @@ PERSONAL = "Operator telos: family, ADHD and autism, mortality planning.\n"
 CREDENTIAL = "token: sk-NOTAREALKEY-testfixture-0000\n"  # gitleaks:allow
 
 
-def test_the_incident_is_refused(tmp_path) -> None:
+def test_the_incident_is_refused() -> None:
     """THE CASE THIS EXISTS FOR.
 
     On 2026-08-04 a document containing operator health and mortality content was pushed to a
@@ -57,7 +57,7 @@ def test_the_incident_is_refused(tmp_path) -> None:
     assert "not reversible" in r.why, "the operator must be told deletion does not unpublish"
 
 
-def test_the_same_payload_to_a_permitted_destination_passes(tmp_path) -> None:
+def test_the_same_payload_to_a_permitted_destination_passes() -> None:
     """The guard must not simply forbid everything; it decides against a DESTINATION."""
     v = assert_transmittable(
         PERSONAL,
@@ -159,6 +159,25 @@ def test_a_pattern_that_does_not_compile_is_named_by_position_not_by_content() -
         PatternSet(patterns={Sensitivity.CREDENTIAL: (literal,)})
     assert "index 0" in str(exc.value)
     assert "zzq-secret" not in str(exc.value), "the failing pattern leaked into the exception"
+
+    # THE WHOLE CHAIN, not just the message. Found by two reviewers on the second pass: the first
+    # fix produced a clean message and then chained `from exc`, and `re.error.pattern` holds the
+    # full pattern. `str(re.error)` does NOT contain it and neither does a default traceback, which
+    # is what made it easy to miss -- but the object stays reachable as `err.__cause__.pattern`,
+    # and Sentry, pytest --showlocals and rich tracebacks all print attributes.
+    #
+    # So the assertion is over every exception reachable from the one raised, not over its text.
+    seen, err = [], exc.value
+    while err is not None:
+        seen.append(err)
+        err = err.__cause__ or err.__context__
+    for link in seen:
+        assert "zzq-secret" not in repr(vars(link) if hasattr(link, "__dict__") else {}), (
+            "an exception in the chain carries the pattern in its attributes"
+        )
+        assert "zzq-secret" not in repr(getattr(link, "pattern", "")), (
+            "the failing regex is still reachable through the exception chain"
+        )
 
 
 def test_an_empty_findings_tuple_yields_public_as_a_boundary_in_its_own_right() -> None:

@@ -139,18 +139,36 @@ class PatternSet:
                     f"{', '.join(s.value for s in Sensitivity)}"
                 )
             for index, p in enumerate(pats):
+                # THE RAISE IS OUTSIDE THE `except` BLOCK, DELIBERATELY.
+                #
+                # `re.error` carries the FULL PATTERN on its `.pattern` attribute, and an estate's
+                # patterns are often literal secrets. Two weaker versions of this were caught in
+                # review, in order:
+                #
+                #   `raise ... from exc`  -- keeps the re.error as `err.__cause__`.
+                #   `raise ... from None` -- suppresses only the DISPLAY. `__suppress_context__`
+                #                            is set, but `err.__context__` still references the
+                #                            re.error, so `err.__context__.pattern` still reads it.
+                #
+                # Both leave the object reachable to anything that walks the chain and prints
+                # attributes: Sentry, pytest --showlocals, rich tracebacks, a custom handler. The
+                # default traceback shows none of it, which is what made this easy to miss twice.
+                #
+                # Raising after the handler has exited means there is no exception being handled,
+                # so no context is attached and no reference survives. Only the clean message text
+                # crosses the boundary; the caller holds the pattern list, so a position is enough.
+                why: str | None = None
                 try:
                     re.compile(p)
                 except re.error as exc:
-                    #: The pattern is NOT quoted: an estate's patterns are often literal secrets,
-                    #: and an exception message reaches logs and tickets. Position is enough to fix
-                    #: it, since the caller is holding the list.
+                    why = str(exc)
+                if why is not None:
                     raise ValueError(
-                        f"{cls.value}: pattern at index {index} does not compile ({exc}). "
+                        f"{cls.value}: pattern at index {index} does not compile ({why}). "
                         f"A pattern that does not compile matches nothing, which would make this "
                         f"guard silently pass everything in that class. Correct the regex at that "
                         f"position, or remove it and let the class report as unscanned."
-                    ) from exc
+                    )
 
     @property
     def covered(self) -> frozenset[Sensitivity]:
