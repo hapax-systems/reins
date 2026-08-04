@@ -354,6 +354,24 @@ def test_the_scan_descends_into_sub_packages(tmp_path) -> None:
     )
 
 
+def test_an_unenumerated_dot_directory_is_scanned_not_assumed_uninteresting(tmp_path) -> None:
+    """`.github/` holds workflows that can name a host, and a blanket dot rule hid it.
+
+    Two blanket `startswith(".")` rules were removed in turn, each found by review: one over every
+    path part (hiding dotFILES, where secrets live) and one over the directory parts (hiding
+    `.github/`, inside a scan that promised the whole package). Caches are enumerated instead, so a
+    dot-directory nobody listed is SCANNED. A false positive costs a line in a skip list; a false
+    negative costs a disclosure.
+    """
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(f"runs-on: {FAKE}\n", encoding="utf-8")
+
+    assert [str(p) for p, _ in scan_tree_for_tokens(tmp_path, (FAKE,))] == [
+        ".github/workflows/ci.yml"
+    ]
+
+
 def test_the_scan_skips_caches_and_vendored_trees_but_says_which(tmp_path) -> None:
     """The skip list is by NAME and enumerable, so nothing is skipped silently.
 

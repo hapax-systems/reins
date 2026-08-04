@@ -133,7 +133,30 @@ SUBSTRATE_TOKENS: tuple[str, ...] = ("council_root", "hapax-council")
 #: Directories that are not the estate's source: caches, virtualenvs, vendored trees. Excluded by
 #: NAME rather than by a depth limit, so the exclusion is legible and enumerable — the point of the
 #: recursion is that nothing is skipped silently, and a skip list you can read is not a silent one.
-_NOT_SOURCE = frozenset({"__pycache__", "node_modules", "site-packages", "build", "dist"})
+#:
+#: DOT-DIRECTORIES ARE ENUMERATED, NOT MATCHED BY PREFIX. An earlier version skipped anything
+#: beginning with a dot, which was the blanket rule this very comment argues against, sitting one
+#: line below it: `.github/` holds workflows that can name a host, and it was silently outside a
+#: scan that promised the whole package. The rule now lists the caches by name, so a dot-directory
+#: nobody enumerated is SCANNED rather than assumed uninteresting — the fail-closed direction.
+_NOT_SOURCE = frozenset(
+    {
+        "__pycache__",
+        "node_modules",
+        "site-packages",
+        "build",
+        "dist",
+        ".git",
+        ".venv",
+        "venv",
+        ".tox",
+        ".nox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".hypothesis",
+    }
+)
 
 
 def _readable_file(path: pathlib.Path, root: pathlib.Path) -> bool:
@@ -195,15 +218,21 @@ def _text_of(path: pathlib.Path) -> str:
 
 
 def _skipped(relative: pathlib.Path) -> bool:
-    """True for caches and vendored trees. DOTFILES ARE NOT SKIPPED — only dot-DIRECTORIES.
+    """True only for a path inside an ENUMERATED non-source directory.
 
-    An earlier version tested `part.startswith(".")` over every part including the filename, so a
-    dotfile shipped in the package was invisible to the scan. Dotfiles are exactly where secrets
-    tend to live, which makes that the worst possible place to be blind.
+    Two blanket rules were removed from here, in order, both found by review:
+
+      `part.startswith(".")` over EVERY part, filename included — so a dotfile shipped in the
+      package was invisible, and dotfiles are exactly where secrets live.
+
+      `part.startswith(".")` over the directory parts — so `.github/`, which holds workflows that
+      can name a host, sat outside a scan that promised the whole package.
+
+    Caches are listed by name instead. A dot-directory nobody thought to enumerate is now SCANNED
+    rather than assumed uninteresting, which is the fail-closed direction: a false positive costs a
+    line in a skip list, a false negative costs a disclosure.
     """
-    return any(
-        part in _NOT_SOURCE or part.startswith(".") for part in relative.parts[:-1]
-    ) or relative.parts[-1] in _NOT_SOURCE
+    return any(part in _NOT_SOURCE for part in relative.parts)
 
 
 def scan_tree_for_tokens(

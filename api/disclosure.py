@@ -8,6 +8,11 @@ ledger, and the classification is correct:
     "pii-consent-scanner": R0.10 — installed by `install`, its patterns by `ratify`. Mandatory
     before the first model call (a MEASURED_PROBE precondition), which is later than K0.
 
+Re-derive both the exclusion and the pin rather than trusting this comment:
+
+    python -c "from k0.manifest import EXCLUDED, RATIFIED_PIN; \
+               print(EXCLUDED['pii-consent-scanner']); print(RATIFIED_PIN)"
+
 A scanner is installable; it is not presupposed by every bootstrap act. So it lives here, outside
 `k0/`, as ordinary code that DEPENDS on the kernel (it raises a kernel `Refusal`) rather than
 being part of it. The first draft of this module was written into `k0/` under a heading arguing
