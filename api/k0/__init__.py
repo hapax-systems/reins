@@ -20,6 +20,31 @@ host_floor.py declares the kernel's OS-dependency floor as DATA (R1.4), so a str
 what is required instead of discovering it by failing.
 
 Estate-independent by construction: stdlib only, no paths, no host names, no operator identity.
+
+## Rechecking every claim on this page
+
+Each line above asserts something a reader would otherwise have to take on trust. None of it is
+self-evident from the source, and a docstring that ages into a lie is worse than no docstring — so
+each claim carries the command that re-establishes it, runnable from `api/`:
+
+  BUILT, and the manifest agrees with the files
+    uv run --with pytest pytest k0/ -q
+
+  membership and the drift pin are the RATIFIED ones (fails if either moved)
+    uv run python -c "import k0; print(len(k0.K0.members), k0.K0_DRIFT_PIN == k0.RATIFIED_PIN)"
+
+  ceremony progress really is DERIVED (no cursor field exists to desynchronise)
+    uv run python -c "import k0.ratification as r; print(r.pending.__doc__)"
+
+  estate-independence, over the whole package, exempting nothing
+    uv run --with pytest pytest k0/test_k0.py -q -k estate_independent
+
+  the export list agrees with the module in BOTH directions
+    uv run --with pytest pytest k0/test_k0.py -q -k all_agrees
+
+The estate-independence scan needs the token file described in `api/conftest.py`; without it the
+test SKIPS rather than passing, so a green run on a stranger's checkout is not evidence the scan
+ran. `pytest -rs` shows the skip reason.
 """
 
 from .fail_closed import Evaluation, decide, evaluate_optional

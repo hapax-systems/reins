@@ -236,7 +236,9 @@ def artifact_digest(receipt: BootstrapReceipt) -> str | None:
     None means "the row does not name exactly one artifact", which callers must treat as
     unverifiable rather than as permission.
     """
-    refs = [r for r in receipt.payload_refs if r.startswith(f"{STIPULATION_REF_SCHEME}:")]
+    refs = [
+        r for r in receipt.payload_refs if r.startswith(f"{STIPULATION_REF_SCHEME}:")
+    ]
     if len(refs) != 1:
         return None
     return refs[0].rsplit(":", 1)[-1]
@@ -460,7 +462,10 @@ def verify_ratifications(
         # diagnostic, NOT a control — nothing downstream may treat its presence as protection.
         if not sig_path.is_file():
             unverified.append(
-                (sid, f"the chain claims a ratification but its signature is missing at {sig_path}")
+                (
+                    sid,
+                    f"the chain claims a ratification but its signature is missing at {sig_path}",
+                )
             )
             continue
         # The stipulation ref is checked for SHAPE — exactly one — and its digest is deliberately
@@ -472,7 +477,9 @@ def verify_ratifications(
         # Callers that store the artifact SEPARATELY from the signed payload do need it — see
         # `artifact_digest` below and its use in degradation._body_for.
         if artifact_digest(receipt) is None:
-            unverified.append((sid, "the ratified row does not reference exactly one stipulation"))
+            unverified.append(
+                (sid, "the ratified row does not reference exactly one stipulation")
+            )
             continue
         # THE SIGNED BYTES ARE STORED, NOT RECONSTRUCTED. A receipt carries refs, never values, so
         # the subject is not in the chain — and the signature was made over a payload that includes
@@ -488,13 +495,22 @@ def verify_ratifications(
         payload_path = root / SIGNATURE_DIRNAME / f"{sid}.payload"
         if not payload_path.is_file():
             unverified.append(
-                (sid, f"the ratified bytes are missing at {payload_path}; the signature cannot be checked against anything")
+                (
+                    sid,
+                    f"the ratified bytes are missing at {payload_path}; the signature cannot be checked against anything",
+                )
             )
             continue
         payload = payload_path.read_bytes()
-        byte_refs = [r for r in receipt.payload_refs if r.startswith(f"{RATIFIED_BYTES_REF_SCHEME}:")]
+        byte_refs = [
+            r
+            for r in receipt.payload_refs
+            if r.startswith(f"{RATIFIED_BYTES_REF_SCHEME}:")
+        ]
         if len(byte_refs) != 1:
-            unverified.append((sid, "the ratified row does not pin the exact signed bytes"))
+            unverified.append(
+                (sid, "the ratified row does not pin the exact signed bytes")
+            )
             continue
         pinned_bytes = byte_refs[0].rsplit(":", 1)[-1]
         actual = hashlib.sha256(payload).hexdigest()

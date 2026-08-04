@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from bootstrap_receipt import append_receipt, genesis_self_attest
+from k0 import degradation as deg
 from k0.degradation import (
     Degradation,
     DegradationError,
@@ -30,12 +33,24 @@ KERNEL = "k0-test"
 def _keypair(tmp_path: Path) -> Path:
     key = tmp_path / "ratifier_ed25519"
     subprocess.run(
-        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "ratifier@test", "-f", str(key)],
+        [
+            "ssh-keygen",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "ratifier@test",
+            "-f",
+            str(key),
+        ],
         check=True,
         capture_output=True,
     )
     write_allowed_signers(
-        tmp_path / "allowed_signers", "ratifier@test", key.with_suffix(".pub").read_text().strip()
+        tmp_path / "allowed_signers",
+        "ratifier@test",
+        key.with_suffix(".pub").read_text().strip(),
     )
     return key
 
@@ -69,7 +84,9 @@ REVIEW_FLOOR = Degradation(
 )
 
 
-def test_a_degradation_is_not_in_effect_until_the_sovereign_consents(tmp_path: Path) -> None:
+def test_a_degradation_is_not_in_effect_until_the_sovereign_consents(
+    tmp_path: Path,
+) -> None:
     """Declaring is asking. Only ratification puts the estate into a degraded mode.
 
     This is the difference between a system that notices it is degraded and a system that has been
@@ -78,7 +95,9 @@ def test_a_degradation_is_not_in_effect_until_the_sovereign_consents(tmp_path: P
     root = _root(tmp_path)
     key = _keypair(tmp_path)
     declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
-    assert state(root) == {}, "a declared-but-unratified degradation must not be in effect"
+    assert state(root) == {}, (
+        "a declared-but-unratified degradation must not be in effect"
+    )
 
     accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     assert "review-floor" in state(root)
@@ -89,11 +108,19 @@ def test_a_degradation_must_state_its_cost_and_its_exit(tmp_path: Path) -> None:
     """An unnamed loss cannot be consented to; an unliftable degradation is a dead end."""
     with pytest.raises(ValueError, match="TRADE-OFF"):
         Degradation(
-            subject="x", level=Lifecycle.DEGRADED, why="w", tradeoff="  ", lift_condition="l"
+            subject="x",
+            level=Lifecycle.DEGRADED,
+            why="w",
+            tradeoff="  ",
+            lift_condition="l",
         )
     with pytest.raises(ValueError, match="LIFT CONDITION"):
         Degradation(
-            subject="x", level=Lifecycle.DEGRADED, why="w", tradeoff="t", lift_condition="   "
+            subject="x",
+            level=Lifecycle.DEGRADED,
+            why="w",
+            tradeoff="t",
+            lift_condition="   ",
         )
     with pytest.raises(ValueError, match="FULL is not a degradation"):
         Degradation(
@@ -110,7 +137,13 @@ def test_nothing_decays_back_to_full(tmp_path: Path) -> None:
     root = _root(tmp_path)
     key = _keypair(tmp_path)
     long_ago = datetime.now(UTC) - timedelta(days=300)
-    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL, observed_at=long_ago)
+    declare(
+        root,
+        REVIEW_FLOOR,
+        estate_id=ESTATE,
+        kernel_version=KERNEL,
+        observed_at=long_ago,
+    )
     accept(
         root,
         REVIEW_FLOOR,
@@ -134,7 +167,12 @@ def test_a_lift_is_itself_consented_and_requires_evidence(tmp_path: Path) -> Non
 
     with pytest.raises(DegradationError) as exc:
         lift(
-            root, "review-floor", evidence="  ", key_path=key, estate_id=ESTATE, kernel_version=KERNEL
+            root,
+            "review-floor",
+            evidence="  ",
+            key_path=key,
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
         )
     assert exc.value.refusal is not None and exc.value.refusal.legal_next
 
@@ -153,7 +191,14 @@ def test_lifting_something_that_is_not_degraded_is_refused(tmp_path: Path) -> No
     root = _root(tmp_path)
     key = _keypair(tmp_path)
     with pytest.raises(DegradationError):
-        lift(root, "nothing", evidence="e", key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+        lift(
+            root,
+            "nothing",
+            evidence="e",
+            key_path=key,
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+        )
 
 
 def test_a_re_degradation_after_a_lift_is_in_effect(tmp_path: Path) -> None:
@@ -234,12 +279,17 @@ def test_a_body_that_is_not_the_pinned_artifact_is_refused(tmp_path: Path) -> No
 
 
 def test_the_lattice_is_ordered_as_data(tmp_path: Path) -> None:
-    assert rank(Lifecycle.FULL) < rank(Lifecycle.DEGRADED) < rank(Lifecycle.HELD) < rank(
-        Lifecycle.REFUSED
+    assert (
+        rank(Lifecycle.FULL)
+        < rank(Lifecycle.DEGRADED)
+        < rank(Lifecycle.HELD)
+        < rank(Lifecycle.REFUSED)
     )
 
 
-def test_a_body_present_without_ratification_still_does_not_take_effect(tmp_path: Path) -> None:
+def test_a_body_present_without_ratification_still_does_not_take_effect(
+    tmp_path: Path,
+) -> None:
     """The RATIFIED check must be load-bearing, not incidental.
 
     Found by mutation testing: deleting the `act is RATIFIED` guard in state() survived the whole
@@ -267,7 +317,9 @@ def test_a_body_present_without_ratification_still_does_not_take_effect(tmp_path
     )
 
 
-def test_a_ratified_body_edited_after_consent_is_refused_not_reported(tmp_path: Path) -> None:
+def test_a_ratified_body_edited_after_consent_is_refused_not_reported(
+    tmp_path: Path,
+) -> None:
     """THE LEDGER MUST NOT PROVE CONSENT WAS GIVEN WHILE LYING ABOUT WHAT IT WAS GIVEN TO.
 
     `_accept_body` hashes the artifact at WRITE time against the digest the chain pins. Until this
@@ -284,7 +336,9 @@ def test_a_ratified_body_edited_after_consent_is_refused_not_reported(tmp_path: 
     key = _keypair(tmp_path)
     declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
     accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
-    assert "review-floor" in state(root), "fixture precondition: it must be in effect first"
+    assert "review-floor" in state(root), (
+        "fixture precondition: it must be in effect first"
+    )
 
     # THE TAMPER LEAVES A STRUCTURALLY VALID DEGRADATION, deliberately.
     #
@@ -302,11 +356,13 @@ def test_a_ratified_body_edited_after_consent_is_refused_not_reported(tmp_path: 
 
     with pytest.raises(DegradationError, match="changed after consent") as exc:
         state(root)
-    assert REVIEW_FLOOR.stipulation_id() in str(exc.value), "the refusal must name the artifact"
+    assert REVIEW_FLOOR.stipulation_id() in str(exc.value), (
+        "the refusal must name the artifact"
+    )
 
 
 def test_a_ratified_row_that_pins_no_artifact_is_refused(tmp_path: Path) -> None:
-    """"The row names no artifact" is not "the artifact is fine".
+    """ "The row names no artifact" is not "the artifact is fine".
 
     An unpinnable body cannot be checked, and an uncheckable degradation must not be reported as
     current state — the same rule as an unscanned class not being a clean one.
@@ -320,3 +376,99 @@ def test_a_ratified_row_that_pins_no_artifact_is_refused(tmp_path: Path) -> None
 
     with pytest.raises(DegradationError, match="pins no artifact digest"):
         deg._body_for(root, REVIEW_FLOOR.stipulation_id(), digest=None)
+
+
+def test_deleting_a_ratified_body_does_not_clear_the_deficit(tmp_path: Path) -> None:
+    """THE CRITICAL: a ratified degradation whose body is deleted must not read as FULL.
+
+    `state()` skips a subject whose body resolves to None, so tolerating a missing file made
+    deleting the artifact the most effective way to clear a deficit — the estate reports itself
+    healthy precisely BECAUSE its record of being unhealthy is gone. That is the same
+    absence-into-zero the digest check closes, one cell over: an earlier revision of `_body_for`
+    reasoned correctly about the mismatch case and then tolerated deletion unconditionally, on the
+    ground that "an old chain is not a corrupt one". True — but only of a row that pins no digest.
+    A row that pins one asserts the artifact EXISTS, and against that assertion absence is deletion.
+
+    This asserts at the `state()` level deliberately. `_body_for` returning a refusal is the
+    mechanism; "the estate does not report FULL" is the property, and only the caller shows it.
+    """
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert "review-floor" in state(root), (
+        "fixture precondition: it must be in effect first"
+    )
+
+    (root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body").unlink()
+
+    with pytest.raises(DegradationError, match="no body is stored") as exc:
+        state(root)
+    assert REVIEW_FLOOR.stipulation_id() in str(exc.value), (
+        "the refusal must name the artifact"
+    )
+
+
+def _delete(path: Path) -> tuple[str, str]:
+    """Return (digest to pin, expected refusal). The pinned digest is never reached."""
+    path.unlink()
+    return "0" * 64, "no body is stored"
+
+
+def _make_unreadable(path: Path) -> tuple[str, str]:
+    path.chmod(0o000)
+    return "0" * 64, "could not be read"
+
+
+def _replace_with_undecodable_bytes(path: Path) -> tuple[str, str]:
+    """Bytes that hash fine and parse badly.
+
+    The digest check runs first, so reaching the parse branch requires the pinned digest to be the
+    hash OF THE CORRUPT BYTES — i.e. the operator consented to something unusable. Passing the real
+    pinned digest here would be caught as a mismatch, and a test claiming to cover the parse branch
+    would never have entered it.
+    """
+    raw = b"\xff\xfe not json at all"
+    path.write_bytes(raw)
+    return hashlib.sha256(raw).hexdigest(), "not decodable JSON"
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [_delete, _make_unreadable, _replace_with_undecodable_bytes],
+    ids=["deleted", "unreadable", "undecodable"],
+)
+def test_every_unreadable_body_refuses_and_carries_a_legal_next_move(
+    tmp_path: Path,
+    corrupt: Callable[[Path], tuple[str, str]],
+) -> None:
+    """A CLAIMED-BUT-UNREADABLE artifact refuses on every route, never resolving to "no deficit".
+
+    The parametrisation is the point. An earlier version covered deletion alone, and "one vector
+    refuses" says nothing about the others — the same existential-for-universal error that let one
+    verified regex stand in for all six. Each vector here fails at a different statement.
+
+    Each refusal must also carry a legal next move (INV-3): "your ledger is corrupt" with no route
+    out is a dead end, and the operator meets these at the moment they can least afford to guess.
+    """
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    body_path = root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body"
+    digest, expected = corrupt(body_path)
+
+    try:
+        with pytest.raises(DegradationError, match=expected) as exc:
+            deg._body_for(root, REVIEW_FLOOR.stipulation_id(), digest=digest)
+        refusal = exc.value.refusal
+        assert refusal is not None, "a refusal must be data, not only a message (INV-3)"
+        assert refusal.legal_next.strip(), "an empty next move teaches nothing"
+        assert refusal.gate == "degradation.body-integrity", (
+            "a refusal must name its gate"
+        )
+    finally:
+        # Restore read permission or tmp_path teardown fails on the 0o000 case.
+        if body_path.exists():
+            body_path.chmod(0o600)

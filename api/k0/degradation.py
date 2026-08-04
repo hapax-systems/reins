@@ -53,6 +53,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from bootstrap_receipt import BootstrapAct, load_chain
+
 from .ratification import (
     RatificationError,
     Stipulation,
@@ -377,42 +378,90 @@ def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict | 
     to, while the chain still said `ratified` and still pointed at the old digest. The ledger would
     have proved that consent was given, and lied about what it was given to. Found in review.
 
-    ABSENT IS TOLERATED; PRESENT-AND-WRONG IS NOT.
+    WHETHER THE ROW PINS A DIGEST IS THE WHOLE DISCRIMINATOR. An earlier revision tolerated a
+    missing body unconditionally, on the reasoning that "an old chain is not a corrupt one" — true,
+    but only of a row that claims no artifact. A row that PINS one is asserting that an artifact
+    exists; against that assertion, a missing file is a DELETION. Tolerating it let `state()` skip
+    the subject, and a degradation deleted from disk read as FULL — the same absence-into-zero this
+    function was written to close, one cell over in the matrix. Both found in review.
 
-      no body file      -> None. An old chain is not a corrupt one, and a ledger predating this
-                           module has nothing to verify.
-      unreadable/       -> None, for the same reason: nothing here claims to be the artifact.
-      not JSON
-      digest mismatch   -> RAISES. This is the tampering case, and returning None would drop the
-                           subject from `state()` — making a silently-edited degradation read as
-                           FULL. A corrupted deficit must never resolve to "no deficit"; that is
-                           absence-into-zero pointed at the worst possible answer.
-      no pinned digest  -> RAISES. "The row names no artifact" is not "the artifact is fine".
+      digest is None, no body   -> None. Nothing was claimed and nothing is here; a ledger
+                                   predating this module has nothing to verify.
+      digest is None, body      -> REFUSES. "The row names no artifact" is not "the artifact
+                                   is fine": what was consented to cannot be established.
+      digest pinned, no body    -> REFUSES. The row claims an artifact that is gone.
+      digest pinned, unreadable -> REFUSES. Claimed, present, and unverifiable is not "absent".
+      digest mismatch           -> REFUSES. The tampering case.
+      digest matches, not JSON  -> REFUSES. The consented bytes are themselves unusable; the
+                                   deficit is real and cannot be rendered.
+
+    EVERY REFUSAL HERE IS A DEFICIT THAT CANNOT BE READ, AND NONE OF THEM MAY RESOLVE TO "no
+    deficit". A corrupted degradation must never resolve to FULL, because that is the one wrong
+    answer the operator cannot detect by looking.
     """
     path = root / "ratifications" / f"{stipulation_id}.body"
-    if not path.is_file():
-        return None
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
+    gate = "degradation.body-integrity"
     if digest is None:
+        if not path.is_file():
+            return None
         raise DegradationError(
             f"{stipulation_id}: a body is stored but the ratified row pins no artifact digest, so "
-            f"what was consented to cannot be established. Refusing to report it as current state."
+            f"what was consented to cannot be established.",
+            Refusal(
+                gate=gate,
+                why="a stored body with no pinned digest cannot be tied to what was consented to",
+                legal_next=(
+                    "re-ratify the subject so the chain pins the digest of the body it consents "
+                    "to, or remove the unpinned body if it was never consented to"
+                ),
+            ),
         )
-    actual = hashlib.sha256(raw).hexdigest()
-    if actual != digest:
-        raise DegradationError(
-            f"{stipulation_id}: the stored body hashes to {actual[:12]}… but the chain pins "
-            f"{digest[:12]}… — the artifact changed after consent. The ledger can prove consent "
-            f"was given and not what it was given to, so this refuses rather than reporting a "
-            f"degradation the operator never accepted."
-        )
+    # THE ROW PINS AN ARTIFACT. From here, every failure is corruption rather than antiquity.
     try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return None
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        reason = "the ratified row pins an artifact digest but no body is stored"
+        fix = (
+            "restore the consented body from backup, or post a fresh degradation if the deficit "
+            "still holds — a ratified deficit cannot be retired by deleting its artifact"
+        )
+    except OSError as exc:
+        # `strerror` only. `str(exc)` and the traceback chain both carry `filename`, which is an
+        # absolute estate path — K0 must be readable by a stranger, so the reason is raised OUTSIDE
+        # this handler rather than `from exc` (which retains `__context__` even when display is
+        # suppressed).
+        reason = f"the pinned artifact could not be read ({exc.strerror})"
+        fix = "restore read access to the ratifications directory, then re-run"
+    else:
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != digest:
+            raise DegradationError(
+                f"{stipulation_id}: the stored body hashes to {actual[:12]}… but the chain pins "
+                f"{digest[:12]}… — the artifact changed after consent. The ledger can prove consent "
+                f"was given and not what it was given to, so this refuses rather than reporting a "
+                f"degradation the operator never accepted.",
+                Refusal(
+                    gate=gate,
+                    why="the stored body is not the artifact the operator ratified",
+                    legal_next=(
+                        "restore the body whose sha256 is the pinned digest, or ratify a new "
+                        "degradation carrying the changed terms — the edit itself is never consent"
+                    ),
+                ),
+            )
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            reason = "the consented artifact is not decodable JSON"
+            fix = (
+                "restore the body from backup; the chain consents to these exact bytes, so they "
+                "cannot be rewritten into valid JSON without a fresh ratification"
+            )
+    raise DegradationError(
+        f"{stipulation_id}: {reason}. Refusing to report the estate as healthier than its ledger "
+        f"can establish.",
+        Refusal(gate=gate, why=reason, legal_next=fix),
+    )
 
 
 def render(root: Path) -> tuple[str, ...]:

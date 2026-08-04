@@ -51,13 +51,25 @@ def _keypair(tmp_path: Path) -> tuple[Path, Path, str]:
     remove."""
     key = tmp_path / "ratifier_ed25519"
     subprocess.run(
-        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "ratifier@test", "-f", str(key)],
+        [
+            "ssh-keygen",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "ratifier@test",
+            "-f",
+            str(key),
+        ],
         check=True,
         capture_output=True,
     )
     principal = "ratifier@test"
     allowed = tmp_path / "allowed_signers"
-    write_allowed_signers(allowed, principal, (key.with_suffix(".pub")).read_text().strip())
+    write_allowed_signers(
+        allowed, principal, (key.with_suffix(".pub")).read_text().strip()
+    )
     return key, allowed, principal
 
 
@@ -93,7 +105,9 @@ def test_ratifying_lands_a_verifiable_act(tmp_path: Path) -> None:
     s = _stip()
 
     propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
-    assert pending(root) == ("axioms.v1",), "a proposed stipulation must show as pending"
+    assert pending(root) == ("axioms.v1",), (
+        "a proposed stipulation must show as pending"
+    )
 
     ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     assert pending(root) == (), "a ratified stipulation is no longer pending"
@@ -101,7 +115,9 @@ def test_ratifying_lands_a_verifiable_act(tmp_path: Path) -> None:
     verdict = verify_ratifications(
         root, allowed_signers=allowed, principal=principal, scratch_dir=tmp_path
     )
-    assert verdict.ok, f"a ratification we just performed did not verify: {verdict.unverified}"
+    assert verdict.ok, (
+        f"a ratification we just performed did not verify: {verdict.unverified}"
+    )
     assert verdict.verified == ("axioms.v1",)
 
     acts = [r.act for r in load_chain(root)]
@@ -115,7 +131,9 @@ def test_a_ratification_cannot_be_invented_without_a_proposal(tmp_path: Path) ->
     key, _, _ = _keypair(tmp_path)
     with pytest.raises(RatificationError) as exc:
         ratify(root, _stip(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
-    assert exc.value.refusal is not None, "a governance refusal must be data, not a bare message"
+    assert exc.value.refusal is not None, (
+        "a governance refusal must be data, not a bare message"
+    )
     assert exc.value.refusal.legal_next, "INV-3: every refusal leaves a legal next move"
 
 
@@ -141,12 +159,16 @@ def test_tampering_with_the_ratified_bytes_is_detected(tmp_path: Path) -> None:
     ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
 
     payload = root / "ratifications" / "axioms.v1.payload"
-    payload.write_bytes(b"axioms.v1\nsomething the operator never saw\n" + b"0" * 64 + b"\n")
+    payload.write_bytes(
+        b"axioms.v1\nsomething the operator never saw\n" + b"0" * 64 + b"\n"
+    )
 
     verdict = verify_ratifications(
         root, allowed_signers=allowed, principal=principal, scratch_dir=tmp_path
     )
-    assert not verdict.ok, "altered ratified bytes verified clean — a false green on consent"
+    assert not verdict.ok, (
+        "altered ratified bytes verified clean — a false green on consent"
+    )
     assert "axioms.v1" in dict(verdict.unverified)
 
 
@@ -162,7 +184,9 @@ def test_a_missing_signature_is_not_a_pass(tmp_path: Path) -> None:
     verdict = verify_ratifications(
         root, allowed_signers=allowed, principal=principal, scratch_dir=tmp_path
     )
-    assert not verdict.ok, "a missing signature must never read as a verified ratification"
+    assert not verdict.ok, (
+        "a missing signature must never read as a verified ratification"
+    )
 
 
 def test_history_verifies_at_the_moment_consent_was_given(tmp_path: Path) -> None:
@@ -179,7 +203,9 @@ def test_history_verifies_at_the_moment_consent_was_given(tmp_path: Path) -> Non
     s = _stip()
     past = datetime.now(UTC) - timedelta(days=120)
     propose(root, s, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past)
-    ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past)
+    ratify(
+        root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past
+    )
 
     verdict = verify_ratifications(
         root, allowed_signers=allowed, principal=principal, scratch_dir=tmp_path
@@ -217,7 +243,9 @@ def test_pending_is_derived_and_survives_a_copied_chain(tmp_path: Path) -> None:
     )
 
 
-def test_an_unreadable_chain_refuses_rather_than_reading_as_empty(tmp_path: Path) -> None:
+def test_an_unreadable_chain_refuses_rather_than_reading_as_empty(
+    tmp_path: Path,
+) -> None:
     """FAIL-CLOSED. A chain we cannot parse is not a chain with nothing in it.
 
     Treating it as empty would let a ratified stipulation reappear as pending and be consented to
@@ -256,7 +284,9 @@ def test_receipts_never_carry_the_signature_itself(tmp_path: Path) -> None:
     raw = (root / "bootstrap-receipts.jsonl").read_text(encoding="utf-8")
     body = signature.replace("-----BEGIN SSH SIGNATURE-----", "").strip().splitlines()
     assert body, "fixture precondition: the signature has content"
-    assert body[0] not in raw, "the signature leaked into the receipt chain; receipts carry refs"
+    assert body[0] not in raw, (
+        "the signature leaked into the receipt chain; receipts carry refs"
+    )
 
 
 def test_a_ratification_never_grants_authority(tmp_path: Path) -> None:
@@ -280,7 +310,11 @@ def test_signing_failure_leaves_the_stipulation_pending(tmp_path: Path) -> None:
     propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
     with pytest.raises(RatificationError):
         ratify(
-            root, s, key_path=tmp_path / "no-such-key", estate_id=ESTATE, kernel_version=KERNEL
+            root,
+            s,
+            key_path=tmp_path / "no-such-key",
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
         )
     assert pending(root) == ("axioms.v1",), (
         "signing failed but the stipulation stopped being pending — the ledger now implies a "
@@ -289,7 +323,9 @@ def test_signing_failure_leaves_the_stipulation_pending(tmp_path: Path) -> None:
     assert not any(r.act is BootstrapAct.RATIFIED for r in load_chain(root))
 
 
-def test_stipulation_digest_is_over_the_artifact_not_the_subject(tmp_path: Path) -> None:
+def test_stipulation_digest_is_over_the_artifact_not_the_subject(
+    tmp_path: Path,
+) -> None:
     """Ratifying a description rather than the artifact is how a ceremony attests to nothing."""
     body = b"the actual bytes"
     s = Stipulation.over("stip.x", "a human-facing description", body)
@@ -318,7 +354,9 @@ def test_a_rotated_key_still_proves_the_ratifications_it_made(tmp_path: Path) ->
     s = _stip()
     past = datetime.now(UTC) - timedelta(days=120)
     propose(root, s, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past)
-    ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past)
+    ratify(
+        root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL, observed_at=past
+    )
 
     # Close the key's window: valid until yesterday, i.e. it can no longer bind anything new.
     write_signers(
@@ -357,7 +395,9 @@ def test_a_rotated_key_still_proves_the_ratifications_it_made(tmp_path: Path) ->
         )
 
 
-def test_a_valid_signature_for_a_different_stipulation_is_refused(tmp_path: Path) -> None:
+def test_a_valid_signature_for_a_different_stipulation_is_refused(
+    tmp_path: Path,
+) -> None:
     """What the signed-bytes pin is actually for.
 
     Corrupting the payload is caught by the signature alone, so the earlier tamper test did not
@@ -377,7 +417,9 @@ def test_a_valid_signature_for_a_different_stipulation_is_refused(tmp_path: Path
     d = root / "ratifications"
     # Move beta's genuine, self-consistent pair onto alpha's slot.
     (d / "stip.alpha.payload").write_bytes((d / "stip.beta.payload").read_bytes())
-    (d / "stip.alpha.sig").write_text((d / "stip.beta.sig").read_text(), encoding="utf-8")
+    (d / "stip.alpha.sig").write_text(
+        (d / "stip.beta.sig").read_text(), encoding="utf-8"
+    )
 
     verdict = verify_ratifications(
         root, allowed_signers=allowed, principal=principal, scratch_dir=tmp_path
@@ -387,10 +429,14 @@ def test_a_valid_signature_for_a_different_stipulation_is_refused(tmp_path: Path
         "a genuine signature over a DIFFERENT stipulation was accepted for this row. The signature "
         "verifies — only the chain's digest pin can catch this, and it did not."
     )
-    assert verdict.verified == ("stip.beta",), "beta's own ratification must still verify"
+    assert verdict.verified == ("stip.beta",), (
+        "beta's own ratification must still verify"
+    )
 
 
-def test_resigning_a_different_subject_over_the_same_artifact_is_refused(tmp_path: Path) -> None:
+def test_resigning_a_different_subject_over_the_same_artifact_is_refused(
+    tmp_path: Path,
+) -> None:
     """The case ONLY the signed-bytes pin can catch — established by mutation testing.
 
     Deleting the byte pin and deleting the artifact-digest binding BOTH survived the suite, because
@@ -410,14 +456,22 @@ def test_resigning_a_different_subject_over_the_same_artifact_is_refused(tmp_pat
     root = _root(tmp_path)
     key, allowed, principal = _keypair(tmp_path)
     artifact = b"the artifact bytes, unchanged throughout"
-    consented = Stipulation.over("stip.subject", "PERMIT: read-only telemetry", artifact)
+    consented = Stipulation.over(
+        "stip.subject", "PERMIT: read-only telemetry", artifact
+    )
     propose(root, consented, estate_id=ESTATE, kernel_version=KERNEL)
     ratify(root, consented, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
 
     # Same id, same artifact digest — different subject. Signed genuinely with the live key.
-    substituted = Stipulation.over("stip.subject", "PERMIT: full estate mutation", artifact)
-    assert substituted.digest == consented.digest, "fixture: the artifact must be unchanged"
-    assert substituted.payload() != consented.payload(), "fixture: the signed bytes must differ"
+    substituted = Stipulation.over(
+        "stip.subject", "PERMIT: full estate mutation", artifact
+    )
+    assert substituted.digest == consented.digest, (
+        "fixture: the artifact must be unchanged"
+    )
+    assert substituted.payload() != consented.payload(), (
+        "fixture: the signed bytes must differ"
+    )
 
     d = root / "ratifications"
     (d / "stip.subject.payload").write_bytes(substituted.payload())
@@ -434,3 +488,90 @@ def test_resigning_a_different_subject_over_the_same_artifact_is_refused(tmp_pat
         "consented bytes can catch this, and it did not."
     )
     assert "stip.subject" in dict(verdict.unverified)
+
+
+def test_proposing_something_already_ratified_is_refused(tmp_path: Path) -> None:
+    """CONSENT IS GIVEN ONCE. A second proposal of a ratified id invites a second consent.
+
+    Both `propose` rejection arms were reachable only through `declare()` in the degradation tests,
+    which exercised them incidentally and asserted nothing about them. "Some caller happens to hit
+    this line" is coverage, not verification: it cannot distinguish a refusal from a silent
+    overwrite, and an overwrite here would let the same act be consented to twice with two
+    different bodies.
+    """
+    root = _root(tmp_path)
+    key, _allowed, _principal = _keypair(tmp_path)
+    s = _stip()
+    propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    with pytest.raises(RatificationError, match="already ratified") as exc:
+        propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+    assert exc.value.refusal is not None, "a refusal must be data, not only a message"
+    assert exc.value.refusal.legal_next.strip(), "INV-3: BLOCKED always escapes"
+    assert exc.value.refusal.gate == "k0.ratification.propose"
+
+
+def test_proposing_something_already_pending_is_refused(tmp_path: Path) -> None:
+    """A duplicate pending row makes the ledger ambiguous about WHICH one was consented to.
+
+    The second arm of the same guard. Testing one and assuming the other is the half-a-pair error
+    that has now recurred often enough in this estate to be worth naming in a test.
+    """
+    root = _root(tmp_path)
+    s = _stip()
+    propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+
+    with pytest.raises(RatificationError, match="already pending") as exc:
+        propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+    assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
+    assert list(pending(root)).count(s.stipulation_id) == 1, (
+        "the refused duplicate still reached the chain — the ledger now shows one act awaiting "
+        "consent twice, and nothing downstream can tell which row the signature answers."
+    )
+
+
+def test_the_stipulation_id_is_recovered_from_payload_refs_when_it_is_not_in_the_ratification_field(
+    tmp_path: Path,
+) -> None:
+    """`_id_of` HAS TWO SOURCES, AND THE SECOND ONE IS THE LOAD-BEARING ONE.
+
+    A ratified row carries the signature ref in `operator_ratification`; a PROPOSED row carries it
+    only in `payload_refs`. Every existing test drove ratified rows, so the fallback branch ran
+    without ever being asserted on — and `pending()` and `state()` both depend on it to tell a
+    proposed row apart from an unrelated one. If the fallback returned "", every proposed row would
+    collapse to the same empty id: `pending` would report nothing outstanding, and the ceremony
+    would look complete because its record of being incomplete was unreadable.
+
+    Asserted at the level of the two receipt shapes rather than through a caller, so the branch is
+    named rather than merely reached.
+    """
+    from k0.ratification import _id_of
+
+    root = _root(tmp_path)
+    key, _allowed, _principal = _keypair(tmp_path)
+    s = _stip()
+
+    propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+    proposed_row = load_chain(root)[-1]
+    assert not proposed_row.operator_ratification, (
+        "fixture premise: a proposed row must NOT carry the signature ref in the ratification "
+        "field, or this test would be exercising the first branch and claiming the second"
+    )
+    assert _id_of(proposed_row) == s.stipulation_id, (
+        "the id was not recovered from payload_refs, so a proposed row is indistinguishable from "
+        "any other — pending() would under-report the ceremony's outstanding work"
+    )
+
+    ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    ratified_row = load_chain(root)[-1]
+    assert ratified_row.operator_ratification, (
+        "fixture premise: this row uses the first branch"
+    )
+    assert _id_of(ratified_row) == s.stipulation_id
+
+    genesis = load_chain(root)[0]
+    assert _id_of(genesis) == "", (
+        "a receipt that is about no stipulation must yield the empty id. Returning something "
+        "truthy would make every unrelated row look like part of the ceremony."
+    )
