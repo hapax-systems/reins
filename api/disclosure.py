@@ -61,8 +61,10 @@ see must not report safety.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 
 from k0.refusal import Refusal
 
@@ -138,7 +140,8 @@ class PatternSet:
     their own; the kernel supplies none, so it can carry no one's secrets.
     """
 
-    patterns: dict[Sensitivity, tuple[str, ...]] = field(default_factory=dict)
+    #: Accepted as any mapping; STORED as an immutable copy. See __post_init__.
+    patterns: Mapping[Sensitivity, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for cls, pats in self.patterns.items():
@@ -221,6 +224,23 @@ class PatternSet:
                         f"class. Correct the regex at that index, or remove it and let the class "
                         f"report as unscanned."
                     )
+
+        # FREEZE THE CONTENTS, NOT JUST THE ATTRIBUTE.
+        #
+        # `frozen=True` stops `self.patterns = ...`; it does nothing about mutating the dict it
+        # points at. Two ways a caller bypassed every check above, both measured:
+        #
+        #   ps.patterns[Sensitivity.OPERATOR_PII] = ("([unclosed",)   direct mutation
+        #   d = {...}; ps = PatternSet(patterns=d); d[...] = ...      aliasing the caller's dict
+        #
+        # Either one puts an unvalidated -- possibly uncompilable -- pattern into a PatternSet that
+        # was validated at construction, so the guard silently never applies it. And the failure
+        # then surfaces at USE time as a bare re.error, which carries `.pattern`: the bypass
+        # reopens the disclosure route this module spent six commits closing.
+        #
+        # dict() breaks the alias; MappingProxyType blocks the direct write. Validation now holds
+        # for the life of the object rather than for the instant of construction.
+        object.__setattr__(self, "patterns", MappingProxyType(dict(self.patterns)))
 
     @property
     def covered(self) -> frozenset[Sensitivity]:

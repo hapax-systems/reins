@@ -341,3 +341,28 @@ def test_the_frame_locals_limitation_is_real_and_pinned() -> None:
         "module documents this as an explicit limitation, so update that docstring to claim the "
         "stronger guarantee rather than leaving it under-claimed."
     )
+
+
+def test_validation_cannot_be_bypassed_by_mutating_the_pattern_dict() -> None:
+    """`frozen=True` freezes the ATTRIBUTE, not the dict it points at.
+
+    Two ways a caller got an unvalidated pattern into a validated PatternSet, both measured before
+    the fix. The consequence is not merely an uncompilable regex: an unvalidated pattern is never
+    applied, so the class silently reports as scanned-and-clean when it was never scanned — and the
+    failure that does surface is a bare `re.error`, which carries `.pattern`, reopening the
+    disclosure route the rest of this module exists to close.
+    """
+    ps = PatternSet(patterns={Sensitivity.CREDENTIAL: (r"a",)})
+    with pytest.raises(TypeError):
+        ps.patterns[Sensitivity.OPERATOR_PII] = ("([never-validated",)  # type: ignore[index]
+
+    # AND THE ALIAS. Holding the caller's dict would let them edit it after construction, which no
+    # amount of read-only wrapping on our side would prevent — the copy is what breaks it.
+    caller = {Sensitivity.CREDENTIAL: (r"a",)}
+    ps2 = PatternSet(patterns=caller)
+    caller[Sensitivity.TRANSCRIPT] = ("([never-validated",)
+    assert Sensitivity.TRANSCRIPT not in ps2.patterns, (
+        "the PatternSet still points at the caller's dict, so a post-construction edit slipped an "
+        "unvalidated pattern past every check in __post_init__"
+    )
+    assert ps2.covered == frozenset({Sensitivity.CREDENTIAL})
