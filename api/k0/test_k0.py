@@ -209,3 +209,29 @@ def test_the_dropped_arm_is_structurally_unreachable_as_a_pass():
     assert Evaluation.UNEVALUABLE not in (Evaluation.SATISFIED,)
     with pytest.raises(RefusalError):
         decide("g", Evaluation.UNEVALUABLE, legal_next="n")
+
+
+def test_every_public_name_the_kernel_imports_is_also_exported():
+    """`__all__` MUST AGREE WITH WHAT THE MODULE ACTUALLY EXPOSES.
+
+    The branch that built the degradation ledger and the ratification act added their IMPORTS to
+    this package and not their `__all__` entries. So `from k0 import *` gave a caller the whole
+    kernel EXCEPT its completing member — and nothing said so, because both halves looked fine on
+    their own. An export list that disagrees with the module it describes is the same
+    two-records-disagree defect as a task note disagreeing with a claim file, or two gates
+    disagreeing about one frontmatter block.
+
+    Derived rather than enumerated: a hand-written second list would be a third record to drift.
+    """
+    import k0
+
+    public = {
+        name
+        for name in dir(k0)
+        if not name.startswith("_") and not isinstance(getattr(k0, name), type(k0))
+    }
+    undeclared = sorted(public - set(k0.__all__))
+    assert not undeclared, (
+        f"{len(undeclared)} names are importable from k0 but missing from __all__: {undeclared}. "
+        f"A star-import would silently omit them."
+    )

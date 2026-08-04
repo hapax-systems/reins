@@ -8,11 +8,13 @@ Membership is ratified and pinned; see first-init-k0-kernel-fixed-point-spec-202
   core  receipt-primitive       -> ../bootstrap_receipt.py  BUILT
   core  fsm-phase-legality-law  -> ../bootstrap_receipt.py  BUILT (PHASE_LADDER, drift-pinned)
   core  identity-seed           -> identity.py              BUILT (non-PII, CSPRNG, never re-minted)
-  seed  ratification-act        -> R2.8                     NOT BUILT (recordable, never performed)
+  seed  ratification-act        -> ratification.py          BUILT (R2.8 — performed, not merely recorded)
 
 R0.11 is COMPLETE: ratifier.py binds a ratification to the sovereign (SSHSIG), recovery.py handles
-key rotation and loss. Performing a ratification is still R2.8 — the executor must exist before
-there is an act to bind.
+key rotation and loss. R2.8 lands the act itself: ratification.py proposes a stipulation, obtains
+the sovereign's signature, and witnesses it as an `act=ratified` row a stranger can verify later.
+Ceremony progress is DERIVED from the chain (pending = proposed - ratified), so there is no wizard
+cursor to corrupt, desynchronise, or fail to resume.
 
 host_floor.py declares the kernel's OS-dependency floor as DATA (R1.4), so a stranger's box is told
 what is required instead of discovering it by failing.
@@ -32,6 +34,25 @@ from .manifest import (
 )
 from .identity import EstateIdentity, IdentitySeedError, load_or_mint, mint_estate_id
 from .host_floor import FLOOR, probe as probe_host_floor, require as require_host_floor
+from .degradation import (
+    Degradation,
+    DegradationError,
+    Lifecycle,
+    accept as accept_degradation,
+    declare as declare_degradation,
+    lift as lift_degradation,
+    render as render_degradation,
+    state as degradation_state,
+)
+from .ratification import (
+    RatificationError,
+    RatificationVerdict,
+    Stipulation,
+    pending,
+    propose,
+    ratify,
+    verify_ratifications,
+)
 from .ratifier import (
     RATIFICATION_NAMESPACE,
     RatifierError,
@@ -72,4 +93,24 @@ __all__ = [
     "verify_minimality",
     "write_allowed_signers",
     "write_signers",
+    # R2.6 degradation ledger and R2.8 ratification act. The branch that built these added their
+    # IMPORTS and not their __all__ entries, so `from k0 import *` exposed the whole kernel except
+    # its completing member. An export list that disagrees with what the module actually exports is
+    # the same two-records-disagree defect the rest of this work has been removing; a test below
+    # pins them together so the two cannot drift again.
+    "Degradation",
+    "DegradationError",
+    "Lifecycle",
+    "RatificationError",
+    "RatificationVerdict",
+    "Stipulation",
+    "accept_degradation",
+    "declare_degradation",
+    "degradation_state",
+    "lift_degradation",
+    "pending",
+    "propose",
+    "ratify",
+    "render_degradation",
+    "verify_ratifications",
 ]
