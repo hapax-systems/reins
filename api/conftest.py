@@ -43,12 +43,21 @@ import pathlib
 DEFAULT_TOKENS_FILE = pathlib.Path(__file__).resolve().parent.parent / ".estate-tokens"
 TOKENS_ENV = "REINS_ESTATE_TOKENS_FILE"
 
+#: Repo-relative on purpose: this string is a pytest SKIP REASON, so it is printed into the CI log
+#: of a PUBLIC repository on every unarmed run. An earlier version interpolated the resolved
+#: absolute path of the tokens file — which begins with the operator's home directory, and is
+#: therefore an estate fingerprint. The guard's own diagnostic was publishing the thing the guard
+#: exists to keep unpublished, which is this defect's fourth appearance in this change alone:
+#: inline denylist, stored pattern, returned token, and now the skip reason. The lesson is not
+#: about any one of them. Every artifact a guard emits is a candidate disclosure channel.
+TOKENS_FILE_NAME = ".estate-tokens"
+
 #: Told to the operator when the scan cannot run, so "skipped" is never mistaken for "clean".
 UNARMED = (
     f"estate-independence NOT CHECKED: no estate tokens supplied. This is not a pass — nothing was "
-    f"scanned. To arm it, write one token per line to {DEFAULT_TOKENS_FILE} (gitignored) or set "
-    f"{TOKENS_ENV} to a file elsewhere. A stranger's clone has no tokens of ours and may leave "
-    f"this unarmed."
+    f"scanned. To arm it, write one token per line to {TOKENS_FILE_NAME} at the repository root "
+    f"(gitignored) or set {TOKENS_ENV} to a file elsewhere. A stranger's clone has no tokens of "
+    f"ours and may leave this unarmed."
 )
 
 
@@ -79,9 +88,10 @@ def estate_tokens() -> tuple[str, ...] | None:
     )
     if not tokens:
         raise RuntimeError(
-            f"{path} exists but contains no tokens. An empty denylist passes everything, so an "
-            f"empty file would silently disarm the scan while looking armed. Remove the file to "
-            f"declare the check unarmed, or write the tokens."
+            f"the tokens file ({path.name}) exists but contains no tokens. An empty denylist "
+            f"passes everything, so an "
+            f"empty file would silently disarm the scan while looking armed. Remove it to declare "
+            f"the check unarmed, or write the tokens."
         )
     return tokens
 

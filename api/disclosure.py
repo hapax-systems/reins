@@ -114,7 +114,13 @@ CEILING: dict[Sensitivity, Disclosure] = {
 
 
 class DisclosureError(RuntimeError):
-    """Refusal to transmit. Carries a `Refusal` so a surface can project it, per RX.1."""
+    """Refusal to transmit, carrying a kernel `Refusal` so any surface can project it.
+
+    A refusal is DATA, not a message: it names the gate, says why, and states a legal next move, so
+    a caller can render it, log it, or act on it without parsing prose. (The estate tracks this as
+    requirement RX.1; a stranger needs only the property, which is why it is spelled out here
+    rather than left as a reference to a document they do not have.)
+    """
 
     def __init__(self, message: str, refusal: Refusal) -> None:
         super().__init__(message)
@@ -155,7 +161,24 @@ class PatternSet:
                 # default traceback shows none of it, which is what made this easy to miss twice.
                 #
                 # Raising after the handler has exited means there is no exception being handled,
-                # so no context is attached and no reference survives. Only the clean message text
+                # so no context is attached and no reference survives.
+                #
+                # THE BOUNDARY OF THIS GUARANTEE, stated exactly, because a reviewer asked and the
+                # honest answer is narrower than "the pattern cannot be recovered":
+                #
+                #   guaranteed clean   the exception's message; its __cause__/__context__ chain;
+                #                      the DEFAULT formatted traceback.
+                #   NOT guaranteed     frame locals. `self`, `pats` and `p` are bound in this
+                #                      frame, so --showlocals, cgitb, or any locals-capturing
+                #                      reporter will display the PatternSet.
+                #
+                # The second row is not fixable here and implying otherwise would be dishonest:
+                # this is the constructor that HOLDS the patterns, so they are in its frame by
+                # definition, and every function that touches a PatternSet has the same property.
+                # What is in scope is what the exception CARRIES, because that is what propagates
+                # to a caller, a log line, or a reporter that did not choose to capture locals.
+                #
+                # Only the clean message text
                 # crosses the boundary; the caller holds the pattern list, so a position is enough.
                 # NOTHING FROM THE EXCEPTION CROSSES THIS BOUNDARY EXCEPT AN INTEGER.
                 #

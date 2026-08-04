@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import traceback
+
 import pytest
 
 from conftest import UNARMED, estate_tokens
@@ -23,7 +25,7 @@ FULL = PatternSet(
     patterns={
         Sensitivity.OPERATOR_PII: (r"\bADHD\b", r"\bautis(m|tic)\b", r"\bmortality\b"),
         Sensitivity.HOST_FINGERPRINT: (r"\bexample-host-\w+\b",),
-        Sensitivity.TRANSCRIPT: (r"^\s*(operator|assistant):", ),
+        Sensitivity.TRANSCRIPT: (r"^\s*(operator|assistant):",),
         Sensitivity.CREDENTIAL: (r"\bsk-[A-Za-z0-9]{8,}\b",),
     }
 )
@@ -195,6 +197,18 @@ def test_a_pattern_that_does_not_compile_is_named_by_position_not_by_content(pat
         assert "zzqsecret" not in repr(getattr(link, "pattern", "")), (
             "the failing regex is still reachable through the exception chain"
         )
+
+    # AND THE RENDERED TRACEBACK, which is what actually reaches a log.
+    #
+    # Deliberately the DEFAULT rendering, matching the guarantee the module states. Frame locals are
+    # explicitly outside that guarantee: `self`, `pats` and `p` are bound in the constructor frame,
+    # so --showlocals or a locals-capturing reporter WILL show the PatternSet. That is not fixable
+    # in a constructor whose job is to hold the patterns, and asserting it here would encode a
+    # promise the code cannot keep.
+    rendered = "".join(
+        traceback.format_exception(type(exc.value), exc.value, exc.value.__traceback__)
+    )
+    assert "zzqsecret" not in rendered, "the pattern reached the default formatted traceback"
 
 
 def test_the_leaking_fixtures_really_do_leak_or_this_test_proves_nothing() -> None:

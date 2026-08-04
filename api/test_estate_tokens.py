@@ -18,7 +18,7 @@ import pathlib
 
 import pytest
 
-from conftest import TOKENS_ENV, estate_tokens, scan_tree_for_tokens
+from conftest import TOKENS_ENV, UNARMED, estate_tokens, scan_tree_for_tokens
 
 #: Invented for these tests. Deliberately unlike anything real.
 FAKE = "zzq-token-alpha"
@@ -125,14 +125,20 @@ def test_the_scan_returns_indices_so_a_failure_report_cannot_publish_the_token()
     becoming the disclosure, which is the defect this whole change exists to remove, arriving by a
     third route after the inline denylist and the stored pattern.
     """
-    import pathlib as _p
+    import tempfile
 
-    hints = scan_tree_for_tokens.__annotations__.get("return")
-    assert hints is not None, "the return type must be stated, since it is the security property"
-    assert "int" in str(hints) and "str" not in str(hints), (
-        f"scan_tree_for_tokens returns {hints}; it must yield an index, never the token"
+    token = "zzq-fingerprint-value"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "leaky.py").write_text(f"# {token}\n", encoding="utf-8")
+        hits = scan_tree_for_tokens(root, (token,))
+
+    assert hits, "fixture precondition: the planted token must be found"
+    assert token not in repr(hits), (
+        "the scan returned the token it found. pytest renders a failing assertion's operands, so "
+        "this would print the estate's fingerprints into the log of the run that detected them."
     )
-    assert _p is not None
+    assert [i for _, i in hits] == [0], "the index must identify WHICH token, for the caller"
 
 
 def test_a_clean_tree_yields_nothing(tmp_path) -> None:
@@ -145,3 +151,32 @@ def test_the_scan_only_reads_the_requested_suffix(tmp_path) -> None:
     (tmp_path / "a.txt").write_text(f"{FAKE}\n", encoding="utf-8")
     assert scan_tree_for_tokens(tmp_path, (FAKE,)) == []
     assert len(scan_tree_for_tokens(tmp_path, (FAKE,), suffix=".txt")) == 1
+
+
+def test_the_unarmed_message_is_itself_free_of_estate_fingerprints() -> None:
+    """THE FOURTH APPEARANCE OF THIS DEFECT, and the reason it gets its own test.
+
+    UNARMED is a pytest SKIP REASON, so it is printed into the CI log of a PUBLIC repository on
+    every unarmed run. An earlier version interpolated the RESOLVED ABSOLUTE PATH of the tokens
+    file, which begins with the operator's home directory. The guard's own diagnostic was
+    publishing the thing the guard exists to keep unpublished.
+
+    Counting the routes this change has now closed: the inline denylist, the stored pattern, the
+    returned token, and this. The lesson is not about any one of them — it is that every artifact a
+    guard emits (source, report, return value, diagnostic) is a disclosure channel, and each has to
+    be checked separately because closing one says nothing about the others.
+
+    Asserted against the estate's real tokens when armed, so it is this estate's actual
+    fingerprints being excluded and not a stand-in.
+    """
+    assert "/" not in UNARMED.split("write one token per line to ")[1].split(" ")[0], (
+        "the unarmed message names a PATH; it must name only a filename, since this string is "
+        "printed into public CI logs"
+    )
+    tokens = estate_tokens()
+    if tokens is None:
+        pytest.skip("cannot check against real fingerprints while unarmed; shape check above holds")
+    for token in tokens:
+        assert token not in UNARMED, (
+            "an estate fingerprint appears in the skip reason, which is printed to public CI logs"
+        )
