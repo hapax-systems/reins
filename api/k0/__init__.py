@@ -34,6 +34,16 @@ from .manifest import (
 )
 from .identity import EstateIdentity, IdentitySeedError, load_or_mint, mint_estate_id
 from .host_floor import FLOOR, probe as probe_host_floor, require as require_host_floor
+from .degradation import (
+    Degradation,
+    DegradationError,
+    Lifecycle,
+    accept as accept_degradation,
+    declare as declare_degradation,
+    lift as lift_degradation,
+    render as render_degradation,
+    state as degradation_state,
+)
 from .ratification import (
     RatificationError,
     RatificationVerdict,
