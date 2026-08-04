@@ -29,7 +29,14 @@ FULL = PatternSet(
 
 BENIGN = "A document about scheduling and build systems.\n"
 PERSONAL = "Operator telos: family, ADHD and autism, mortality planning.\n"
-CREDENTIAL = "token: sk-abcdef123456\n"
+#: A DECOY, not a secret. It must have credential SHAPE or it cannot exercise the scanner, which
+#: means the estate's own gitleaks job correctly flags it (generic-api-key, entropy 3.91) — a true
+#: positive on a fixture whose whole job is to look like the thing being detected. The inline
+#: annotation below is gitleaks' declared mechanism for exactly this case: it says "deliberate
+#: decoy" in a form both a reader and the scanner's audit can see. Suppressing the rule repo-wide,
+#: or assembling the string at runtime to slip past the scan, would each have hidden the decoy
+#: instead of declaring it — and a guard you route around is a guard you no longer have.
+CREDENTIAL = "token: sk-NOTAREALKEY-testfixture-0000\n"  # gitleaks:allow
 
 
 def test_the_incident_is_refused(tmp_path) -> None:
@@ -114,7 +121,7 @@ def test_findings_never_quote_what_they_found() -> None:
     v = scan(CREDENTIAL, FULL)
     assert v.findings, "fixture precondition: the credential must be detected"
     for f in v.findings:
-        assert "sk-abcdef123456" not in repr(f), "the matched secret leaked into the finding"
+        assert "NOTAREALKEY" not in repr(f), "the matched secret leaked into the finding"
 
 
 def test_a_benign_payload_reaches_public_when_fully_scanned() -> None:
