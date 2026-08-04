@@ -391,3 +391,19 @@ def test_validation_cannot_be_bypassed_by_mutating_the_pattern_dict() -> None:
         "a list passed as a pattern sequence stayed aliased to the caller, so appending to it "
         "inserted an unvalidated pattern after construction"
     )
+
+
+def test_matching_is_case_insensitive_because_a_fingerprint_is_still_one_in_caps() -> None:
+    """A POLICY CHOICE, stated and tested rather than left implicit in a flag.
+
+    `scan` passes re.IGNORECASE unconditionally. For this use that is right — a hostname in a
+    heading, an operator referent capitalised at the start of a sentence, and a credential a tool
+    upper-cased are all the same disclosure — but it was a bare flag with nothing asserting it, so
+    a future edit could drop it and no test would notice. Anyone who needs case sensitivity should
+    have to change this test first, which is the point of writing it down.
+    """
+    patterns = PatternSet(patterns={Sensitivity.HOST_FINGERPRINT: ("example-host",)})
+    for variant in ("example-host", "EXAMPLE-HOST", "Example-Host"):
+        v = scan(f"deployed on {variant} today", patterns)
+        assert v.findings, f"{variant!r} was not matched; case-insensitivity was lost"
+        assert v.ceiling is Disclosure.ESTATE_INTERNAL

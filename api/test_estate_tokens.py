@@ -200,11 +200,43 @@ def test_a_clean_tree_yields_nothing(tmp_path) -> None:
     assert scan_tree_for_tokens(tmp_path, (FAKE,)) == []
 
 
-def test_the_scan_only_reads_the_requested_suffix(tmp_path) -> None:
-    """Scoping is explicit. A silently-widened scan would read files it was never asked to."""
+def test_the_scan_reads_every_file_by_default_and_narrows_only_when_asked(tmp_path) -> None:
+    """THE DEFAULT IS EVERYTHING. Narrowing is opt-in, and visible at the call site.
+
+    It used to default to `.py`, which meant a fingerprint in a README, a YAML fixture or a TOML
+    file was invisible while the exit predicate said "every file" — a guarantee narrower than the
+    words around it. Two reviewers caught the gap. Defaulting wide and requiring an explicit suffix
+    to narrow puts the decision where a reader can see it.
+    """
     (tmp_path / "a.txt").write_text(f"{FAKE}\n", encoding="utf-8")
-    assert scan_tree_for_tokens(tmp_path, (FAKE,)) == []
-    assert len(scan_tree_for_tokens(tmp_path, (FAKE,), suffix=".txt")) == 1
+    (tmp_path / "b.py").write_text(f"{FAKE}\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text(f"{FAKE}\n", encoding="utf-8")
+
+    assert {p.name for p, _ in scan_tree_for_tokens(tmp_path, (FAKE,))} == {
+        "a.txt", "b.py", "README.md",
+    }
+    assert [p.name for p, _ in scan_tree_for_tokens(tmp_path, (FAKE,), suffix=".py")] == ["b.py"]
+
+
+def test_a_dotfile_is_scanned_even_though_a_dot_directory_is_not(tmp_path) -> None:
+    """Dotfiles are exactly where secrets live, so being blind to them is the worst place to be.
+
+    The skip rule tested every path part including the FILENAME, so `.env` beside a module was
+    silently out of scope while `.venv/` was correctly excluded. Only directories are skipped now.
+    """
+    (tmp_path / ".env").write_text(f"{FAKE}\n", encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "vendored.py").write_text(f"{FAKE}\n", encoding="utf-8")
+
+    assert [str(p) for p, _ in scan_tree_for_tokens(tmp_path, (FAKE,))] == [".env"]
+
+
+def test_an_undecodable_file_does_not_stop_the_scan(tmp_path) -> None:
+    """A guard that crashes is a guard that reports nothing, which must never read as clean."""
+    (tmp_path / "asset.bin").write_bytes(b"\xff\xfe\x00binary")
+    (tmp_path / "real.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+
+    assert [p.name for p, _ in scan_tree_for_tokens(tmp_path, (FAKE,))] == ["real.py"]
 
 
 def test_the_unarmed_message_is_itself_free_of_estate_fingerprints() -> None:

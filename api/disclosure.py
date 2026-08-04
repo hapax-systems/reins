@@ -307,6 +307,10 @@ class Verdict:
         """
         if not self.findings:
             return Disclosure.PUBLIC
+        # TIES ARE IMMATERIAL, which is why `min` is safe here without a secondary key. Two classes
+        # can share a width -- OPERATOR_PII and TRANSCRIPT are both operator_private -- but `min`
+        # selects a VALUE, and equal widths mean equal values. Whichever finding wins, the ceiling
+        # is the same Disclosure, so no tie-break rule is needed or hidden.
         return min((CEILING[f.sensitivity] for f in self.findings), key=width)
 
     @property

@@ -120,12 +120,33 @@ SUBSTRATE_TOKENS: tuple[str, ...] = ("council_root", "hapax-council")
 _NOT_SOURCE = frozenset({"__pycache__", "node_modules", "site-packages", "build", "dist"})
 
 
+def _text_of(path: pathlib.Path) -> str:
+    """File contents, or "" for anything that is not decodable text.
+
+    A guard that CRASHES on the first binary asset is a guard that stops running, and a stopped
+    guard reports nothing at all — which this module's own law says must never read as clean. An
+    undecodable file cannot contain a token as text, so empty is the honest answer for it.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return ""
+
+
 def _skipped(relative: pathlib.Path) -> bool:
-    return any(part in _NOT_SOURCE or part.startswith(".") for part in relative.parts)
+    """True for caches and vendored trees. DOTFILES ARE NOT SKIPPED — only dot-DIRECTORIES.
+
+    An earlier version tested `part.startswith(".")` over every part including the filename, so a
+    dotfile shipped in the package was invisible to the scan. Dotfiles are exactly where secrets
+    tend to live, which makes that the worst possible place to be blind.
+    """
+    return any(
+        part in _NOT_SOURCE or part.startswith(".") for part in relative.parts[:-1]
+    ) or relative.parts[-1] in _NOT_SOURCE
 
 
 def scan_tree_for_tokens(
-    directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ".py"
+    directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ""
 ) -> list[tuple[pathlib.Path, int]]:
     """Every (file, token-index) pair in `directory`. EXCLUDES NOTHING, including its own file.
 
@@ -136,6 +157,12 @@ def scan_tree_for_tokens(
     Factored out so it can be tested against a temporary tree with SYNTHETIC tokens. Testing it
     only against the real package would mean the regression witness depended on a gitignored file,
     and would vanish into a skip in any clone that does not have it.
+
+    IT SCANS EVERY FILE, NOT ONLY PYTHON. The default suffix is empty on purpose: a fingerprint in
+    a README, a YAML fixture or a TOML file inside an exportable package is exactly as published as
+    one in a module. Scanning `*.py` while the exit predicate said "every file" was a narrower
+    guarantee than the words around it, which two reviewers caught. Undecodable bytes are treated
+    as empty rather than raising, so one binary asset cannot take the whole guard down.
 
     IT RECURSES. A non-recursive glob would leave any sub-package silently out of scope: the
     package has none today, so the scan passed and would have kept passing the day someone added
@@ -157,7 +184,7 @@ def scan_tree_for_tokens(
     return [
         (path.relative_to(directory), index)
         for path in sorted(directory.rglob(f"*{suffix}"))
-        if not _skipped(path.relative_to(directory))
+        if path.is_file() and not _skipped(path.relative_to(directory))
         for index, token in enumerate(tokens)
-        if token in path.read_text(encoding="utf-8")
+        if token in _text_of(path)
     ]
