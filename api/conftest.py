@@ -84,3 +84,24 @@ def estate_tokens() -> tuple[str, ...] | None:
             f"declare the check unarmed, or write the tokens."
         )
     return tokens
+
+
+def scan_tree_for_tokens(
+    directory: pathlib.Path, tokens: tuple[str, ...], *, suffix: str = ".py"
+) -> list[tuple[pathlib.Path, str]]:
+    """Every (file, token) pair in `directory`. EXCLUDES NOTHING, including the scanner's own file.
+
+    The exclusion is the whole reason this is a function instead of a loop inside one test. The
+    version this replaces skipped the file it lived in, which is exactly where the tokens were —
+    so a scan that excludes any file by name is a scan that cannot see its own denylist.
+
+    Factored out so it can be tested against a temporary tree with SYNTHETIC tokens. Testing it
+    only against the real package would mean the regression witness depended on a gitignored file,
+    and would vanish into a skip in any clone that does not have it.
+    """
+    return [
+        (path, token)
+        for path in sorted(directory.glob(f"*{suffix}"))
+        for token in tokens
+        if token in path.read_text(encoding="utf-8")
+    ]

@@ -134,12 +134,23 @@ class PatternSet:
     def __post_init__(self) -> None:
         for cls, pats in self.patterns.items():
             if not isinstance(cls, Sensitivity):
-                raise ValueError(f"pattern key {cls!r} is not a Sensitivity class")
-            for p in pats:
+                raise ValueError(
+                    f"pattern key {cls!r} is not a Sensitivity class; use one of "
+                    f"{', '.join(s.value for s in Sensitivity)}"
+                )
+            for index, p in enumerate(pats):
                 try:
                     re.compile(p)
                 except re.error as exc:
-                    raise ValueError(f"{cls}: pattern {p[:32]!r} does not compile: {exc}") from exc
+                    #: The pattern is NOT quoted: an estate's patterns are often literal secrets,
+                    #: and an exception message reaches logs and tickets. Position is enough to fix
+                    #: it, since the caller is holding the list.
+                    raise ValueError(
+                        f"{cls.value}: pattern at index {index} does not compile ({exc}). "
+                        f"A pattern that does not compile matches nothing, which would make this "
+                        f"guard silently pass everything in that class. Correct the regex at that "
+                        f"position, or remove it and let the class report as unscanned."
+                    ) from exc
 
     @property
     def covered(self) -> frozenset[Sensitivity]:
@@ -149,10 +160,28 @@ class PatternSet:
 
 @dataclass(frozen=True)
 class Finding:
+    """What was found, in terms that disclose nothing.
+
+    NEITHER THE MATCHED TEXT NOR THE PATTERN IS STORED.
+
+    The matched text is obvious: a report quoting the credential it found is itself a disclosure,
+    and reports travel further than the payloads they describe.
+
+    The PATTERN is the subtler one, and an earlier version of this class got it wrong. Patterns are
+    estate data, and an estate's patterns are routinely LITERAL — a hostname, an operator referent,
+    a real key. So storing the pattern meant a findings report republished the denylist, which is
+    the same defect as writing the denylist inline in the source, one layer up. It survived the
+    matched-text test because that test used a generic regex, where the pattern is not itself the
+    secret; with a literal pattern the same code discloses.
+
+    `pattern_index` refers back into the caller's own `PatternSet` for that sensitivity class. The
+    caller already holds the patterns, so they lose nothing; anyone reading a leaked report gets an
+    integer.
+    """
+
     sensitivity: Sensitivity
-    pattern: str
-    #: The MATCHED TEXT IS NEVER STORED. A findings report that quotes the credential it found is
-    #: itself a disclosure, and reports travel further than the payloads they describe.
+    #: Position in the caller's own patterns tuple for `sensitivity`. Never the pattern itself.
+    pattern_index: int
     count: int
 
 
@@ -181,10 +210,12 @@ def scan(text: str, patterns: PatternSet) -> Verdict:
     """Find sensitive content. Reports what it could NOT look for as well as what it found."""
     findings: list[Finding] = []
     for sensitivity in Sensitivity:
-        for pattern in patterns.patterns.get(sensitivity, ()):
+        for index, pattern in enumerate(patterns.patterns.get(sensitivity, ())):
             hits = len(re.findall(pattern, text, re.IGNORECASE))
             if hits:
-                findings.append(Finding(sensitivity=sensitivity, pattern=pattern, count=hits))
+                findings.append(
+                    Finding(sensitivity=sensitivity, pattern_index=index, count=hits)
+                )
     return Verdict(
         findings=tuple(findings),
         unscanned=frozenset(set(Sensitivity) - patterns.covered),

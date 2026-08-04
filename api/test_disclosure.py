@@ -12,6 +12,7 @@ from disclosure import (
     DisclosureError,
     PatternSet,
     Sensitivity,
+    Verdict,
     assert_transmittable,
     scan,
     width,
@@ -122,6 +123,52 @@ def test_findings_never_quote_what_they_found() -> None:
     assert v.findings, "fixture precondition: the credential must be detected"
     for f in v.findings:
         assert "NOTAREALKEY" not in repr(f), "the matched secret leaked into the finding"
+
+
+def test_a_finding_never_carries_the_pattern_because_patterns_are_often_literal() -> None:
+    """THE CASE THAT SLIPPED THROUGH, found by two independent reviewers.
+
+    `Finding` used to store the pattern that matched. The test above did not catch it because it
+    used a GENERIC regex, where the pattern is not the secret. But an estate's patterns are
+    routinely literal — this estate's own token list is literal strings — so storing the pattern
+    meant a findings report republished the denylist verbatim.
+
+    That is the same defect as writing the denylist inline in the source, one layer up: the artifact
+    that DESCRIBES the secret becomes the secret's new home. It is worth being exact about why the
+    original test could not see it: it asserted a property of the payload's relationship to the
+    report, and the leak was in the pattern's relationship to the report.
+
+    So this test uses a literal pattern, and checks the whole Verdict — a Finding that stayed clean
+    while the Verdict's repr leaked would be no better.
+    """
+    literal = "zzq-secret-literal-value"
+    patterns = PatternSet(patterns={Sensitivity.OPERATOR_PII: (literal,)})
+    v = scan(f"the document mentions {literal} once", patterns)
+
+    assert v.findings, "fixture precondition: the literal pattern must match"
+    assert literal not in repr(v), "the pattern leaked through the Verdict"
+    for f in v.findings:
+        assert literal not in repr(f), "the pattern leaked through the Finding"
+        assert f.pattern_index == 0, "the caller must still be able to map back to its own list"
+
+
+def test_a_pattern_that_does_not_compile_is_named_by_position_not_by_content() -> None:
+    """The error message reaches logs and tickets, so it must not carry the pattern either."""
+    literal = "zzq-secret-in-a-broken-pattern("
+    with pytest.raises(ValueError) as exc:
+        PatternSet(patterns={Sensitivity.CREDENTIAL: (literal,)})
+    assert "index 0" in str(exc.value)
+    assert "zzq-secret" not in str(exc.value), "the failing pattern leaked into the exception"
+
+
+def test_an_empty_findings_tuple_yields_public_as_a_boundary_in_its_own_right() -> None:
+    """Asserted directly, not inferred from a benign-payload test.
+
+    `ceiling` has two branches and the no-findings branch is the one that ADMITS. Reaching it only
+    through a payload test means a change to the scan could stop exercising it without any test
+    going red.
+    """
+    assert Verdict(findings=(), unscanned=frozenset()).ceiling is Disclosure.PUBLIC
 
 
 def test_a_benign_payload_reaches_public_when_fully_scanned() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import UNARMED, estate_tokens
+from conftest import UNARMED, estate_tokens, scan_tree_for_tokens
 
 from k0 import (
     DeadEndRefusalError,
@@ -121,15 +121,12 @@ def test_the_kernel_package_is_estate_independent():
     if tokens is None:
         pytest.skip(UNARMED)
 
-    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
-        src = path.read_text()
-        for token in tokens:
-            assert token not in src, (
-                f"estate fingerprint in an exportable kernel file: {path.name} contains a token "
-                f"from this estate's identity list. K0 ships to strangers; it must carry none of "
-                f"this estate. (The token is not quoted here — a failure report travels further "
-                f"than the file it describes.)"
-            )
+    hits = scan_tree_for_tokens(pathlib.Path(__file__).parent, tokens)
+    assert not hits, (
+        f"estate fingerprints in exportable kernel files: {sorted({p.name for p, _ in hits})}. "
+        f"K0 ships to strangers; it must carry none of this estate. The tokens are not quoted "
+        f"here — a failure report travels further than the files it describes."
+    )
 
 
 def test_the_kernel_package_is_uncoupled_from_the_substrate_it_was_extracted_from():
