@@ -6,7 +6,7 @@ import traceback
 
 import pytest
 
-from conftest import UNARMED, estate_tokens
+from conftest import UNARMED, estate_tokens, scan_tree_for_tokens
 
 from disclosure import (
     CEILING,
@@ -269,13 +269,18 @@ def test_a_malformed_pattern_is_refused_at_construction() -> None:
         PatternSet(patterns={Sensitivity.CREDENTIAL: (r"([unclosed",)})
 
 
-def test_the_guard_and_its_own_support_files_are_estate_independent() -> None:
-    """THE SCAN MUST COVER ITSELF AND ITS EXPLANATION.
+def test_the_guard_and_everything_beside_it_is_estate_independent() -> None:
+    """THE SCAN MUST COVER ITSELF, ITS EXPLANATION, AND ANYTHING THAT ARRIVES LATER.
 
     k0/test_k0.py scans the kernel package. This module, the scanner it tests, and the conftest
     that supplies the tokens all live OUTSIDE that package and were therefore unscanned — and the
     first draft of conftest.py quoted the very denylist it was written to remove. Unscanned is not
     clean; that is this module's own law, and it applies to this module.
+
+    IT SCANS THE WHOLE DIRECTORY, NOT A NAMED LIST. An earlier version enumerated three filenames,
+    which meant a new file beside them was silently out of scope — a by-name exemption wearing an
+    allowlist's clothes, and the fourth variation on the same mistake in this change. `test_estate_tokens.py`
+    was already sitting outside that triple when a reviewer pointed it out.
     """
     import pathlib
 
@@ -283,15 +288,12 @@ def test_the_guard_and_its_own_support_files_are_estate_independent() -> None:
     if tokens is None:
         pytest.skip(UNARMED)
 
-    here = pathlib.Path(__file__).parent
-    for name in ("disclosure.py", "conftest.py", "test_disclosure.py"):
-        src = (here / name).read_text()
-        for token in tokens:
-            assert token not in src, (
-                f"estate fingerprint in {name}, which ships to strangers. The token is not quoted "
-                f"here: a failure report travels further than the file it describes."
-            )
-
+    hits = scan_tree_for_tokens(pathlib.Path(__file__).parent, tokens)
+    assert not hits, (
+        f"estate fingerprints in files that ship to strangers: "
+        f"{sorted({p.name for p, _ in hits})}. The tokens are not quoted here: a failure report "
+        f"travels further than the files it describes."
+    )
 
 def test_a_pattern_key_that_is_not_a_sensitivity_class_is_refused() -> None:
     """An unrecognised key would silently never be scanned for.
@@ -312,7 +314,7 @@ def test_the_frame_locals_limitation_is_real_and_pinned() -> None:
 
     The module states its boundary: the exception's message, chain, and default traceback carry no
     pattern content, but FRAME LOCALS do, because `PatternSet.__post_init__` is the constructor
-    that holds the patterns. glm asked for the acknowledged gap to be tested, which is right — an
+    that holds the patterns. a reviewer asked for the acknowledged gap to be tested, which is right — an
     untested caveat is a comment, and comments drift.
 
     This asserts the limitation EXISTS, not that it is acceptable. If a future change makes frame
