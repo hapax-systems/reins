@@ -17,16 +17,24 @@ THE REGIME (spec: first-init-r22-deterministic-pre-model-segment-spec-2026-08-06
     elements below, closed-world; anything not listed is out, and every near-miss is named in the
     exclusion ledger with the act that installs it.
 
-THE BOUNDARY (spec §3): the segment's terminal act is the Crow seat cold-start (R2.15) — the first
-receipted act whose execution involves a model (local_only, stipulated-admission, UNMEASURED).
-The first TRANSMITTING call (MEASURED_PROBE) is the later wall, keyed on transmit_class
-(local_only >= K0_ACTIVE; transmitting >= AUTH_MATERIALIZE), and is outside this regime.
+THE BOUNDARY (spec §3): the segment is HALF-OPEN — its terminal act, the Crow seat cold-start
+(R2.15), is the FIRST POST-SEGMENT act: the first receipted act whose execution involves a model
+(local_only, stipulated-admission, UNMEASURED-marked). MEASURED_PROBE is the later wall — the
+first TRANSMITTING call — keyed on transmit_class (local_only >= K0_ACTIVE; transmitting >=
+AUTH_MATERIALIZE). Note: the receipt spine's comments call MEASURED_PROBE "the first model call";
+this regime's two-layer boundary (first model-INVOLVING act vs first TRANSMITTING act) is the
+more precise reading and is what the transmit_class keying says.
 
-HONEST SUBSTRATE ACCOUNTING: membership is declared regardless of build state; each element carries
-its substrate state as data ("built" / "partial" / "unbuilt"). A regime that claimed its members
-were all built would be a false green: as of the declaration date three elements are unbuilt and
-two are partial, and verify() refuses any member whose state field is upgraded without the
-supporting receipt class being named.
+HONESTY LAWS (review-hardened, 2026-08-06):
+
+    * DECLARED, NOT ENFORCED. This module performs no I/O and prevents no model call at runtime;
+      it is the regime's declaration plus machine-checkable invariants. Enforcement claims belong
+      to the chain-order receipt law and the ceremony driver, not to this file.
+    * Substrate accounting counts only what is ON REINS MAIN. On-branch work is named as
+      on_branch evidence and never licenses "partial".
+    * The mandatory-act tally is PENDING RATIFICATION (spec §8.3) and is therefore null, not a
+      guessed number frozen into a pin.
+    * As of the declaration date: 3 members unbuilt, 2 partial, 3 built.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import NoReturn
 
 #: The governed acts, ratified 2026-08-01 (option C). Restated from api/k0/manifest.py so this
 #: module is readable without import coupling; the test suite asserts the two agree.
@@ -46,20 +55,58 @@ BOOTSTRAP_ACTS: tuple[str, ...] = (
     "flip",
 )
 
+#: Acts that run before K0 arms (ratified K0 spec). install-verify executes one of these.
+PRE_K0_ACTS: tuple[str, ...] = ("install",)
+
+#: Legal phase strings: the pre-K0 pseudo-phase plus the pinned PHASE_LADDER values
+#: (api/bootstrap_receipt.py:62-74). Restated as data so the vocabulary is pinnable here; a
+#: test asserts agreement with the receipt spine.
+PHASES: tuple[str, ...] = (
+    "pre-K0",
+    "K0_ACTIVE",
+    "HOST_RECONCILE",
+    "STIPULATION_RATIFY",
+    "SURFACE_OBSERVE",
+    "AUTH_MATERIALIZE",
+    "MEASURED_PROBE",
+    "CAPABILITY_MINT",
+    "SDLC_GATE_SHADOW",
+    "ENFORCE_FLIP",
+    "KERNEL_DEMOTE",
+    "COMPLETE",
+)
+
 #: Substrate states an element may declare. "unbuilt" and "partial" are first-class: the regime
 #: declares membership, not completion.
 SUBSTRATE_STATES: tuple[str, ...] = ("built", "partial", "unbuilt")
 
-#: The segment's terminal act (spec §3). Everything before it is no-LLM by law.
+#: Evidence classes, typed (review: free-text evidence let "pinky swear" pass). The legality
+#: matrix below is the honesty law: only landed/receipted substrate licenses a build claim.
+EVIDENCE_CLASSES: tuple[str, ...] = ("absent", "on_branch", "landed", "receipted")
+
+#: state -> legal evidence classes. "partial" and "built" both require real substrate on main;
+#: on_branch evidence is honest only for "unbuilt".
+EVIDENCE_LEGALITY: dict[str, tuple[str, ...]] = {
+    "built": ("landed", "receipted"),
+    "partial": ("landed", "receipted"),
+    "unbuilt": ("absent", "on_branch"),
+}
+
+#: The segment's terminal act (spec §3): the FIRST POST-SEGMENT act. The segment is everything
+#: before it; the interval is half-open.
 TERMINAL_ACT_ID = "R2.15-crow-cold-start"
 
-#: The well-ordering keying (spec §3, KIDS amendment): local-only model execution is legal at
-#: K0_ACTIVE; transmitting calls require AUTH_MATERIALIZE. This module cites the keying but does
-#: not pin it — open ratification question 8.1 defers that to the R0.6/R3.2 amendments.
+#: The well-ordering keying (spec §3, KIDS amendment). ORDER IS SEMANTIC — do not sort.
+#: This module cites the keying but does not pin it — open ratification question 8.1 defers
+#: that to the R0.6/R3.2 amendments.
 TRANSMIT_CLASS_LAW: tuple[str, ...] = (
     "local_only>=K0_ACTIVE",
     "transmitting>=AUTH_MATERIALIZE",
 )
+
+#: Members whose execution executes no governed act (self-attestation at kernel arm). The empty
+#: acts tuple is legal ONLY for these ids — an unremarked hole otherwise.
+SELF_ATTESTING_MEMBERS: frozenset[str] = frozenset({"k0-arm-genesis-lock"})
 
 
 @dataclass(frozen=True)
@@ -67,16 +114,17 @@ class SegmentElement:
     """One member of the deterministic pre-model segment."""
 
     id: str
-    #: Bootstrap phase the element executes in ("pre-K0" for the ungoverned install act).
+    #: Bootstrap phase the element executes in; must be a member of PHASES.
     phase: str
-    #: Governed acts the element executes. install-verify runs pre-K0 and carries ("install",).
+    #: Governed acts the element executes. Empty only for SELF_ATTESTING_MEMBERS.
     acts: tuple[str, ...]
     #: Requirements-graph nodes covering the element.
     r_nodes: tuple[str, ...]
     #: "built" | "partial" | "unbuilt" as of the declaration date.
     substrate_state: str
-    #: What substantiates the state claim — a receipt/artifact class, never a bare assertion.
-    #: An upgraded state without a named evidence class is a false green and verify() refuses it.
+    #: One of EVIDENCE_CLASSES; legality against substrate_state is machine-checked.
+    evidence_class: str
+    #: What substantiates the claim — artifact/receipt names, never a bare assertion.
     evidence: str
 
 
@@ -88,23 +136,26 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
         acts=("install",),
         r_nodes=("R0.1",),
         substrate_state="unbuilt",
+        evidence_class="absent",
         evidence="absent: signed artifact + operator-side verification before first run",
     ),
     SegmentElement(
         id="durable-root-declaration",
-        phase="pre-K0+HOST_RECONCILE",
-        acts=("reconcile",),
+        phase="pre-K0",
+        acts=("install", "reconcile"),
         r_nodes=("R0.7",),
         substrate_state="built",
-        evidence="api/bootstrap_receipt.py declare_durable_root; unevaluable=>DENY hardening 2026-08-01",
+        evidence_class="landed",
+        evidence="api/bootstrap_receipt.py declare_durable_root on main; installed by install, re-attested by reconcile at HOST_RECONCILE; unevaluable=>DENY hardening 2026-08-01",
     ),
     SegmentElement(
         id="k0-arm-genesis-lock",
         phase="K0_ACTIVE",
-        acts=(),  # kernel self-attestation; no governed act is executed by this element
+        acts=(),  # SELF_ATTESTING_MEMBERS
         r_nodes=("R0.3", "R0.5", "R0.6"),
         substrate_state="built",
-        evidence="api/k0/ package on reins main; genesis_self_attest; BootstrapLock; pinned PHASE_LADDER",
+        evidence_class="landed",
+        evidence="api/k0/ package + genesis_self_attest + BootstrapLock + pinned PHASE_LADDER/phase_legal on main; the R0.6 transmit_class keying is deferred (open ratification question 8.1) and is NOT claimed here",
     ),
     SegmentElement(
         id="host-reconcile",
@@ -112,15 +163,17 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
         acts=("probe", "reconcile"),
         r_nodes=("R1.2", "R1.3", "R1.4"),
         substrate_state="partial",
-        evidence="api/k0/host_floor.py (floor as data, probe()/require()); host registry unbuilt",
+        evidence_class="landed",
+        evidence="api/k0/host_floor.py on main (floor as data, probe()/require()); host registry unbuilt",
     ),
     SegmentElement(
         id="identity",
-        phase="AUTH_MATERIALIZE-preface",
+        phase="K0_ACTIVE",
         acts=("mint",),
         r_nodes=("R0.11",),
         substrate_state="built",
-        evidence="api/k0/identity.py (exclusive-create estate_id); ratifier.py (SSHSIG); recovery.py (rotation/loss)",
+        evidence_class="landed",
+        evidence="api/k0/identity.py (exclusive-create estate_id), ratifier.py (SSHSIG), recovery.py (rotation/loss) on main",
     ),
     SegmentElement(
         id="key-capture",
@@ -128,6 +181,7 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
         acts=("elicit", "mint"),
         r_nodes=("R2.3",),
         substrate_state="unbuilt",
+        evidence_class="absent",
         evidence="absent: portable store, guided capture, working-key validation receipt, decline path",
     ),
     SegmentElement(
@@ -136,15 +190,17 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
         acts=("elicit", "ratify"),
         r_nodes=("R2.4",),
         substrate_state="partial",
-        evidence="AIR default-deny renderer built and estate-free; ceremony step + consent receipt unbuilt",
+        evidence_class="landed",
+        evidence="AIR default-deny renderer landed and estate-free; ceremony step + consent receipt unbuilt",
     ),
     SegmentElement(
         id="first-stipulations",
         phase="STIPULATION_RATIFY",
         acts=("elicit", "ratify"),
         r_nodes=("R2.5", "R2.6", "R2.7", "R2.11", "R2.12", "R2.13"),
-        substrate_state="partial",
-        evidence="R2.8 ratification act + R2.6 degradation ledger on reins PR #7 (on-branch, 2026-08-06)",
+        substrate_state="unbuilt",
+        evidence_class="on_branch",
+        evidence="on_branch: R2.8 ratification act + R2.6 degradation ledger on reins PR #7 (2026-08-06); not substrate until merged",
     ),
 )
 
@@ -207,18 +263,25 @@ class DeterministicSegment:
     members: tuple[SegmentElement, ...]
     exclusions: tuple[Exclusion, ...]
     terminal_act_id: str
+    #: ORDER IS SEMANTIC (escalating requirements); canonical() preserves it.
     transmit_class_law: tuple[str, ...]
-    #: The honest mandatory-act tally (spec §8.3): carried with provenance; ratification fixes it.
-    mandatory_act_count: int
+    #: Pending ratification (spec §8.3): null today. When ratified, verify() refuses a value
+    #: below the distinct acts the membership itself executes.
+    mandatory_act_count: int | None
+    #: False until the operator ratifies the spec. Ratification flips this bit, which changes
+    #: the pin — ratification is itself a deliberate, diff-visible act.
+    ratified: bool
 
     def canonical(self) -> str:
-        """Stable serialization. Sorting makes the pin insensitive to declaration order."""
+        """Stable serialization. Members/exclusions sort (order-free); the transmit-class law
+        keeps its semantic order."""
         return json.dumps(
             {
                 "version": self.version,
                 "terminal_act_id": self.terminal_act_id,
-                "transmit_class_law": sorted(self.transmit_class_law),
+                "transmit_class_law": list(self.transmit_class_law),
                 "mandatory_act_count": self.mandatory_act_count,
+                "ratified": self.ratified,
                 "members": sorted(
                     (
                         {
@@ -227,6 +290,7 @@ class DeterministicSegment:
                             "acts": sorted(m.acts),
                             "r_nodes": sorted(m.r_nodes),
                             "substrate_state": m.substrate_state,
+                            "evidence_class": m.evidence_class,
                             "evidence": m.evidence,
                         }
                         for m in self.members
@@ -247,6 +311,7 @@ class DeterministicSegment:
             },
             sort_keys=True,
             separators=(",", ":"),
+            ensure_ascii=True,
         )
 
     def digest(self) -> str:
@@ -257,8 +322,23 @@ class SegmentViolation(ValueError):
     """Raised on every invariant failure. There is no 'mostly valid' segment."""
 
 
-def _fail(reason: str) -> None:
+def _fail(reason: str) -> NoReturn:
     raise SegmentViolation(reason)
+
+
+#: The closed-world membership, by id. Equality, not subset: a surplus member is drift.
+REQUIRED_MEMBER_IDS: frozenset[str] = frozenset(
+    {
+        "install-verify",
+        "durable-root-declaration",
+        "k0-arm-genesis-lock",
+        "host-reconcile",
+        "identity",
+        "key-capture",
+        "first-consent",
+        "first-stipulations",
+    }
+)
 
 
 def verify(segment: DeterministicSegment, *, expect_pin: str | None = None) -> str:
@@ -270,41 +350,55 @@ def verify(segment: DeterministicSegment, *, expect_pin: str | None = None) -> s
         if member.id in seen:
             _fail(f"duplicate member id: {member.id}")
         seen.add(member.id)
+        if member.phase not in PHASES:
+            _fail(
+                f"{member.id}: phase {member.phase!r} is not in the pinned ladder vocabulary"
+            )
         if member.substrate_state not in SUBSTRATE_STATES:
             _fail(f"{member.id}: unknown substrate state {member.substrate_state!r}")
+        if member.evidence_class not in EVIDENCE_CLASSES:
+            _fail(f"{member.id}: unknown evidence class {member.evidence_class!r}")
+        if member.evidence_class not in EVIDENCE_LEGALITY[member.substrate_state]:
+            _fail(
+                f"{member.id}: {member.evidence_class} evidence cannot license "
+                f"{member.substrate_state} — an upgraded state needs landed substrate"
+            )
         if not member.evidence:
-            _fail(f"{member.id}: a state claim with no evidence class is a false green")
-        if member.substrate_state == "built" and member.evidence.startswith("absent:"):
-            _fail(f"{member.id}: declared built with absent evidence")
+            _fail(f"{member.id}: a state claim with no evidence text is a false green")
+        if not member.acts and member.id not in SELF_ATTESTING_MEMBERS:
+            _fail(
+                f"{member.id}: executes no governed acts and is not a self-attesting member"
+            )
         for act in member.acts:
-            if act not in BOOTSTRAP_ACTS and act != "install":
+            if act not in BOOTSTRAP_ACTS and act not in PRE_K0_ACTS:
                 _fail(
                     f"{member.id}: {act!r} is not a governed act (nor the pre-K0 install act)"
                 )
         if not member.r_nodes:
             _fail(f"{member.id}: no requirements-graph coverage")
-    required = {
-        "install-verify",
-        "durable-root-declaration",
-        "k0-arm-genesis-lock",
-        "host-reconcile",
-        "identity",
-        "key-capture",
-        "first-consent",
-        "first-stipulations",
-    }
-    missing = required - seen
-    if missing:
-        _fail(f"segment membership is not closed-world: missing {sorted(missing)}")
+    if seen != REQUIRED_MEMBER_IDS:
+        _fail(
+            f"segment membership is not exactly the required closed world: "
+            f"missing {sorted(REQUIRED_MEMBER_IDS - seen)}, surplus {sorted(seen - REQUIRED_MEMBER_IDS)}"
+        )
     if not segment.terminal_act_id:
         _fail("no terminal act: the segment's boundary is undefined")
+    member_r_nodes = {node for m in segment.members for node in m.r_nodes}
+    if segment.terminal_act_id.split("-")[0] in member_r_nodes:
+        _fail(
+            f"terminal act {segment.terminal_act_id} is inside the segment it terminates — "
+            "the interval is half-open"
+        )
     if not segment.transmit_class_law:
         _fail("no transmit-class law: the well-ordering keying is undefined")
-    if segment.mandatory_act_count < len(required):
-        _fail(
-            f"mandatory_act_count {segment.mandatory_act_count} is below the membership floor "
-            f"{len(required)} — the tally is dishonest"
-        )
+    if segment.mandatory_act_count is not None:
+        executed_acts = {act for m in segment.members for act in m.acts}
+        if segment.mandatory_act_count < len(executed_acts):
+            _fail(
+                f"mandatory_act_count {segment.mandatory_act_count} is below the distinct acts "
+                f"the membership itself executes ({len(executed_acts)}) — the tally contradicts "
+                "the data"
+            )
     digest = segment.digest()
     if expect_pin is not None and digest != expect_pin:
         _fail(f"drift pin mismatch: {digest} != {expect_pin}")
@@ -321,17 +415,18 @@ def verify_minimality(segment: DeterministicSegment) -> None:
 
 
 #: The canonical segment, verified at import. A drift pin that recomputes itself is not a pin,
-#: so R22_DRAFT_PIN is a literal; CI recomputes and compares.
+#: so R22_DRAFT_PIN is a literal; the suite recomputes and compares independently of import.
 DETERMINISTIC_SEGMENT = DeterministicSegment(
     version="r2.2-draft-2026-08-06",
     members=SEGMENT_MEMBERS,
     exclusions=EXCLUSIONS,
     terminal_act_id=TERMINAL_ACT_ID,
     transmit_class_law=TRANSMIT_CLASS_LAW,
-    mandatory_act_count=13,
+    mandatory_act_count=None,  # pending ratification (spec §8.3)
+    ratified=False,
 )
 
-R22_DRAFT_PIN = "efbcb368351aecdcf2c7d54854c9654f411fbcebcc8fc9518b7221079be131fe"
+R22_DRAFT_PIN = "67ce78920b13a0c69d8eefd31b1ac66970871fbf0018abf31ea47d22b3f3ca59"
 
 SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN)
 verify_minimality(DETERMINISTIC_SEGMENT)
