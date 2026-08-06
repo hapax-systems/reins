@@ -16,12 +16,18 @@ check), so the discipline is enforced HERE, at the only place it can be: this fi
 composes + verifies + forwards, and physically cannot append.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from k0.fail_closed import Evaluation
+from k0.refusal import Refusal, RefusalError
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,26 +63,138 @@ class Response:
     # receipt but leaves this False, so `applied` never false-greens a preview (the mode is the writer's
     # to assert, not inferable from receipt-presence). Only a governed real-write transport sets True.
     applied: bool = False
+    # K0 refusal-as-data (INV-3, "BLOCKED always escapes"): every refusing verdict states the LEGAL NEXT
+    # move. A refusal that only says "no" is a dead end, and a dead end is a trap, not a gate. Populated
+    # from a k0.Refusal, whose constructor REFUSES to build one with an empty legal_next.
+    legal_next: str | None = None
+    teaches: str | None = None
+
+
+def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation | None, str, Refusal | None]:
+    """Run a governed predicate under the K0 fail-closed law. Returns (verdict, why, refusal).
+
+    A predicate written in the kernel's OWN idiom calls ``decide()``, which raises RefusalError
+    carrying a Refusal — and RefusalError exists so "callers receive data, never a parsed string".
+    Catching it as a generic failure would stringify that Refusal into a `why` and throw away the
+    gate, the legal_next and the teaches pointer the predicate had already stated correctly. So a
+    RefusalError propagates its Refusal verbatim, signalled by a ``None`` verdict.
+
+    ``decide()`` collapses VIOLATED and UNEVALUABLE into the same exception, so a propagated refusal
+    CANNOT be re-classified into either. It is reported as what it is — the predicate refused, on its
+    own terms — rather than guessed at. Claiming "we checked and it failed" about a check that may
+    never have run is exactly the collapse the two separate `*_why` arguments exist to prevent.
+
+    THE LAW HAS THREE OUTCOMES, NOT TWO. A ``bool`` predicate can only say yes or no; it has no way
+    to say "I could not tell". That third case is the dangerous one, and the naive implementation
+    turns it into whichever of the two arms it happens to fall through to.
+
+    Measured on the pre-K0 router: an ``authority_packet`` of unexpected shape made ``packet.get()``
+    raise, the exception escaped ``route_command`` entirely, and the surface answered HTTP 500 with a
+    non-JSON body. That is not a governed denial — no status, no reason, no legal next move. It
+    denies in effect, but it denies INCOHERENTLY, which is exactly the dead end INV-3 forbids.
+
+    So: a predicate that RAISES is UNEVALUABLE, and a predicate that returns None has stated no
+    verdict and is UNEVALUABLE too. Both DENY. Predicates may return an ``Evaluation`` directly to
+    say so themselves; plain ``bool`` remains legal and keeps its meaning.
+    """
+    try:
+        verdict = predicate(*args)
+    except RefusalError as exc:
+        return None, "", exc.refusal
+    except Exception as exc:  # noqa: BLE001 — ANY failure to evaluate is UNEVALUABLE, and denies
+        # The TYPE goes to the caller; the MESSAGE goes only to the log. A predicate raises with
+        # whatever it was holding — packet contents, filesystem paths, upstream error bodies — and
+        # `reason` is serialized straight into the HTTP body. k0.Refusal states the rule this obeys:
+        # a refusal never carries the value it refused, because that value is frequently the thing
+        # under restriction.
+        _log.warning("predicate could not be evaluated", exc_info=exc)
+        return Evaluation.UNEVALUABLE, f"the predicate could not be evaluated ({type(exc).__name__})", None
+    if isinstance(verdict, Evaluation):
+        return verdict, "", None
+    if verdict is None:
+        return Evaluation.UNEVALUABLE, "the predicate returned None — it stated no verdict", None
+    return (Evaluation.SATISFIED if verdict else Evaluation.VIOLATED), "", None
+
+
+def _refuse(*, gate: str, why: str, legal_next: str, status: str, http: int, teaches: str) -> Response:
+    """Build a refusing verdict THROUGH k0.Refusal, so the dead-end law is enforced by construction.
+
+    Refusal's constructor raises DeadEndRefusalError on an empty ``legal_next``. Routing every denial
+    through it means this module cannot emit a refusal that fails to teach the caller what to do —
+    the guarantee is structural, not a convention reviewers must remember to check.
+    """
+    return _as_response(Refusal(gate=gate, why=why, legal_next=legal_next, teaches=teaches), status, http)
+
+
+def _as_response(refusal: Refusal, status: str, http: int) -> Response:
+    """Render a Refusal — ours or one a predicate raised — as the router's verdict."""
+    return Response(
+        status=status,
+        http=http,
+        reason=refusal.why,
+        legal_next=refusal.legal_next,
+        teaches=refusal.teaches or None,
+    )
 
 
 def route_command(
     envelope: Envelope,
     *,
-    verify_authority: Callable[[Any, str], bool],
-    preflight: Callable[[Envelope], bool],
+    verify_authority: Callable[[Any, str], bool | Evaluation],
+    preflight: Callable[[Envelope], bool | Evaluation],
     transport: Callable[[Envelope], Response | None],
     already_emitted: dict[str, str],
 ) -> Response:
     """Validate + route a governed command. Pure: all side-effecting surfaces are
     injected (``verify_authority`` / ``preflight`` / ``transport``), so this is a
-    stateless Elm-style fold over the envelope. Never mints authority."""
+    stateless Elm-style fold over the envelope. Never mints authority.
+
+    K0-GATED. Each predicate runs under the fail-closed law (three outcomes, UNEVALUABLE denies) and
+    every refusing arm returns refusal-as-data carrying ``legal_next``.
+
+    WHY AN UNEVALUABLE ARM REUSES ITS SIBLING'S HTTP CODE. An unevaluable authority check answers 403
+    and an unevaluable preflight answers 409 — the same codes as their VIOLATED siblings — while the
+    ``status`` string keeps the two distinguishable (``authority-unevaluable`` vs
+    ``authority-rejected``). A NEW code would be the more expressive choice and the less safe one:
+    every client already treats 403/409 as a denial, whereas an unrecognised code is exactly the kind
+    of thing a client's ``if resp.ok`` fallthrough turns into a pass. The distinction an auditor needs
+    lives in the body, where a new field breaks nothing.
+    """
     # 1. Verify-only authority — the packet must be checkable; never trusted blind.
-    if not verify_authority(envelope.authority_packet, envelope.target):
-        return Response(status="authority-rejected", http=403)
+    verdict, why, refusal = _evaluate(verify_authority, envelope.authority_packet, envelope.target)
+    if refusal is not None:
+        return _as_response(refusal, "authority-refused", 403)
+    if verdict is not Evaluation.SATISFIED:
+        unevaluable = verdict is Evaluation.UNEVALUABLE
+        return _refuse(
+            gate=f"command:{envelope.verb}:authority",
+            why=why or f"the authority packet is not valid for target {envelope.target!r}",
+            legal_next=(
+                "mint authority upstream (coord-grant-mint -> EscapeGrant, or a methodology-dispatch "
+                "AuthorityCase + parent_spec) and resubmit; this surface verifies, it never mints"
+            ),
+            status="authority-unevaluable" if unevaluable else "authority-rejected",
+            http=403,
+            teaches="doctrine/route-never-mint",
+        )
     # 2. Preflight — the transition must be legal GIVEN valid authority (distinct
     #    from authority-rejected: the stubs' doorVerbLegal / intentStatusFor gate).
-    if not preflight(envelope):
-        return Response(status="preflight-failed", http=409)
+    verdict, why, refusal = _evaluate(preflight, envelope)
+    if refusal is not None:
+        return _as_response(refusal, "preflight-refused", 409)
+    if verdict is not Evaluation.SATISFIED:
+        unevaluable = verdict is Evaluation.UNEVALUABLE
+        return _refuse(
+            gate=f"command:{envelope.verb}:preflight",
+            why=why or f"{envelope.verb} is not legal from the target's current state",
+            legal_next=(
+                "re-run the cockpit preview to obtain a fresh, unblocked preflight receipt, then "
+                "resubmit; if it is still blocked the transition is illegal from this state"
+            ),
+            status="preflight-unevaluable" if unevaluable else "preflight-failed",
+            http=409,
+            teaches="doctrine/preflight",
+        )
     # 3. Idempotency — a replayed key never re-invokes the transport (the substrate
     #    UNIQUE on event_id makes retries free; this mirrors it at the router).
     if envelope.idempotency_key in already_emitted:
@@ -86,10 +204,29 @@ def route_command(
             duplicate=True,
             receipt_id=already_emitted[envelope.idempotency_key],
         )
-    # 4. Hand off to the owning surface; never synthesize a success on failure.
-    receipt = transport(envelope)
+    # 4. Hand off to the owning surface; never synthesize a success on failure. A transport that
+    #    RAISES is a failure like any other: letting it escape would answer 500-with-no-body, losing
+    #    the one thing the caller needs — whether the write happened. It did not; say so, governed.
+    try:
+        receipt = transport(envelope)
+    except Exception as exc:  # noqa: BLE001 — the owning surface's failure is ours to report, not to leak
+        receipt = None
+        _log.warning("transport failed for verb %s", envelope.verb, exc_info=exc)
+        why = f"the owning surface failed ({type(exc).__name__})"
+    else:
+        why = "the owning surface returned no receipt, so nothing is known to have been written"
     if receipt is None:
-        return Response(status="transport-failed", http=502)
+        return _refuse(
+            gate=f"command:{envelope.verb}:transport",
+            why=why,
+            legal_next=(
+                "nothing was written — retry with the SAME idempotency_key once the owning surface is "
+                "reachable; the key makes the retry free if the write did in fact land"
+            ),
+            status="transport-failed",
+            http=502,
+            teaches="doctrine/route-never-mint",
+        )
     return receipt
 
 
@@ -114,14 +251,17 @@ def _resp_to_dict(resp: Response) -> dict:
         "spooled": resp.spooled,
         "duplicate": resp.duplicate,
         "reason": resp.reason,
+        "applied": resp.applied,
+        "legal_next": resp.legal_next,
+        "teaches": resp.teaches,
     }
 
 
 def build_command_app(
     *,
     verb: str,
-    verify_authority: Callable[[Any, str], bool],
-    preflight: Callable[[Envelope], bool],
+    verify_authority: Callable[[Any, str], bool | Evaluation],
+    preflight: Callable[[Envelope], bool | Evaluation],
     transport: Callable[[Envelope], Response | None],
 ) -> FastAPI:
     """A thin HTTP wrapper around route_command for one wired verb. All effectful
@@ -135,8 +275,22 @@ def build_command_app(
     @app.post("/command/{v}")
     def command(v: str, req: CommandRequest) -> JSONResponse:
         if v != verb:
+            # Also a refusal, and so it must also escape: a bare "not wired" leaves the caller with
+            # no move. Routed through _refuse for the same structural guarantee as every other arm.
             return JSONResponse(
-                {"status": "not-implemented", "http": 501, "reason": f"{v} not wired"},
+                _resp_to_dict(
+                    _refuse(
+                        gate=f"command:{v}:wiring",
+                        why=f"{v} is not wired on this router (it serves {verb!r})",
+                        legal_next=(
+                            f"use the cockpit's never-mint preview for {v}, or POST to the router that "
+                            f"serves it; /read/meta.verbs lists the live wired set"
+                        ),
+                        status="not-implemented",
+                        http=501,
+                        teaches="doctrine/one-command-surface",
+                    )
+                ),
                 status_code=501,
             )
         envelope = Envelope(

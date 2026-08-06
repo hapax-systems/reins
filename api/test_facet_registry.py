@@ -228,15 +228,22 @@ def test_safety_registry_never_airs_a_body():
 def test_safety_newly_aired_fields_are_only_safe_structural():
     """vs the live _DEFAULT_ALLOW, the registry may NEWLY-AIR only safe structural/operational fields
     (the documented skeleton repair + structured identity/ownership/variant) — NEVER a free-text or
-    PII-bearing field. Pins that adopting the registry as the live allowlist cannot leak."""
+    PII-bearing field, and NEVER a financial one. Pins that adopting the registry as the live
+    allowlist cannot leak.
+
+    Two deny-reasons, not one: PII (who) and FINANCIAL (how much). This test originally modelled only
+    PII, which is exactly how "cost" came to be vetted as safe — it is numbers with no PII, and it
+    still must not broadcast."""
     # VETTED safe newly-aired set (each eyeballed: structural/operational, NO PII/free-text). A NEW
     # field that newly-airs trips this test for re-vetting (drift guard) — the safety review is pinned.
     VETTED_NEWLY_AIR = {
         # the skeleton repair (were denied, operational metadata):
         "criticality", "freshness", "prior_stage", "predicted_stage", "rel_count",
         "magnitude", "gate", "meta",
-        # Trace LLM-metadata repair (numbers, no PII) — the flat list also omitted these:
-        "cost", "latency_ms", "prompt_tok", "completion_tok", "total_tok", "size", "total",
+        # Trace LLM-metadata repair (numbers, no PII) — the flat list also omitted these.
+        # "cost" was vetted here as "numbers, no PII" — true, and the wrong criterion: the operator
+        # bar denies spend for broadcast-economics reasons, not privacy ones. It is FINANCIAL-denied.
+        "latency_ms", "prompt_tok", "completion_tok", "total_tok", "size", "total",
         # recency timestamps (Time facet):
         "activity_age_s", "mtime", "updated_at",
         # structured identity/ownership/action/variant (ids, lane names, verbs — not free-text):
@@ -282,3 +289,47 @@ def test_registry_is_more_conservative_on_free_text():
             if attr in CURRENT_ALLOW and fr.classify(domain, attr) == "body":
                 newly_denied_freetext.add(attr)
     assert {"detail", "missing", "action", "next_evidence", "blockers"} <= newly_denied_freetext
+
+
+def test_financial_fields_never_air_operator_bar_20260628():
+    """The operator's dated bar, quoted verbatim in internal/config/config.go:
+
+        operator AIR bar 2026-06-28 "air structural, DENY $cost" ... the financial "cost" is
+        deliberately OMITTED so $ spend never broadcasts.
+
+    The hand-maintained Go default honours it by omission. air_allowlist() must honour it by
+    construction, so that replacing one with the other cannot silently re-admit spend.
+    """
+    al = set(fr.air_allowlist())
+    for f in fr.FINANCIAL:
+        assert f not in al, f"{f!r} airs — the 2026-06-28 bar says $ spend never broadcasts"
+
+
+def test_financial_deny_is_by_category_not_by_one_name():
+    """A spend field added to the registry later must be denied on arrival, not air until noticed.
+    'cost' is the field that actually leaked; the set exists so the next one cannot."""
+    assert "cost" in fr.FINANCIAL
+    assert len(fr.FINANCIAL) > 1, "deny the category, not the single instance"
+    # and the two deny-reasons stay distinct: a spend field is not PII and must not be filed as such
+    assert not (fr.FINANCIAL & fr.SENSITIVE), "FINANCIAL and SENSITIVE model different reasons"
+
+
+def test_cost_denied_but_non_financial_measures_still_air():
+    """The bar is about spend, not about measures. Latency and token magnitudes still air — denying
+    them would over-correct and break the skeleton repair the registry exists to deliver."""
+    al = set(fr.air_allowlist())
+    assert "cost" not in al
+    for ok in ("latency_ms", "total_tok", "magnitude"):
+        assert ok in al, f"{ok} should still air — it is a measure, not spend"
+
+
+def test_both_air_decision_points_agree_on_financial():
+    """air_policy() and air_allowlist() are two doors to the same decision. 'cost' leaked because the
+    derived list was replaced without the per-attribute policy following it, so a fix to one door
+    left the other open. Pin that they cannot diverge again."""
+    al = set(fr.air_allowlist())
+    for domain, attrs in INVENTORY.items():
+        for attr in attrs:
+            if attr in fr.FINANCIAL:
+                assert fr.air_policy(domain, attr) == "deny", f"air_policy airs {attr!r}"
+                assert attr not in al, f"air_allowlist airs {attr!r}"

@@ -260,17 +260,46 @@ def _freshness(last_ts: str, now: float) -> float:
     return round(math.exp(-_age_s(last_ts, now) / 21600.0), 3)  # tau = 6h
 
 
-def _task_history(council_root: str) -> dict:
-    """One replay pass -> per-task {prior_stage (last transition's from_stage), last_ts, last_actor}."""
+#: Discriminated silence for prior_stage. The renderer cannot invent this distinction; only the
+#: producer knows which of the three it is, and the old contract threw that knowledge away by
+#: collapsing all of them to "".
+SILENCE_MEASURED = "measured"      # a from_stage value reached us
+SILENCE_ORIGIN = "origin"          # COMPLETE log, task present, never transitioned -> measured negative
+SILENCE_UNMEASURED = "unmeasured"  # no value reached us, or the log cannot prove absence
+
+
+def _prior_stage_state(h: dict, log_complete: bool) -> str:
+    """Which kind of nothing is an empty prior_stage?
+
+    Fail-closed by construction: absence only counts as a MEASURED origin when the replay was
+    complete AND the task actually appears in it. A degraded replay under-reports silently, so
+    absence proves nothing and every silence must read UNMEASURED rather than claim an origin.
+    """
+    if str(h.get("prior_stage") or ""):
+        return SILENCE_MEASURED
+    if not log_complete:
+        return SILENCE_UNMEASURED
+    return SILENCE_ORIGIN if h.get("seen") else SILENCE_UNMEASURED
+
+
+def _task_history(council_root: str) -> tuple[dict, bool]:
+    """One replay pass -> (per-task {prior_stage, last_ts, last_actor, seen}, log_complete).
+
+    ``log_complete`` is False when the replay degraded to the JSONL mirror. ReplayResult already
+    reports this (``degraded``/``source``/``errors``) and the previous contract discarded it by
+    reading ``.events`` directly — so a corrupt SQLite log rendered identically to a healthy one.
+    """
     from hapax.spine.coord_event_log import default_event_log
 
     hist: dict = {}
-    for e in default_event_log().replay(fail_open=True).events:
+    result = default_event_log().replay(fail_open=True)
+    log_complete = not bool(getattr(result, "degraded", False))
+    for e in result.events:
         r = e.to_record()
         tid = r.get("subject")
         if not tid:
             continue
-        h = hist.setdefault(tid, {"prior_stage": "", "last_ts": "", "last_actor": ""})
+        h = hist.setdefault(tid, {"prior_stage": "", "last_ts": "", "last_actor": "", "seen": True})
         ts = str(r.get("timestamp", ""))
         if ts >= h["last_ts"]:  # ISO strings sort chronologically
             h["last_ts"], h["last_actor"] = ts, str(r.get("actor", ""))
@@ -278,7 +307,7 @@ def _task_history(council_root: str) -> dict:
             fs = (r.get("payload") or {}).get("from_stage")
             if fs:
                 h["prior_stage"] = str(fs)
-    return hist
+    return hist, log_complete
 
 
 def to_task(
@@ -287,7 +316,10 @@ def to_task(
     allowlist: list[str],
     hist: dict | None = None,
     now: float | None = None,
+    log_complete: bool = False,
 ) -> dict:
+    # log_complete defaults False: an unknown-provenance call must not be able to assert a
+    # measured origin. Unmeasured is the safe direction.
     no_go = t.get("no_go") or {}
     stage = str(t.get("stage") or "")
     h = (hist or {}).get(tid, {})
@@ -295,10 +327,11 @@ def to_task(
         "task_id": str(t.get("task_id", tid)),
         "stage": stage,
         "authority_case": str(t.get("authority_case") or ""),
-        "no_go": ",".join(k for k, v in no_go.items() if v)
-        if isinstance(no_go, dict)
-        else "",
+        "no_go": ",".join(k for k, v in no_go.items() if v) if isinstance(no_go, dict) else "",
         "prior_stage": str(h.get("prior_stage", "")),  # D6 was (from event log)
+        # F4: which kind of nothing an empty prior_stage is. "" alone conflated a measured origin
+        # with never having looked; the cockpit then drew both as dots.
+        "prior_stage_state": _prior_stage_state(h, log_complete),
         "predicted_stage": _predicted_stage(stage, no_go),  # D7 next (ladder + no_go)
         "owner": str(h.get("last_actor", "")),  # who (last actor)
         "freshness": _freshness(h.get("last_ts", ""), now) if now else 0.0,
@@ -5764,8 +5797,15 @@ def build_app(
     def read_tasks() -> dict:
         try:
             proj = _projection(council_root)
-            hist = _task_history(council_root)
+            hist, hist_complete = _task_history(council_root)
         except Exception as exc:  # honest-dark
+            # main's `str(e)` is deliberately NOT restored here. The read-failure
+            # boundary closure (Gate 0A criterion 6) requires that remote error
+            # detail never reach the caller; _read_failure emits a closed
+            # vocabulary instead. Taking main's side wholesale would silently
+            # reopen the exact fail-open this branch exists to close, while the
+            # tuple-returning _task_history and the hist_complete argument are
+            # genuinely new from main and are kept.
             return {
                 "dark": True,
                 "error": _read_failure("tasks_read_error", exc),
@@ -5773,7 +5813,7 @@ def build_app(
             }
         now = time.time()
         tasks = [
-            to_task(tid, t, allowlist, hist, now)
+            to_task(tid, t, allowlist, hist, now, hist_complete)
             for tid, t in (proj.get("tasks") or {}).items()
         ]
         return {"dark": False, "tasks": tasks}

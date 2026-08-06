@@ -1,0 +1,7 @@
+{
+  "_comment": "Anti-re-narrowing FLOORS for the fixture. Floors, never equality: the document may grow, it may never shrink. A real estate keeps its own census beside its own intake, in a private repo.",
+  "item_floor": 3,
+  "programs": { "example-program-one": 2, "example-program-two": 1 },
+  "axes": { "altitude-telos": 1, "obligation": 1, "program": 1 },
+  "sources": { "critic:altitude": 1, "critic:program": 1, "critic:meta-completeness": 1 }
+}

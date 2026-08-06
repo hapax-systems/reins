@@ -116,6 +116,20 @@ func relationHeader(c Connector, w int) string {
 	label := " " + c.Relation + joinClause(c) + couplingClause(c) + " "
 	lw := ansi.StringWidth(label)
 	if lw >= w {
+		// Under width pressure the honesty clause OUTRANKS the description, and truncating from
+		// the right inverts the meaning: c.Relation is the CLAIM ("shares owner=alpha (2)") and
+		// joinClause is its QUALIFICATION ("· no join"). Cutting the qualification leaves a Door —
+		// a verdict that has explicitly refused to assert coordination — rendering a bare relation
+		// as though it were backed by one. The narrow frame is exactly where a reader is least able
+		// to supply the missing hedge, so it is the last place to drop it.
+		if jc := joinClause(c); jc != "" {
+			jw := ansi.StringWidth(jc)
+			if jw+2 <= w { // room for at least one relation rune plus the clause
+				return fitLine(" "+c.Relation, w-jw) + jc
+			}
+			// Too narrow even for that: keep the clause alone rather than an unqualified claim.
+			return fitLine(jc, w)
+		}
 		return fitLine(label, w)
 	}
 	side := (w - lw) / 2

@@ -26,7 +26,10 @@ scripts/reins-shot.sh ":tasks; j; v; a"      /tmp/arm.png      size:160x44 --air
 ```
 
 `<steps>` is `;`-separated; each step is a space-separated key list (`j k enter esc v a space`), and
-`:word` types a command. Requires `freeze` (`go install github.com/charmbracelet/freeze@latest`).
+`:word` types a command. Requires `freeze` **v0.2.2 exactly** (`go install github.com/charmbracelet/freeze@v0.2.2`).
+`scripts/reins-shot.sh` and `scripts/reins-avsdlc-suite.sh` verify that version AND its go.sum
+checksum before rendering, and refuse to run against any other build: the scripts carry guards
+for renderer defects measured in v0.2.2, so a raster from an unverified freeze is not evidence.
 
 ## 3. AVSDLC predict-then-confirm (`scripts/reins-avsdlc-witness.py`)
 

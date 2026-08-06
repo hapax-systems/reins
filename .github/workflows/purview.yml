@@ -1,0 +1,79 @@
+name: purview
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  purview-engine:
+    name: purview-engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          # This job runs checked-out JavaScript on pull_request, so PR code executes here.
+          # actions/checkout persists GITHUB_TOKEN into .git/config by default, which that code
+          # could read and exfiltrate. Nothing here needs to push.
+          persist-credentials: false
+
+      # The engine is verified against a SYNTHETIC fixture committed in this repo. A real purview
+      # is estate-personal and lives in a private repository; this repo must never carry one, and
+      # the tool no longer defaults to a path implying otherwise.
+      - name: Engine checks the fixture (census floors enforced)
+        run: node scripts/reins-purview-complete-map.engine.js scripts/fixtures/example-intake.md
+
+      # NEGATIVE CONTROLS ASSERT THE REASON, NOT JUST THE FAILURE. "exited non-zero" is satisfied by
+      # a syntax error or an unreadable fixture, which would leave these checks green while proving
+      # nothing about the behaviour they name.
+      - name: Engine REFUSES with no intake path (and says why)
+        run: |
+          set -eu
+          if node scripts/reins-purview-complete-map.engine.js >/tmp/out.txt 2>&1; then
+            echo "::error::the engine accepted no intake path; it must refuse rather than guess"; exit 1
+          fi
+          grep -q "an intake file path is required" /tmp/out.txt || {
+            echo "::error::refused, but not for the missing path:"; cat /tmp/out.txt; exit 1; }
+          echo "refused with the expected diagnostic"
+
+      - name: Census floor CATCHES LOSS (and says which floor)
+        run: |
+          set -eu
+          python3 scripts/fixtures/make_shrunk_fixture.py "$RUNNER_TEMP/lost.md"
+          if node scripts/reins-purview-complete-map.engine.js "$RUNNER_TEMP/lost.md" >/tmp/loss.txt 2>&1; then
+            echo "::error::a shrunken purview passed the floor — re-narrowing would be silent"; exit 1
+          fi
+          grep -q "item count REGRESSED" /tmp/loss.txt || {
+            echo "::error::failed, but not on the census floor:"; cat /tmp/loss.txt; exit 1; }
+          echo "loss refused on the census floor, as required"
+
+      - name: A malformed critic policy is REFUSED (not silently downgraded)
+        run: |
+          set -eu
+          cp scripts/fixtures/example-intake.md "$RUNNER_TEMP/mal.md"
+          python3 - "$RUNNER_TEMP/mal.md.census.json" <<'PY'
+          import json, pathlib, sys
+          c = json.loads(pathlib.Path("scripts/fixtures/example-intake.md.census.json").read_text())
+          c["required_critics"] = "critic:custom"   # a string, not an array
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(c))
+          PY
+          if node scripts/reins-purview-complete-map.engine.js "$RUNNER_TEMP/mal.md" >/tmp/m.txt 2>&1; then
+            echo "::error::a malformed required_critics passed; the declared policy would silently downgrade to advisory"; exit 1
+          fi
+          grep -q "required_critics must be an array" /tmp/m.txt || {
+            echo "::error::refused, but not on the critic policy:"; cat /tmp/m.txt; exit 1; }
+          echo "malformed critic policy refused, as required"
+
+      - name: A census that enforces nothing is REFUSED
+        run: |
+          set -eu
+          cp scripts/fixtures/example-intake.md "$RUNNER_TEMP/empty.md"
+          echo '{}' > "$RUNNER_TEMP/empty.md.census.json"
+          if node scripts/reins-purview-complete-map.engine.js "$RUNNER_TEMP/empty.md" >/tmp/e.txt 2>&1; then
+            echo "::error::an empty census passed; it would report censusChecked while checking nothing"; exit 1
+          fi
+          grep -q "no integer item_floor" /tmp/e.txt || {
+            echo "::error::refused, but not on the census shape:"; cat /tmp/e.txt; exit 1; }
+          echo "empty census refused, as required"

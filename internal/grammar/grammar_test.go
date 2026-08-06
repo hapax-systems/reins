@@ -308,10 +308,45 @@ func TestRenderTaskRowSevenDims(t *testing.T) {
 	}
 }
 
-func TestRenderTaskRowStructuredSilence(t *testing.T) {
-	got := RenderTaskRow(sampleTask(), false) // empty no_go -> dots, not blank jitter
-	if !strings.Contains(got, "····") {
-		t.Fatalf("empty cell must be structured-silence dots: %q", got)
+func TestRenderTaskRowNamesItsSilence(t *testing.T) {
+	got := ansi.Strip(RenderTaskRow(sampleTask(), false))
+	if !strings.Contains(got, SilenceDark) {
+		t.Fatalf("an unmeasured cell must name itself %q, not draw dots: %q", SilenceDark, got)
+	}
+}
+
+// F4, the load-bearing one: a terminal task ("ship") and an UNMEASURED trajectory must not render
+// the same leading mark. Under the old encoding both led with "·" — "·ship" and "·····" — so a cold
+// reader could not tell "arrived" from "we have no idea". They must differ in FORM, before colour.
+func TestTrajectoryTerminalIsNotConfusableWithSilence(t *testing.T) {
+	tk := sampleTask()
+	tk.PredictedStage = "ship"
+	shipped := ansi.Strip(RenderTaskRow(tk, false))
+	tk.PredictedStage = ""
+	silent := ansi.Strip(RenderTaskRow(tk, false))
+
+	// The confusability was never the dot itself — it was that SILENCE also rendered as dots, so
+	// "·ship" and "·····" shared a leading mark. Binding silence to the existing disposition
+	// vocabulary (▒ dark) dissolves the collision without minting a glyph.
+	if !strings.Contains(shipped, "·ship") {
+		t.Fatalf("terminal must remain the arrived mark ·ship: %q", shipped)
+	}
+	if !strings.Contains(silent, SilenceDark) {
+		t.Fatalf("an unmeasured trajectory must render %q: %q", SilenceDark, silent)
+	}
+	if strings.Contains(silent, "·ship") {
+		t.Fatalf("silence must not read as arrived: %q", silent)
+	}
+}
+
+// SilenceAbsent asserts a MEASURED negative. Today's /read contract cannot distinguish "looked and
+// found nothing" from "no value reached us", so nothing may render it — doing so would claim a
+// measurement never made. This test fails the day someone wires it up without fixing the producer.
+func TestMeasuredEmptyIsNotClaimedFromUnmeasuredData(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	if strings.Contains(ansi.Strip(RenderTaskRow(tk, false)), SilenceAbsent) {
+		t.Fatalf("empty prior_stage must not be rendered as a measured negative (%q)", SilenceAbsent)
 	}
 }
 
@@ -554,5 +589,36 @@ func TestRenderTraceHeaderAligns(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("trace header missing column %q:\n%s", want, got)
 		}
+	}
+}
+
+// The other half of the contract: when the producer HAS earned it — a complete log in which the
+// task appears and never transitioned — the measured negative must actually render. Without this
+// the discrimination would be built and never shown.
+func TestMeasuredOriginRendersTheMeasuredNegative(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	tk.PriorStageState = "origin"
+	got := ansi.Strip(RenderTaskRow(tk, false))
+	if !strings.Contains(got, SilenceAbsent) {
+		t.Fatalf("a measured origin must render %q: %q", SilenceAbsent, got)
+	}
+	// Scoped to the was◀ cell on purpose: other columns of this fixture are legitimately
+	// unmeasured, so asserting the token is absent from the whole ROW would be wrong.
+	was := strings.Index(got, SilenceAbsent)
+	nxt := strings.Index(got, SilenceDark)
+	if nxt >= 0 && nxt < was {
+		t.Fatalf("the was◀ cell must hold the measured negative, not unmeasured: %q", got)
+	}
+}
+
+// An older producer that omits the field must degrade to unmeasured, never to a measured negative.
+func TestAbsentStateFieldDegradesToUnmeasured(t *testing.T) {
+	tk := sampleTask()
+	tk.PriorStage = ""
+	tk.PriorStageState = ""
+	got := ansi.Strip(RenderTaskRow(tk, false))
+	if !strings.Contains(got, SilenceDark) {
+		t.Fatalf("a producer without the field must read unmeasured: %q", got)
 	}
 }
