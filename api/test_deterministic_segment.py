@@ -372,3 +372,20 @@ def test_phase_act_product_is_checked() -> None:
     install_at_ladder = replace(SEGMENT_MEMBERS[0], phase="K0_ACTIVE")
     with pytest.raises(SegmentViolation, match="cannot execute at K0_ACTIVE"):
         verify(replace(DETERMINISTIC_SEGMENT, members=(install_at_ladder,)))
+
+
+def test_scan_patterns_have_positive_controls(tmp_path: Path) -> None:
+    """The scan must CATCH a seeded offender (review: claude PR#10 r3) — a pattern set
+    that matches nothing real is as vacuous as an empty path set."""
+    offenders = tmp_path / "offender.py"
+    offenders.write_text("import openai\nclient.chat.completions.create(None)\n")
+    text = offenders.read_text()
+    hits = [p for p in MODEL_CLIENT_PATTERNS if re.search(p, text)]
+    assert hits, "seeded model-client surface was not detected"
+    http = tmp_path / "http_offender.py"
+    http.write_text("import httpx\n")
+    assert re.search(
+        r"^\s*(import|from)\s+(httpx|aiohttp|requests|urllib)\b",
+        http.read_text(),
+        re.M,
+    ), "bare HTTP-client import was not detected"
