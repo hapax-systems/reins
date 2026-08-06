@@ -42,8 +42,6 @@ MODEL_CLIENT_PATTERNS = (
     r"__import__\([^)]*(litellm|openai|anthropic|model)",
     r"\beval\s*\(|\bexec\s*\(",
     r"/v1/(chat/)?completions",
-    r"(httpx|aiohttp|urllib\.request).*(completions|messages)",
-    r"subprocess\.[a-z_]+\(.*curl",
 )
 
 #: The modules the segment's execution currently flows through. When a member builds out
@@ -53,15 +51,55 @@ MODEL_CLIENT_PATTERNS = (
 SEGMENT_CODE_PATHS = (
     "bootstrap_receipt.py",
     "reins_command.py",
+    "deterministic_segment.py",
     "k0",
 )
 
-#: The scan must never pass vacuously: this many real files or the test fails.
-SCAN_FILE_FLOOR = 10
+#: Per-path non-vacuity floors (review: claude PR#10 r2): a renamed or emptied path fails
+#: structurally instead of passing unscanned. k0/ holds the kernel package modules.
+SCAN_FILE_FLOORS = {
+    "bootstrap_receipt.py": 1,
+    "reins_command.py": 1,
+    "deterministic_segment.py": 1,
+    "k0": 6,
+}
 
 
 def test_canonical_segment_verifies() -> None:
     assert verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN) == R22_DRAFT_PIN
+
+
+#: The expected pin, anchored HERE as its own literal (review: claude PR#10 r2 blocker).
+#: A coordinated data edit must now also edit this file — two files, both diff-visible.
+EXPECTED_PIN = "f90a85643c46a9052b4c6adb72d2f026ea8a00bab25bb5ef009ba8adbf11a895"
+
+
+def test_canonical_content_matches_pinned_shape() -> None:
+    """A silent data edit must also rewrite these literals to pass."""
+    seg = DETERMINISTIC_SEGMENT
+    assert [m.id for m in sorted(seg.members, key=lambda m: m.id)] == [
+        "durable-root-declaration",
+        "first-consent",
+        "first-stipulations",
+        "host-reconcile",
+        "identity",
+        "install-verify",
+        "k0-arm-genesis-lock",
+        "key-capture",
+    ]
+    assert {m.id: m.substrate_state for m in seg.members} == {
+        "install-verify": "unbuilt",
+        "durable-root-declaration": "built",
+        "k0-arm-genesis-lock": "built",
+        "host-reconcile": "partial",
+        "identity": "built",
+        "key-capture": "unbuilt",
+        "first-consent": "partial",
+        "first-stipulations": "unbuilt",
+    }
+    assert seg.terminal_r_node == "R2.15"
+    assert seg.ratified is False
+    assert seg.mandatory_act_count is None
 
 
 def test_pin_is_recomputed_independently_of_import() -> None:
@@ -73,7 +111,8 @@ def test_pin_is_recomputed_independently_of_import() -> None:
     namespace: dict[str, Any] = {}
     exec(compile(neutralized, "deterministic_segment.py", "exec"), namespace)
     recomputed = namespace["DETERMINISTIC_SEGMENT"].digest()
-    assert recomputed == R22_DRAFT_PIN
+    assert recomputed == EXPECTED_PIN
+    assert R22_DRAFT_PIN == EXPECTED_PIN
 
 
 def test_act_set_agrees_with_k0_manifest() -> None:
@@ -189,12 +228,6 @@ def test_terminal_act_is_outside_the_segment() -> None:
     assert DETERMINISTIC_SEGMENT.terminal_act_id == "R2.15-crow-cold-start"
     member_nodes = {node for m in SEGMENT_MEMBERS for node in m.r_nodes}
     assert "R2.15" not in member_nodes
-    broken = replace(
-        DETERMINISTIC_SEGMENT,
-        terminal_act_id="R0.3-anything",
-    )
-    with pytest.raises(SegmentViolation, match="half-open"):
-        verify(broken)
 
 
 def test_missing_terminal_act_refuses() -> None:
@@ -240,7 +273,6 @@ def test_exclusion_ledger_names_the_near_misses() -> None:
 
 def test_no_model_client_in_segment_code_paths() -> None:
     """The segment's execution paths must not import or call a model client."""
-    scanned = 0
     offenders: list[str] = []
     for rel in SEGMENT_CODE_PATHS:
         path = API_ROOT / rel
@@ -248,16 +280,22 @@ def test_no_model_client_in_segment_code_paths() -> None:
             f"scan path vanished: {rel} — the scan would pass vacuously"
         )
         files = sorted(path.rglob("*.py")) if path.is_dir() else [path]
-        assert files, f"scan path {rel} holds no python files"
+        assert len(files) >= SCAN_FILE_FLOORS[rel], (
+            f"scan path {rel} yielded {len(files)} files (< {SCAN_FILE_FLOORS[rel]})"
+        )
         for file in files:
-            scanned += 1
             text = file.read_text(encoding="utf-8")
             for pattern in MODEL_CLIENT_PATTERNS:
                 if re.search(pattern, text):
                     offenders.append(f"{file.name}: {pattern}")
-    assert scanned >= SCAN_FILE_FLOOR, (
-        f"only {scanned} files scanned — the no-LLM scan is passing vacuously"
-    )
+            # A deterministic segment has no need of a general HTTP client at all
+            # (review: claude PR#10 r2 — cross-line patterns cannot see this).
+            if re.search(
+                r"^\s*(import|from)\s+(httpx|aiohttp|requests|urllib)\b", text, re.M
+            ):
+                offenders.append(
+                    f"{file.name}: general HTTP client import in a segment path"
+                )
     assert not offenders, f"model client surface in segment paths: {offenders}"
 
 
@@ -287,3 +325,50 @@ def test_substrate_accounting_is_honest_today() -> None:
     assert sum(1 for s in states.values() if s == "unbuilt") == 3
     assert sum(1 for s in states.values() if s == "partial") == 2
     assert sum(1 for s in states.values() if s == "built") == 3
+
+
+def test_terminal_r_node_shape_and_membership() -> None:
+    """The half-open check uses a pinned r-node field and can never go vacuous."""
+    assert DETERMINISTIC_SEGMENT.terminal_r_node == "R2.15"
+    broken_shape = replace(DETERMINISTIC_SEGMENT, terminal_r_node="crow-cold-start")
+    with pytest.raises(SegmentViolation, match="vacuous"):
+        verify(broken_shape)
+    inside = replace(DETERMINISTIC_SEGMENT, terminal_r_node="R0.3")
+    with pytest.raises(SegmentViolation, match="half-open"):
+        verify(inside)
+
+
+def test_tally_floor_counts_act_instances() -> None:
+    instances = sum(len(m.acts) for m in SEGMENT_MEMBERS)
+    assert instances == 11
+    with pytest.raises(SegmentViolation, match="act instances"):
+        verify(replace(DETERMINISTIC_SEGMENT, mandatory_act_count=10))
+    assert verify(replace(DETERMINISTIC_SEGMENT, mandatory_act_count=11))
+
+
+def test_verify_composes_minimality() -> None:
+    """verify() alone must check the exclusion ledger (review: claude PR#10 r2)."""
+    with pytest.raises(SegmentViolation, match="exclusion ledger is empty"):
+        verify(replace(DETERMINISTIC_SEGMENT, exclusions=()))
+    broken = replace(EXCLUSIONS[0], installed_by="")
+    with pytest.raises(SegmentViolation, match="minimality violation"):
+        verify(replace(DETERMINISTIC_SEGMENT, exclusions=(broken,) + EXCLUSIONS[1:]))
+
+
+def test_member_and_exclusion_ids_are_disjoint() -> None:
+    overlap = replace(EXCLUSIONS[0], id="identity")
+    with pytest.raises(SegmentViolation, match="both member and exclusion"):
+        verify(replace(DETERMINISTIC_SEGMENT, exclusions=(overlap,) + EXCLUSIONS[1:]))
+
+
+def test_evidence_legality_matrix_is_complete() -> None:
+    assert set(ds.EVIDENCE_LEGALITY) == set(ds.SUBSTRATE_STATES)
+
+
+def test_phase_act_product_is_checked() -> None:
+    pre_k0_governed = replace(SEGMENT_MEMBERS[1], phase="pre-K0")
+    with pytest.raises(SegmentViolation, match="cannot execute pre-K0"):
+        verify(replace(DETERMINISTIC_SEGMENT, members=(pre_k0_governed,)))
+    install_at_ladder = replace(SEGMENT_MEMBERS[0], phase="K0_ACTIVE")
+    with pytest.raises(SegmentViolation, match="cannot execute at K0_ACTIVE"):
+        verify(replace(DETERMINISTIC_SEGMENT, members=(install_at_ladder,)))

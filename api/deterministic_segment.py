@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import NoReturn
 
@@ -95,6 +96,7 @@ EVIDENCE_LEGALITY: dict[str, tuple[str, ...]] = {
 #: The segment's terminal act (spec §3): the FIRST POST-SEGMENT act. The segment is everything
 #: before it; the interval is half-open.
 TERMINAL_ACT_ID = "R2.15-crow-cold-start"
+TERMINAL_R_NODE = "R2.15"
 
 #: The well-ordering keying (spec §3, KIDS amendment). ORDER IS SEMANTIC — do not sort.
 #: This module cites the keying but does not pin it — open ratification question 8.1 defers
@@ -141,12 +143,12 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
     ),
     SegmentElement(
         id="durable-root-declaration",
-        phase="pre-K0",
-        acts=("install", "reconcile"),
+        phase="HOST_RECONCILE",
+        acts=("reconcile",),
         r_nodes=("R0.7",),
         substrate_state="built",
         evidence_class="landed",
-        evidence="api/bootstrap_receipt.py declare_durable_root on main; installed by install, re-attested by reconcile at HOST_RECONCILE; unevaluable=>DENY hardening 2026-08-01",
+        evidence="api/bootstrap_receipt.py declare_durable_root on main; initially declared by the pre-K0 install (element 1), re-attested here by reconcile; unevaluable=>DENY hardening 2026-08-01",
     ),
     SegmentElement(
         id="k0-arm-genesis-lock",
@@ -263,6 +265,7 @@ class DeterministicSegment:
     members: tuple[SegmentElement, ...]
     exclusions: tuple[Exclusion, ...]
     terminal_act_id: str
+    terminal_r_node: str
     #: ORDER IS SEMANTIC (escalating requirements); canonical() preserves it.
     transmit_class_law: tuple[str, ...]
     #: Pending ratification (spec §8.3): null today. When ratified, verify() refuses a value
@@ -282,6 +285,9 @@ class DeterministicSegment:
                 "transmit_class_law": list(self.transmit_class_law),
                 "mandatory_act_count": self.mandatory_act_count,
                 "ratified": self.ratified,
+                "terminal_r_node": self.terminal_r_node,
+                "required_member_ids": sorted(REQUIRED_MEMBER_IDS),
+                "self_attesting_members": sorted(SELF_ATTESTING_MEMBERS),
                 "members": sorted(
                     (
                         {
@@ -374,6 +380,12 @@ def verify(segment: DeterministicSegment, *, expect_pin: str | None = None) -> s
                 _fail(
                     f"{member.id}: {act!r} is not a governed act (nor the pre-K0 install act)"
                 )
+            if member.phase == "pre-K0" and act not in PRE_K0_ACTS:
+                _fail(f"{member.id}: governed act {act!r} cannot execute pre-K0")
+            if member.phase != "pre-K0" and act in PRE_K0_ACTS:
+                _fail(
+                    f"{member.id}: pre-K0 act {act!r} cannot execute at {member.phase}"
+                )
         if not member.r_nodes:
             _fail(f"{member.id}: no requirements-graph coverage")
     if seen != REQUIRED_MEMBER_IDS:
@@ -383,8 +395,13 @@ def verify(segment: DeterministicSegment, *, expect_pin: str | None = None) -> s
         )
     if not segment.terminal_act_id:
         _fail("no terminal act: the segment's boundary is undefined")
+    if not re.match(r"^R\d+\.\d+$", segment.terminal_r_node):
+        _fail(
+            f"terminal_r_node {segment.terminal_r_node!r} is not an R-node id — "
+            "the half-open check would go vacuous"
+        )
     member_r_nodes = {node for m in segment.members for node in m.r_nodes}
-    if segment.terminal_act_id.split("-")[0] in member_r_nodes:
+    if segment.terminal_r_node in member_r_nodes:
         _fail(
             f"terminal act {segment.terminal_act_id} is inside the segment it terminates — "
             "the interval is half-open"
@@ -392,13 +409,19 @@ def verify(segment: DeterministicSegment, *, expect_pin: str | None = None) -> s
     if not segment.transmit_class_law:
         _fail("no transmit-class law: the well-ordering keying is undefined")
     if segment.mandatory_act_count is not None:
-        executed_acts = {act for m in segment.members for act in m.acts}
-        if segment.mandatory_act_count < len(executed_acts):
+        act_instances = sum(len(m.acts) for m in segment.members)
+        if segment.mandatory_act_count < act_instances:
             _fail(
-                f"mandatory_act_count {segment.mandatory_act_count} is below the distinct acts "
-                f"the membership itself executes ({len(executed_acts)}) — the tally contradicts "
-                "the data"
+                f"mandatory_act_count {segment.mandatory_act_count} is below the "
+                f"{act_instances} act instances the membership itself executes — the tally "
+                "contradicts the data"
             )
+    if not segment.exclusions:
+        _fail("the exclusion ledger is empty — minimality is unasserted")
+    verify_minimality(segment)
+    overlap = {m.id for m in segment.members} & {e.id for e in segment.exclusions}
+    if overlap:
+        _fail(f"declared both member and exclusion: {sorted(overlap)}")
     digest = segment.digest()
     if expect_pin is not None and digest != expect_pin:
         _fail(f"drift pin mismatch: {digest} != {expect_pin}")
@@ -414,19 +437,22 @@ def verify_minimality(segment: DeterministicSegment) -> None:
             _fail(f"exclusion {exclusion.id} carries no reason")
 
 
+assert set(EVIDENCE_LEGALITY) == set(SUBSTRATE_STATES)
+
 #: The canonical segment, verified at import. A drift pin that recomputes itself is not a pin,
 #: so R22_DRAFT_PIN is a literal; the suite recomputes and compares independently of import.
 DETERMINISTIC_SEGMENT = DeterministicSegment(
-    version="r2.2-draft-2026-08-06",
+    version="r2.2-draft-2026-08-06-r3",
     members=SEGMENT_MEMBERS,
     exclusions=EXCLUSIONS,
     terminal_act_id=TERMINAL_ACT_ID,
+    terminal_r_node=TERMINAL_R_NODE,
     transmit_class_law=TRANSMIT_CLASS_LAW,
     mandatory_act_count=None,  # pending ratification (spec §8.3)
     ratified=False,
 )
 
-R22_DRAFT_PIN = "67ce78920b13a0c69d8eefd31b1ac66970871fbf0018abf31ea47d22b3f3ca59"
+R22_DRAFT_PIN = "f90a85643c46a9052b4c6adb72d2f026ea8a00bab25bb5ef009ba8adbf11a895"
 
 SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN)
 verify_minimality(DETERMINISTIC_SEGMENT)
