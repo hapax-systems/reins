@@ -8,9 +8,16 @@ repo="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
 fixture="$repo/api/fixtures/context-canon-gate0-carriers.json"
 predecessor_wheel="${HAPAX_CONTEXT_CANON_PREDECESSOR_WHEEL:-/tmp/hapax-context-canon-final-wheel-20260711/hapax_context_canon-0.1.0-py3-none-any.whl}"
 predecessor_wheel_sha="2c2202acad9050977d9f773c952c2d92c44ac0c0fb626a5395b041eb128cfe08"
-fixture_sha="594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+fixture_sha="34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
 go_image="golang:1.26.3"
 go_image_id="sha256:2d6c80227255c3112a4d08e67ba98e58efd3846daf15d9d7d4c389565d881b1a"
+# Exact-current artifact (Gate 0A lockstep): reproducible wheel build —
+# council cc2bf944ad830dbb7c1bf2ed7b80eee04a94cef8, SOURCE_DATE_EPOCH
+# 1754500000. Presence of this exact artifact flips the harness from the
+# designed HOLD into the exact-current conformance pass. Publication remains
+# a separately held act; this pins content identity only.
+current_wheel="${HAPAX_CONTEXT_CANON_CURRENT_WHEEL:-/tmp/hapax-context-canon-current-wheel/hapax_context_canon-0.1.0-py3-none-any.whl}"
+current_wheel_sha="882c5fc1a154d6340b5ce9ec9cf9698637e2079d6e8c14032f1fbd7907746277"
 
 test "$(sha256sum "$fixture" | cut -d' ' -f1)" = "$fixture_sha"
 test "$(docker image inspect --format '{{.Id}}' "$go_image")" = "$go_image_id"
@@ -48,6 +55,25 @@ uv run --isolated --frozen --project "$repo/api" \
   --output "$wire" \
   --fixture "$fixture"
 
+exact=""
+if test -f "$current_wheel"; then
+  test "$(sha256sum "$current_wheel" | cut -d' ' -f1)" = "$current_wheel_sha" || {
+    echo "current wheel present but SHA-256 mismatch — refusing" >&2
+    exit 1
+  }
+  exact=1
+  wire_exact="$(mktemp -d "${TMPDIR:-/tmp}/reins-context-wire-exact.XXXXXXXX")"
+  uv run --isolated --frozen --project "$repo/api" \
+    --with 'httpx==0.28.1' \
+    --with 'httpx2==2.5.0' \
+    --with "$current_wheel" \
+    python "$repo/scripts/reins-context-wire-materialize.py" \
+    --mode exact-wheel \
+    --output "$wire_exact" \
+    --fixture "$fixture" \
+    --wheel "$current_wheel"
+fi
+
 PYTHONPATH="$repo/api" "$repo/api/.venv/bin/python" - "$fixture" <<'PY'
 import hashlib
 import json
@@ -58,7 +84,7 @@ import reins_context
 
 fixture_path = sys.argv[1]
 raw = Path(fixture_path).read_bytes()
-assert hashlib.sha256(raw).hexdigest() == "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+assert hashlib.sha256(raw).hexdigest() == "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
 payload = json.dumps(
     json.loads(raw)["operator_projection"],
     allow_nan=False,
@@ -123,5 +149,27 @@ docker run --rm --pull=never \
     test -z "$unformatted"
   '
 
-printf '%s\n' 'HOLD reason=current_context_canon_package_artifact_missing fixture_sha256=594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9 predecessor_wheel_rejected=true source_and_go_conformance=pass may_authorize=false'
+if test -n "$exact"; then
+  docker run --rm --pull=never \
+    --mount "type=bind,src=$repo,dst=/src,readonly" \
+    --mount "type=bind,src=$wire_exact,dst=/wire,readonly" \
+    --mount type=tmpfs,destination=/go/pkg/mod \
+    --mount type=tmpfs,destination=/root/.cache/go-build \
+    --workdir /src \
+    --env GOTOOLCHAIN=local \
+    --env REINS_CONTEXT_CARRIER_CONFORMANCE_MANIFEST=/wire/manifest.json \
+    "$go_image" \
+    sh -euc '
+      go test -mod=readonly ./cmd/reins -run "^TestContextCarrierWireConformance$" -count=1
+      go test -mod=readonly ./...
+      go test -mod=readonly -race ./cmd/reins ./internal/api ./internal/model
+      go vet -mod=readonly ./...
+      unformatted="$(gofmt -l cmd internal)"
+      test -z "$unformatted"
+    '
+  printf '%s\n' "PASS exact_current_conformance=pass fixture_sha256=$fixture_sha wheel_sha256=$current_wheel_sha predecessor_wheel_rejected=true source_and_go_conformance=pass may_authorize=false"
+  exit 0
+fi
+
+printf '%s\n' "HOLD reason=current_context_canon_package_artifact_missing fixture_sha256=$fixture_sha predecessor_wheel_rejected=true source_and_go_conformance=pass may_authorize=false"
 exit 78

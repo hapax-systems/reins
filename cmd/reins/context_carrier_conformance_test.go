@@ -21,7 +21,12 @@ import (
 )
 
 const contextCarrierManifestSchema = "hapax.reins-context-wire-conformance.v2"
-const currentContextFixtureSHA256 = "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+const currentContextFixtureSHA256 = "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
+
+// exactCurrentWheelSHA256 is the reproducible-build digest of the pinned
+// current context-canon wheel (council cc2bf944, SOURCE_DATE_EPOCH pinned);
+// the manifest guard admits exactly this artifact and no other.
+const exactCurrentWheelSHA256 = "882c5fc1a154d6340b5ce9ec9cf9698637e2079d6e8c14032f1fbd7907746277"
 
 type contextCarrierManifest struct {
 	Schema              string               `json:"schema"`
@@ -71,8 +76,17 @@ func TestContextCarrierWireConformance(t *testing.T) {
 	if manifest.FixtureSHA256 != currentContextFixtureSHA256 {
 		t.Fatalf("fixture SHA-256 = %q", manifest.FixtureSHA256)
 	}
-	if manifest.WheelSHA256 != nil || manifest.PackageState != "hold_missing_exact_current_artifact" {
-		t.Fatalf("manifest falsely claims a current package artifact: %+v", manifest)
+	switch manifest.PackageState {
+	case "hold_missing_exact_current_artifact":
+		if manifest.WheelSHA256 != nil {
+			t.Fatalf("manifest falsely claims a current package artifact: %+v", manifest)
+		}
+	case "exact_current":
+		if manifest.WheelSHA256 == nil || *manifest.WheelSHA256 != exactCurrentWheelSHA256 {
+			t.Fatalf("exact-current manifest names the wrong wheel: %+v", manifest.WheelSHA256)
+		}
+	default:
+		t.Fatalf("manifest package_state = %q", manifest.PackageState)
 	}
 
 	required := map[string]bool{
@@ -92,7 +106,12 @@ func TestContextCarrierWireConformance(t *testing.T) {
 		"oversized_producer_dark":      false,
 		"outer_exact_limit_hold":       false,
 		"outer_over_limit_dark":        false,
-		"no_wheel_dark":                false,
+	}
+	if manifest.PackageState == "hold_missing_exact_current_artifact" {
+		// The DARK-on-absent-package case exists only where the package is
+		// absent by construction; exact-current manifests prove the wheel path
+		// instead.
+		required["no_wheel_dark"] = false
 	}
 	seen := make(map[string]struct{}, len(manifest.Cases))
 	root := filepath.Dir(manifestPath)

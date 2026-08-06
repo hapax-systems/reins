@@ -25,13 +25,32 @@ from fastapi.testclient import TestClient  # noqa: E402
 from reins_read import build_app  # noqa: E402
 
 SCHEMA = "hapax.reins-context-wire-conformance.v2"
-FIXTURE_SHA256 = "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+# The pinned current fixture sha is updated atomically with the fixture file
+# itself (amendment reins-strict-current-carrier-atomic-scope-20260712: one
+# atomic transition, no predecessor fallback). 594b6b96… is the Jul-13
+# generation, retained below only as a rejected predecessor value.
+FIXTURE_SHA256 = "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
 PREDECESSOR_FIXTURE_SHA256 = (
     "c16fce720b4bfb80233b0a3b94a9d5903796c646261651788a9084bfc0e97704"
 )
+REJECTED_FIXTURE_SHA256 = {
+    PREDECESSOR_FIXTURE_SHA256,
+    "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9",
+}
 PREDECESSOR_WHEEL_SHA256 = (
     "2c2202acad9050977d9f773c952c2d92c44ac0c0fb626a5395b041eb128cfe08"
 )
+# Exact-current artifact identity (Gate 0A lockstep proposal
+# kimi/gate0a-exact-current-lockstep): the wheel is reproducible — build
+# packages/hapax-context-canon at council repo SHA
+# cc2bf944ad830dbb7c1bf2ed7b80eee04a94cef8 with SOURCE_DATE_EPOCH=1754500000
+# (`uv build --wheel`) and this digest must result, on any host. Any other
+# digest refuses. Package *publication* remains a separately held act; this
+# pins the artifact's content identity, not a registry.
+EXACT_CURRENT_WHEEL_SHA256 = (
+    "882c5fc1a154d6340b5ce9ec9cf9698637e2079d6e8c14032f1fbd7907746277"
+)
+EXACT_CURRENT_PACKAGE_STATE = "exact_current"
 PACKAGE_STATE = "hold_missing_exact_current_artifact"
 OUTER_KEYS = {
     "schema",
@@ -450,9 +469,103 @@ def _exact_wheel_mode(args: argparse.Namespace) -> None:
         raise SystemExit(
             "predecessor context-canon wheel is rejected by the strict current boundary"
         )
-    raise SystemExit(
-        "current context-canon package identity is unpublished; exact-wheel conformance HOLD"
-    )
+    if observed != EXACT_CURRENT_WHEEL_SHA256:
+        raise SystemExit(
+            "context-canon wheel SHA-256 mismatch: "
+            f"{observed} != {EXACT_CURRENT_WHEEL_SHA256} "
+            "(rebuild at the pinned council SHA with the pinned SOURCE_DATE_EPOCH)"
+        )
+    try:
+        package_spec = importlib.util.find_spec("hapax.context_canon")
+    except ModuleNotFoundError:
+        package_spec = None
+    if package_spec is None:
+        raise SystemExit(
+            "exact-wheel mode requires hapax.context_canon importable from the "
+            "pinned current wheel in the ordinary environment"
+        )
+    fixtures = json.loads(args.fixture.read_bytes())
+    if args.output.exists() and any(args.output.iterdir()):
+        raise SystemExit(f"output directory is not empty: {args.output}")
+    args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Real wheel models, not the pinned test doubles: with patch_models=False
+    # the consumer's _canonical_models() resolves to the installed wheel, so
+    # the battery below validates the current carriers through the actual
+    # current contract (canonical round-trip included).
+    cases = [
+        Case(
+            case.name,
+            case.producer,
+            case.state,
+            case.reasons,
+            case.active_field,
+            query=case.query,
+            validation_mode=case.validation_mode,
+            patch_models=case.validation_mode == "test_only_boundary_stub",
+        )
+        for case in _exact_cases(fixtures)
+    ]
+    manifest = {
+        "schema": SCHEMA,
+        "fixture_sha256": FIXTURE_SHA256,
+        "wheel_sha256": observed,
+        "package_state": EXACT_CURRENT_PACKAGE_STATE,
+        "max_context_read_bytes": reins_context.MAX_CONTEXT_READ_BYTES,
+        "cases": [_materialize_case(args.output, case) for case in cases],
+    }
+    _write_manifest(args.output / "manifest.json", manifest, replace=False)
+
+
+def _regenerate_fixture_mode(args: argparse.Namespace) -> None:
+    """Regenerate the consumer carrier fixture from the producer's current
+    canonical fixtures, validated through the installed current wheel.
+
+    This is the regenerator the atomic transition pins: every carrier is
+    model-validated and canonical-round-tripped under the real contract, so a
+    stale or drifted producer image refuses here instead of at the boundary.
+    """
+    try:
+        from hapax.context_canon import (
+            ContextBundleCompatibilityProjection,
+            ProjectionEnvelope,
+            canonical_json_bytes,
+        )
+    except Exception as exc:
+        raise SystemExit(
+            "regenerate-fixture requires the pinned current hapax.context_canon "
+            "wheel importable in the ordinary environment"
+        ) from exc
+    producer = args.producer_fixtures.resolve()
+    projections = json.loads((producer / "gate0-projections.json").read_bytes())
+    purposes = json.loads((producer / "gate0-purpose-projections.json").read_bytes())
+    compatibility = json.loads((producer / "gate0-compatibility.json").read_bytes())
+    carriers = {
+        "operator_projection": projections["operator"],
+        "yard_projection": projections["yard"],
+        "lifecycle_projection": purposes["lifecycle_possibility"],
+        "operation_projection": purposes["operation"],
+        "compatibility": compatibility,
+    }
+    for name, carrier in carriers.items():
+        model_type = (
+            ContextBundleCompatibilityProjection
+            if name == "compatibility"
+            else ProjectionEnvelope
+        )
+        try:
+            model = model_type.model_validate(carrier)
+        except Exception as exc:
+            raise SystemExit(f"{name}: refuses under the current contract: {exc}")
+        normalized = model.model_dump(mode="json", by_alias=True)
+        if canonical_json_bytes(normalized) != canonical_json_bytes(carrier):
+            raise SystemExit(
+                f"{name}: canonical round-trip mismatch under the current contract"
+            )
+    payload = _compact(carriers) + b"\n"
+    if args.output.exists():
+        raise SystemExit(f"refusing to overwrite existing fixture: {args.output}")
+    _write_private(args.output, payload)
+    print(_sha256(payload))
 
 
 def _no_wheel_mode(args: argparse.Namespace, fixtures: dict[str, Any]) -> None:
@@ -485,18 +598,29 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=("source-fixture", "exact-wheel", "no-wheel"),
+        choices=("source-fixture", "exact-wheel", "no-wheel", "regenerate-fixture"),
         required=True,
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--fixture", type=Path, required=True)
+    parser.add_argument("--fixture", type=Path)
     parser.add_argument("--wheel", type=Path)
+    parser.add_argument("--producer-fixtures", type=Path)
     args = parser.parse_args()
 
+    if args.mode == "regenerate-fixture":
+        if args.producer_fixtures is None:
+            raise SystemExit(
+                "--producer-fixtures is required in regenerate-fixture mode"
+            )
+        _regenerate_fixture_mode(args)
+        return 0
+
+    if args.fixture is None:
+        raise SystemExit("--fixture is required in this mode")
     fixture_path = args.fixture.resolve()
     fixture_bytes = fixture_path.read_bytes()
     observed_fixture = _sha256(fixture_bytes)
-    if observed_fixture == PREDECESSOR_FIXTURE_SHA256:
+    if observed_fixture in REJECTED_FIXTURE_SHA256:
         raise SystemExit(
             "predecessor context fixture is rejected by the strict current boundary"
         )

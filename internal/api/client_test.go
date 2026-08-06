@@ -181,7 +181,7 @@ func TestContextProjectionHashStreamingPreservesFrozenDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantProjection = "1a7f44abeb2b0bf04d55cb845ffa60d6e67d1c8694cdd77d54b70e5a4efc9079"
+	const wantProjection = "f7b1cae2d3ca1d3f5bfe97a51e298dc3ae71a62af73ce2aabfd97241eb397ccd"
 	if projectionHash != wantProjection {
 		t.Fatalf(
 			"ContextProjectionContentHash() = %s, want %s",
@@ -194,7 +194,7 @@ func TestContextProjectionHashStreamingPreservesFrozenDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantEvent = "dc34763eca21b0d96ed9ea8853b9dd27ce43ba6949d42742ed0d327f850bc441"
+	const wantEvent = "a403416c626ef0892f842f145fac577773a7fb2cd3c901e0f4155edc52a1f1e9"
 	if eventHash != wantEvent {
 		t.Fatalf(
 			"ContextProjectionEventContentHash() = %s, want %s",

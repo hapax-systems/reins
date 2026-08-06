@@ -13,7 +13,7 @@ import pytest
 import reins_context as rc
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "context-canon-gate0-carriers.json"
-FIXTURE_SHA256 = "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+FIXTURE_SHA256 = "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
 PREDECESSOR_FIXTURE_SHA256 = (
     "c16fce720b4bfb80233b0a3b94a9d5903796c646261651788a9084bfc0e97704"
 )

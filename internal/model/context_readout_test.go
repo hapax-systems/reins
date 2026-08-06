@@ -18,7 +18,7 @@ import (
 	"github.com/hapax-systems/reins/internal/grammar"
 )
 
-const gate0ContextFixtureSHA256 = "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+const gate0ContextFixtureSHA256 = "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851f4"
 
 var gate0ContextObservationTime = time.Date(2026, 7, 10, 17, 0, 0, 0, time.UTC)
 
