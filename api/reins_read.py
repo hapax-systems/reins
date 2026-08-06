@@ -2,22 +2,80 @@
 air-classified events. Engine code; the council root + ledger come from config (instance)."""
 
 from __future__ import annotations
+
 import hashlib
 import json
+import logging
 import math
 import os
 import re
 import stat
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 from urllib.parse import quote
+
 from fastapi import FastAPI, Request, Response
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # strict operator-private canonical context carrier
 
 _ROUTE_BINDING_TAIL_BYTES = 4 * 1024 * 1024
+
+ReadErrorCode = Literal[
+    "capabilities_read_error",
+    "capability_inventory_read_error",
+    "capability_surface_pack_read_error",
+    "commands_read_error",
+    "domain_pack_read_error",
+    "domains_read_error",
+    "dynamics_package_read_error",
+    "dynamics_seed_read_error",
+    "epistemics_read_error",
+    "events_read_error",
+    "gates_read_error",
+    "gate_event_log_read_error",
+    "gate_session_state_read_error",
+    "gate_task_projection_read_error",
+    "intake_read_error",
+    "lifecycle_registry_read_error",
+    "observe_api_read_error",
+    "observe_governance_read_error",
+    "observe_read_error",
+    "observe_session_read_error",
+    "observe_source_dark",
+    "platform_registry_read_error",
+    "quota_ledger_read_error",
+    "route_read_error",
+    "sessions_read_error",
+    "session_detail_read_error",
+    "session_role_unknown",
+    "session_turn_blocks_unavailable",
+    "session_turn_fixture_absent",
+    "turn_replay_fixture_only",
+    "session_turns_read_error",
+    "tasks_read_error",
+    "traces_read_error",
+    "traces_unavailable",
+    "vault_read_error",
+]
+
+_READ_ERROR_CODES = frozenset(get_args(ReadErrorCode))
+_LOGGER = logging.getLogger(__name__)
+
+
+def _read_failure(code: ReadErrorCode, exc: BaseException) -> str:
+    """Log private diagnostics and return only a closed public READ code."""
+
+    if code not in _READ_ERROR_CODES:
+        raise AssertionError(f"unregistered READ error code: {code}")
+    _LOGGER.exception(
+        "Reins READ source failure [%s]",
+        code,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return code
+
 
 _KIND_SEVERITY = {  # kind -> base severity in [0,1]; escalations rank above routine
     "review.fail": 0.95,
@@ -2277,7 +2335,7 @@ def _capability_inventory_rows(
         ], []
     try:
         report = _read_json(path)
-    except Exception as e:
+    except Exception as exc:
         return [
             _capability_source(
                 "capability_inventory",
@@ -2285,7 +2343,7 @@ def _capability_inventory_rows(
                 0,
                 "dark",
                 allowlist,
-                f"capability inventory unreadable: {e}",
+                _read_failure("capability_inventory_read_error", exc),
             )
         ], []
     raw_rows = report.get("rows")
@@ -2405,9 +2463,16 @@ def _capability_surface_pack_rows(
             continue
         try:
             doc = _read_json(path)
-        except Exception as e:
+        except Exception as exc:
             sources.append(
-                _capability_source(source_id, path, 0, "dark", allowlist, str(e))
+                _capability_source(
+                    source_id,
+                    path,
+                    0,
+                    "dark",
+                    allowlist,
+                    _read_failure("capability_surface_pack_read_error", exc),
+                )
             )
             continue
         pack_id = str(doc.get("pack_id") or doc.get("id") or source_id)
@@ -3012,7 +3077,11 @@ def read_capability_summary(
                 len(routes),
                 "observed" if registry is not None else "error",
                 allowlist,
-                sources_obj.registry_error or "typed platform capability registry",
+                (
+                    "platform_registry_read_error"
+                    if sources_obj.registry_error
+                    else "typed platform capability registry"
+                ),
             ),
             _capability_source(
                 "platform_receipts",
@@ -3036,9 +3105,11 @@ def read_capability_summary(
                 1 if sources_obj.quota_ledger is not None else 0,
                 "observed" if sources_obj.quota_ledger is not None else "missing",
                 allowlist,
-                sources_obj.quota_error
-                or sources_obj.quota_live_error
-                or str(sources_obj.quota_ledger_source or ""),
+                (
+                    "quota_ledger_read_error"
+                    if sources_obj.quota_error or sources_obj.quota_live_error
+                    else str(sources_obj.quota_ledger_source or "")
+                ),
             ),
         ]
         + pack_sources
@@ -3068,7 +3139,7 @@ def read_capability_summary(
             route_count - blocked_routes,
             blocked_routes,
             route_count,
-            sources_obj.registry_error or "",
+            "platform_registry_read_error" if sources_obj.registry_error else "",
             "not_applicable",
             allowlist,
         )
@@ -3092,7 +3163,11 @@ def read_capability_summary(
             quota_route_ok,
             max(0, route_count - quota_route_ok),
             1 if quota_ok else 0,
-            sources_obj.quota_error or sources_obj.quota_live_error or "",
+            (
+                "quota_ledger_read_error"
+                if sources_obj.quota_error or sources_obj.quota_live_error
+                else ""
+            ),
             "not_applicable",
             allowlist,
         )
@@ -3267,14 +3342,14 @@ def read_gate_summary(
                 age_bucket="live",
             )
         )
-    except Exception as e:
+    except Exception as exc:
         sources.append(
             _gate_source(
                 "task_projection",
                 "dark",
                 0,
                 allowlist,
-                detail=str(e),
+                detail=_read_failure("gate_task_projection_read_error", exc),
                 age_bucket="dark",
             )
         )
@@ -3321,14 +3396,14 @@ def read_gate_summary(
                 path=str(binding_path),
             )
         )
-    except Exception as e:
+    except Exception as exc:
         sources.append(
             _gate_source(
                 "session_state",
                 "dark",
                 0,
                 allowlist,
-                detail=str(e),
+                detail=_read_failure("gate_session_state_read_error", exc),
                 age_bucket=_path_age_bucket(session_path),
                 path=str(session_path),
             )
@@ -3347,10 +3422,15 @@ def read_gate_summary(
                 age_bucket="live",
             )
         )
-    except Exception as e:
+    except Exception as exc:
         sources.append(
             _gate_source(
-                "event_log", "dark", 0, allowlist, detail=str(e), age_bucket="dark"
+                "event_log",
+                "dark",
+                0,
+                allowlist,
+                detail=_read_failure("gate_event_log_read_error", exc),
+                age_bucket="dark",
             )
         )
 
@@ -3823,10 +3903,16 @@ def read_lifecycle_registry_summary(cfg: dict | None, allowlist: list[str]) -> d
             continue
         try:
             doc = _read_json(path)
-        except Exception as e:
+        except Exception as exc:
             sources.append(
                 _domain_source(
-                    source_id, path, "dark", 0, allowlist, "compiled-fallback", str(e)
+                    source_id,
+                    path,
+                    "dark",
+                    0,
+                    allowlist,
+                    "compiled-fallback",
+                    _read_failure("lifecycle_registry_read_error", exc),
                 )
             )
             continue
@@ -3957,10 +4043,16 @@ def read_domain_pack_summary(cfg: dict | None, allowlist: list[str]) -> dict:
             continue
         try:
             doc = _read_json(path)
-        except Exception as e:
+        except Exception as exc:
             sources.append(
                 _domain_source(
-                    source_id, path, "dark", 0, allowlist, "compiled-fallback", str(e)
+                    source_id,
+                    path,
+                    "dark",
+                    0,
+                    allowlist,
+                    "compiled-fallback",
+                    _read_failure("domain_pack_read_error", exc),
                 )
             )
             continue
@@ -4333,7 +4425,8 @@ def _observe_dim(key: str, status: str, summary: str, count: int | None) -> dict
 
 
 def _observe_dark(key: str, reason: str) -> dict:
-    return _observe_dim(key, "dark", f"source dark: {reason}", None)
+    summary = reason if reason in _READ_ERROR_CODES else f"source dark: {reason}"
+    return _observe_dim(key, "dark", summary, None)
 
 
 def _observe_api_base_url(cfg: dict | None = None) -> str:
@@ -4426,13 +4519,10 @@ def _observe_from_http(cfg: dict | None, key: str) -> dict:
     url = base.rstrip("/") + "/" + quote(key, safe="")
     try:
         payload = _observe_http_json(url, _observe_timeout_s(cfg))
-    except Exception as e:
-        return _observe_dark(key, str(e))
+    except Exception as exc:
+        return _observe_dark(key, _read_failure("observe_api_read_error", exc))
     if isinstance(payload, dict) and payload.get("dark") is True:
-        return _observe_dark(
-            key,
-            str(payload.get("error") or payload.get("summary") or "api returned dark"),
-        )
+        return _observe_dark(key, "observe_source_dark")
     count = _observe_payload_count(key, payload)
     return _observe_dim(
         key, "live", _observe_payload_summary(key, payload, count), count
@@ -4442,8 +4532,8 @@ def _observe_from_http(cfg: dict | None, key: str) -> dict:
 def _observe_session_dimensions() -> tuple[dict, dict]:
     try:
         raw = _raw_sessions()
-    except Exception as e:
-        reason = str(e)
+    except Exception as exc:
+        reason = _read_failure("observe_session_read_error", exc)
         return _observe_dark("health", reason), _observe_dark("agents", reason)
 
     total = len(raw)
@@ -4492,8 +4582,10 @@ def _observe_governance(cfg: dict | None) -> dict:
             f"coord projection live: tasks={len(tasks)}; blocked={blocked}",
             blocked,
         )
-    except Exception as e:
-        return _observe_dark("governance", str(e))
+    except Exception as exc:
+        return _observe_dark(
+            "governance", _read_failure("observe_governance_read_error", exc)
+        )
 
 
 def _dispatch_ledger_path(cfg: dict | None = None) -> Path:
@@ -5550,12 +5642,16 @@ def read_traces(
         from hapax.spine.langfuse_client import is_available, langfuse_get
 
         if not is_available():
-            return {"dark": True, "error": "langfuse unavailable", "traces": []}
+            return {"dark": True, "error": "traces_unavailable", "traces": []}
         resp = langfuse_get("/traces", {"limit": limit, "orderBy": "timestamp.desc"})
         traces = [to_trace_row(t, allowlist) for t in (resp.get("data") or [])[:limit]]
         return {"dark": False, "traces": traces}
-    except Exception as e:  # honest-dark
-        return {"dark": True, "error": str(e), "traces": []}
+    except Exception as exc:  # honest-dark
+        return {
+            "dark": True,
+            "error": _read_failure("traces_read_error", exc),
+            "traces": [],
+        }
 
 
 def _projection(council_root: str) -> dict:
@@ -5643,8 +5739,12 @@ def build_app(
     def read_events(limit: int = 80, before: str | None = None) -> dict:
         try:
             raws = _raw_tail(council_root, limit, before)
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "events": []}
+        except Exception as exc:  # honest-dark
+            return {
+                "dark": True,
+                "error": _read_failure("events_read_error", exc),
+                "events": [],
+            }
         now = time.time()
         events = [
             to_event(
@@ -5665,8 +5765,12 @@ def build_app(
         try:
             proj = _projection(council_root)
             hist = _task_history(council_root)
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "tasks": []}
+        except Exception as exc:  # honest-dark
+            return {
+                "dark": True,
+                "error": _read_failure("tasks_read_error", exc),
+                "tasks": [],
+            }
         now = time.time()
         tasks = [
             to_task(tid, t, allowlist, hist, now)
@@ -5678,10 +5782,10 @@ def build_app(
     def read_dynamics() -> dict:
         try:
             seed = _seed(council_root)
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("dynamics_seed_read_error", exc),
                 "layers": [],
                 "nodes": [],
                 "edges": [],
@@ -5697,10 +5801,18 @@ def build_app(
             }
         try:
             package = read_dynamics_package(council_root, allowlist)
-        except Exception as e:
+        except Exception as exc:
             package = {
                 "sources": [
-                    _dyn_source("package", "dark", 0, allowlist, str(e), "", "")
+                    _dyn_source(
+                        "package",
+                        "dark",
+                        0,
+                        allowlist,
+                        _read_failure("dynamics_package_read_error", exc),
+                        "",
+                        "",
+                    )
                 ],
                 "validation": [],
                 "lenses": [],
@@ -5732,10 +5844,10 @@ def build_app(
                 "error": "",
                 "epistemics": read_epistemics(council_root, allowlist, scope),
             }
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("epistemics_read_error", exc),
                 "epistemics": _empty_epistemics(scope),
             }
 
@@ -5743,8 +5855,12 @@ def build_app(
     def read_sessions() -> dict:
         try:
             raw = _raw_sessions()
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "sessions": []}
+        except Exception as exc:  # honest-dark
+            return {
+                "dark": True,
+                "error": _read_failure("sessions_read_error", exc),
+                "sessions": [],
+            }
         bindings, binding_source, binding_path = _route_binding_index(session_cfg)
         sessions = [
             to_session(
@@ -5767,7 +5883,7 @@ def build_app(
             if lane is None:
                 return {
                     "dark": True,
-                    "error": f"unknown session role: {role}",
+                    "error": "session_role_unknown",
                     "detail": {},
                 }
             bindings, binding_source, binding_path = _route_binding_index(session_cfg)
@@ -5780,8 +5896,12 @@ def build_app(
                     role, lane, allowlist, session_cfg, route_binding
                 ),
             }
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "detail": {}}
+        except Exception as exc:  # honest-dark
+            return {
+                "dark": True,
+                "error": _read_failure("session_detail_read_error", exc),
+                "detail": {},
+            }
 
     @app.get("/read/session/{role}/turns")
     def read_session_turns(
@@ -5792,7 +5912,7 @@ def build_app(
             if fixtures is None:
                 return {
                     "dark": True,
-                    "error": f"no turn replay fixture for session role: {role}",
+                    "error": "session_turn_fixture_absent",
                     "turns": [],
                     "oldest_ts": "",
                 }
@@ -5805,26 +5925,28 @@ def build_app(
             return {
                 "dark": True,
                 "fixture_only": True,
-                "error": f"fixture-only turn replay for {role} — no live CapabilityIO producer",
+                "error": "turn_replay_fixture_only",
                 "turns": turns,
                 "oldest_ts": turns[0]["ts"] if turns else "",
             }
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "turns": [], "oldest_ts": ""}
+        except Exception as exc:  # honest-dark
+            return {
+                "dark": True,
+                "error": _read_failure("session_turns_read_error", exc),
+                "turns": [],
+                "oldest_ts": "",
+            }
 
     @app.get("/read/session/{role}/turns/{ts}/blocks")
     def read_session_turn_blocks(role: str, ts: str) -> dict:
-        try:
-            # Consumer-ahead read wire: no fixture block data exists, and CapabilityIO
-            # capture-output has not yet promoted real per-turn block streams into the READ API.
-            # Stay honest-empty for every role/turn instead of fabricating demo detail blocks.
-            return {
-                "dark": True,
-                "error": f"no turn block stream for session role/turn: {role}/{ts}",
-                "blocks": [],
-            }
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "blocks": []}
+        # Consumer-ahead read wire: no fixture block data exists, and CapabilityIO
+        # capture-output has not yet promoted real per-turn block streams into the READ API.
+        # Stay honest-empty for every role/turn instead of fabricating demo detail blocks.
+        return {
+            "dark": True,
+            "error": "session_turn_blocks_unavailable",
+            "blocks": [],
+        }
 
     @app.get("/read/intake")
     def read_intake() -> dict:
@@ -5833,10 +5955,10 @@ def build_app(
                 "dark": False,
                 "intake": read_intake_summary(session_cfg, allowlist),
             }
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("intake_read_error", exc),
                 "intake": {"sources": [], "rows": [], "totals": {}},
             }
 
@@ -5882,10 +6004,10 @@ def build_app(
                     council_root, allowlist, session_cfg
                 ),
             }
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("capabilities_read_error", exc),
                 "capabilities": {"sources": [], "rows": [], "routes": [], "totals": {}},
             }
 
@@ -5896,10 +6018,10 @@ def build_app(
                 "dark": False,
                 "gates": read_gate_summary(council_root, allowlist, session_cfg),
             }
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("gates_read_error", exc),
                 "gates": {"sources": [], "rows": [], "totals": {}},
             }
 
@@ -5910,10 +6032,10 @@ def build_app(
                 "dark": False,
                 "domains": read_domain_pack_summary(session_cfg, allowlist),
             }
-        except Exception as e:  # honest-dark
+        except Exception as exc:  # honest-dark
             return {
                 "dark": True,
-                "error": str(e),
+                "error": _read_failure("domains_read_error", exc),
                 "domains": {
                     "sources": [],
                     "rows": [],

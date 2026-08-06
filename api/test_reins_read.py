@@ -1,5 +1,7 @@
 import json
 import os
+import sys
+import types
 from pathlib import Path
 from urllib.parse import quote
 
@@ -351,6 +353,273 @@ def test_read_context_explicit_path_is_exclusive(tmp_path, monkeypatch):
     assert data == _dark_context("producer_malformed")
 
 
+def test_read_exception_detail_is_logged_but_never_returned(monkeypatch, caplog):
+    sentinel = "SENTINEL:/private/operator/path:stack-frame"
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(reins_read, "_raw_tail", fail)
+    data = TestClient(build_app("", EXPECTED_DEFAULT_ALLOW)).get("/read/events").json()
+
+    assert data == {"dark": True, "error": "events_read_error", "events": []}
+    assert sentinel not in json.dumps(data)
+    assert sentinel in caplog.text
+
+
+def test_nested_source_failure_uses_closed_code(monkeypatch, tmp_path, caplog):
+    sentinel = "SENTINEL:/private/capability-inventory"
+
+    def fail(_path):
+        raise RuntimeError(sentinel)
+
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text("{}")
+    monkeypatch.setattr(reins_read, "_read_json", fail)
+
+    sources, rows = _capability_inventory_rows(
+        {"capability_inventory_path": str(inventory)}, EXPECTED_DEFAULT_ALLOW
+    )
+
+    assert rows == []
+    assert sources[0]["status"] == "dark"
+    assert sources[0]["detail"] == "capability_inventory_read_error"
+    assert sentinel not in json.dumps(sources)
+    assert sentinel in caplog.text
+
+
+_READ_FAILURE_CASES = (
+    ("capability_inventory", "capability_inventory_read_error"),
+    ("capability_surface_pack", "capability_surface_pack_read_error"),
+    ("gate_task_projection", "gate_task_projection_read_error"),
+    ("gate_session_state", "gate_session_state_read_error"),
+    ("gate_event_log", "gate_event_log_read_error"),
+    ("lifecycle_registry", "lifecycle_registry_read_error"),
+    ("domain_pack", "domain_pack_read_error"),
+    ("observe_http", "observe_api_read_error"),
+    ("observe_session", "observe_session_read_error"),
+    ("observe_governance", "observe_governance_read_error"),
+    ("traces", "traces_read_error"),
+    ("events", "events_read_error"),
+    ("tasks", "tasks_read_error"),
+    ("dynamics_seed", "dynamics_seed_read_error"),
+    ("dynamics_package", "dynamics_package_read_error"),
+    ("epistemics", "epistemics_read_error"),
+    ("sessions", "sessions_read_error"),
+    ("session_detail", "session_detail_read_error"),
+    ("session_turns", "session_turns_read_error"),
+    ("intake", "intake_read_error"),
+    ("capabilities", "capabilities_read_error"),
+    ("gates", "gates_read_error"),
+    ("domains", "domains_read_error"),
+)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "code"),
+    _READ_FAILURE_CASES,
+    ids=[boundary for boundary, _code in _READ_FAILURE_CASES],
+)
+def test_every_read_failure_boundary_is_closed(
+    boundary, code, monkeypatch, tmp_path, caplog
+):
+    sentinel = f"SENTINEL:/private/{boundary}:stack-frame"
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(sentinel)
+
+    def endpoint(path):
+        app = build_app("", EXPECTED_DEFAULT_ALLOW)
+        return next(
+            route.endpoint for route in app.routes if getattr(route, "path", "") == path
+        )
+
+    public = None
+    empty = None
+    dark = False
+    returned_code = ""
+
+    if boundary == "capability_inventory":
+        source_path = tmp_path / "inventory.json"
+        source_path.write_text("{}")
+        monkeypatch.setattr(reins_read, "_read_json", fail)
+        sources, rows = _capability_inventory_rows(
+            {"capability_inventory_path": str(source_path)}, EXPECTED_DEFAULT_ALLOW
+        )
+        public, empty = {"sources": sources, "rows": rows}, rows
+        dark, returned_code = sources[0]["status"] == "dark", sources[0]["detail"]
+    elif boundary == "capability_surface_pack":
+        source_path = tmp_path / "capability-pack.json"
+        source_path.write_text("{}")
+        monkeypatch.setattr(reins_read, "_read_json", fail)
+        sources, rows = _capability_surface_pack_rows(
+            {"capability_surface_pack_paths": [str(source_path)]},
+            EXPECTED_DEFAULT_ALLOW,
+        )
+        public, empty = {"sources": sources, "rows": rows}, sources[0]["count"]
+        dark, returned_code = sources[0]["status"] == "dark", sources[0]["detail"]
+    elif boundary.startswith("gate_"):
+        monkeypatch.setattr(
+            reins_read,
+            "_route_binding_index",
+            lambda _cfg: ({}, "missing", Path("")),
+        )
+        monkeypatch.setattr(reins_read, "_projection", lambda _root: {"tasks": {}})
+        monkeypatch.setattr(reins_read, "_raw_sessions", lambda: [])
+        monkeypatch.setattr(reins_read, "_raw_tail", lambda *_args: [])
+        source_id = {
+            "gate_task_projection": "task_projection",
+            "gate_session_state": "session_state",
+            "gate_event_log": "event_log",
+        }[boundary]
+        if boundary == "gate_task_projection":
+            monkeypatch.setattr(reins_read, "_projection", fail)
+        elif boundary == "gate_session_state":
+            monkeypatch.setattr(reins_read, "_raw_sessions", fail)
+        else:
+            monkeypatch.setattr(reins_read, "_raw_tail", fail)
+        summary = read_gate_summary("", EXPECTED_DEFAULT_ALLOW, {})
+        source = next(item for item in summary["sources"] if item["id"] == source_id)
+        public, empty = summary, source["count"]
+        dark, returned_code = source["status"] == "dark", source["detail"]
+    elif boundary == "lifecycle_registry":
+        source_path = tmp_path / "lifecycle.json"
+        source_path.write_text("{}")
+        monkeypatch.setattr(reins_read, "_read_json", fail)
+        summary = read_lifecycle_registry_summary(
+            {"lifecycle_registry_paths": [str(source_path)]},
+            EXPECTED_DEFAULT_ALLOW,
+        )
+        public, empty = summary, summary["rows"]
+        dark = summary["sources"][0]["status"] == "dark"
+        returned_code = summary["sources"][0]["detail"]
+    elif boundary == "domain_pack":
+        source_path = tmp_path / "domain.json"
+        source_path.write_text("{}")
+        monkeypatch.setattr(reins_read, "_read_json", fail)
+        summary = read_domain_pack_summary(
+            {"domain_pack_paths": [str(source_path)]}, EXPECTED_DEFAULT_ALLOW
+        )
+        public, empty = summary, summary["rows"]
+        dark = summary["sources"][0]["status"] == "dark"
+        returned_code = summary["sources"][0]["detail"]
+    elif boundary == "observe_http":
+        monkeypatch.setattr(reins_read, "_observe_http_json", fail)
+        dimension = reins_read._observe_from_http(
+            {"observe_api_url": "http://observe.test"}, "gpu"
+        )
+        public, empty = dimension, dimension["count"]
+        dark, returned_code = dimension["status"] == "dark", dimension["summary"]
+    elif boundary == "observe_session":
+        monkeypatch.setattr(reins_read, "_raw_sessions", fail)
+        health, agents = reins_read._observe_session_dimensions()
+        public, empty = {"dimensions": [health, agents]}, health["count"]
+        dark, returned_code = health["status"] == "dark", health["summary"]
+    elif boundary == "observe_governance":
+        monkeypatch.setattr(reins_read, "_projection", fail)
+        dimension = reins_read._observe_governance({"council_root": "/council"})
+        public, empty = dimension, dimension["count"]
+        dark, returned_code = dimension["status"] == "dark", dimension["summary"]
+    elif boundary == "traces":
+        hapax_module = types.ModuleType("hapax")
+        spine_module = types.ModuleType("hapax.spine")
+        langfuse_module = types.ModuleType("hapax.spine.langfuse_client")
+        hapax_module.__path__ = []
+        spine_module.__path__ = []
+        langfuse_module.is_available = lambda: True
+        langfuse_module.langfuse_get = fail
+        monkeypatch.setitem(sys.modules, "hapax", hapax_module)
+        monkeypatch.setitem(sys.modules, "hapax.spine", spine_module)
+        monkeypatch.setitem(sys.modules, "hapax.spine.langfuse_client", langfuse_module)
+        result = reins_read.read_traces("", 40, EXPECTED_DEFAULT_ALLOW)
+        public, empty = result, result["traces"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "events":
+        monkeypatch.setattr(reins_read, "_raw_tail", fail)
+        result = endpoint("/read/events")()
+        public, empty = result, result["events"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "tasks":
+        monkeypatch.setattr(reins_read, "_projection", fail)
+        result = endpoint("/read/tasks")()
+        public, empty = result, result["tasks"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "dynamics_seed":
+        monkeypatch.setattr(reins_read, "_seed", fail)
+        result = endpoint("/read/dynamics")()
+        public, empty = result, result["nodes"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "dynamics_package":
+        monkeypatch.setattr(
+            reins_read,
+            "_seed",
+            lambda _root: {
+                "map_id": "test",
+                "thesis": "",
+                "layers": [],
+                "nodes": [],
+                "edges": [],
+            },
+        )
+        monkeypatch.setattr(reins_read, "read_dynamics_package", fail)
+        result = endpoint("/read/dynamics")()
+        source = result["package"]["sources"][0]
+        public, empty = result, result["package"]["validation"]
+        dark, returned_code = source["status"] == "dark", source["detail"]
+    elif boundary == "epistemics":
+        monkeypatch.setattr(reins_read, "read_epistemics", fail)
+        result = endpoint("/read/epistemics")()
+        public, empty = result, result["epistemics"]["rows"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "sessions":
+        monkeypatch.setattr(reins_read, "_raw_sessions", fail)
+        result = endpoint("/read/sessions")()
+        public, empty = result, result["sessions"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "session_detail":
+        monkeypatch.setattr(reins_read, "_raw_sessions", fail)
+        result = endpoint("/read/session/{role}")("cc-test")
+        public, empty = result, result["detail"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "session_turns":
+        monkeypatch.setattr(reins_read, "_page_before", fail)
+        result = endpoint("/read/session/{role}/turns")("cc-reins", None, 80)
+        public, empty = result, result["turns"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "intake":
+        monkeypatch.setattr(reins_read, "read_intake_summary", fail)
+        result = endpoint("/read/intake")()
+        public, empty = result, result["intake"]["rows"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "capabilities":
+        monkeypatch.setattr(reins_read, "read_capability_summary", fail)
+        result = endpoint("/read/capabilities")()
+        public, empty = result, result["capabilities"]["rows"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "gates":
+        monkeypatch.setattr(reins_read, "read_gate_summary", fail)
+        result = endpoint("/read/gates")()
+        public, empty = result, result["gates"]["rows"]
+        dark, returned_code = result["dark"], result["error"]
+    elif boundary == "domains":
+        monkeypatch.setattr(reins_read, "read_domain_pack_summary", fail)
+        result = endpoint("/read/domains")()
+        public, empty = result, result["domains"]["rows"]
+        dark, returned_code = result["dark"], result["error"]
+    else:
+        raise AssertionError(f"unhandled READ failure boundary: {boundary}")
+
+    assert len(_READ_FAILURE_CASES) == 23
+    assert code in reins_read._READ_ERROR_CODES
+    assert dark is True
+    assert returned_code == code
+    assert empty is None or empty == "" or empty == [] or empty == {} or empty == 0
+    rendered = json.dumps(public)
+    assert sentinel not in rendered
+    assert f'"{code}"' in rendered
+    assert sentinel in caplog.text
+
+
 def test_read_context_nonregular_producer_is_bounded_dark(tmp_path, monkeypatch):
     path = tmp_path / "producer.fifo"
     os.mkfifo(path)
@@ -489,7 +758,7 @@ def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
     # never-mint / never-false-green (dossier F2): fixtures ship dark:true + fixture_only so no
     # consumer can label hand-authored replay rows "live — streaming".
     assert data["dark"] is True and data["fixture_only"] is True
-    assert "fixture-only" in data["error"]
+    assert data["error"] == "turn_replay_fixture_only"
     assert data["oldest_ts"] == "2026-06-26T18:40:05Z"
     assert len(data["turns"]) == 2
 
@@ -531,7 +800,7 @@ def test_read_session_turns_unknown_role_is_honest_dark():
     assert data["dark"] is True
     assert data["turns"] == []
     assert data["oldest_ts"] == ""
-    assert "no turn replay fixture" in data["error"]
+    assert data["error"] == "session_turn_fixture_absent"
 
 
 def test_read_session_turn_blocks_are_honest_empty_for_any_role_and_ts():
@@ -549,7 +818,7 @@ def test_read_session_turn_blocks_are_honest_empty_for_any_role_and_ts():
         data = endpoint(role, ts)
         assert data["dark"] is True
         assert data["blocks"] == []
-        assert "no turn block stream" in data["error"]
+        assert data["error"] == "session_turn_blocks_unavailable"
 
 
 def test_to_task_shape_and_air():

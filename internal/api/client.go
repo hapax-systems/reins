@@ -22,6 +22,105 @@ type readResp struct {
 	Events []grammar.Event `json:"events"`
 }
 
+const (
+	maxReadErrorCodeBytes = 64
+	maxReadResponseBytes  = 16 << 20
+)
+
+var errReadContract = errors.New("read_contract_error")
+
+func consumeReadError(raw *string) error {
+	if raw == nil || *raw == "" {
+		return nil
+	}
+	code := *raw
+	*raw = ""
+	if len(code) > maxReadErrorCodeBytes || !utf8.ValidString(code) {
+		return errReadContract
+	}
+	switch code {
+	case "capabilities_read_error",
+		"capability_inventory_read_error",
+		"capability_surface_pack_read_error",
+		"commands_read_error",
+		"domain_pack_read_error",
+		"domains_read_error",
+		"dynamics_package_read_error",
+		"dynamics_seed_read_error",
+		"epistemics_read_error",
+		"events_read_error",
+		"gates_read_error",
+		"gate_event_log_read_error",
+		"gate_session_state_read_error",
+		"gate_task_projection_read_error",
+		"intake_read_error",
+		"lifecycle_registry_read_error",
+		"observe_api_read_error",
+		"observe_governance_read_error",
+		"observe_read_error",
+		"observe_session_read_error",
+		"observe_source_dark",
+		"platform_registry_read_error",
+		"quota_ledger_read_error",
+		"route_read_error",
+		"sessions_read_error",
+		"session_detail_read_error",
+		"session_role_unknown",
+		"session_turn_blocks_unavailable",
+		"session_turn_fixture_absent",
+		"turn_replay_fixture_only",
+		"session_turns_read_error",
+		"tasks_read_error",
+		"traces_read_error",
+		"traces_unavailable",
+		"vault_read_error":
+		return errors.New(code)
+	default:
+		return errReadContract
+	}
+}
+
+// decodeReadJSON keeps producer-controlled JSON decoder failures behind one
+// fixed contract error and never releases a partially decoded value.
+func decodeReadJSON[T any](body io.Reader) (T, error) {
+	var zero T
+	payload, err := io.ReadAll(io.LimitReader(body, maxReadResponseBytes+1))
+	if err != nil || len(payload) > maxReadResponseBytes || !utf8.Valid(payload) {
+		clear(payload)
+		return zero, errReadContract
+	}
+	defer clear(payload)
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	var decoded T
+	if err := decoder.Decode(&decoded); err != nil {
+		return zero, errReadContract
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return zero, errReadContract
+	}
+	return decoded, nil
+}
+
+func decodeReadWrapper[T any](body io.Reader, errorField func(*T) *string) (T, error) {
+	var zero T
+	decoded, err := decodeReadJSON[T](body)
+	if err != nil {
+		return zero, err
+	}
+	if errorField == nil {
+		return zero, errReadContract
+	}
+	if err := consumeReadError(errorField(&decoded)); err != nil {
+		if err == errReadContract {
+			return zero, err
+		}
+		return decoded, err
+	}
+	return decoded, nil
+}
+
 var newReadHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 3 * time.Second}
 }
@@ -30,7 +129,7 @@ func checkOK(resp *http.Response, endpoint string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	return fmt.Errorf("reins: READ api %s returned %s", endpoint, resp.Status)
+	return fmt.Errorf("reins: READ api %s returned %d", endpoint, resp.StatusCode)
 }
 
 // ServingMeta is the /read/meta identity handshake (U1). A port is only trusted as reins
@@ -123,11 +222,11 @@ func FetchMeta(apiURL string) ServingMeta {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// a port that answers HTTP but has no /read/meta is a foreign server.
-		return ServingMeta{Reachable: true, Foreign: true, Detail: resp.Status}
+		return ServingMeta{Reachable: true, Foreign: true, Detail: "foreign_http_status"}
 	}
 	var m ServingMeta
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil || m.App != "reins" {
-		return ServingMeta{Reachable: true, Foreign: true, Detail: "not a reins server"}
+		return ServingMeta{Reachable: true, Foreign: true, Detail: "foreign_identity"}
 	}
 	m.Reachable = true
 	return m
@@ -144,12 +243,9 @@ func FetchEvents(url string) ([]grammar.Event, bool, error) {
 	if err := checkOK(resp, "/read/events"); err != nil {
 		return nil, true, err
 	}
-	var r readResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Events, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *readResp) *string { return &r.Error })
+	if err != nil {
+		return r.Events, true, err
 	}
 	return r.Events, r.Dark, nil
 }
@@ -166,12 +262,9 @@ func FetchEventsBefore(urlStr, before string) ([]grammar.Event, bool, error) {
 	if err := checkOK(resp, "/read/events"); err != nil {
 		return nil, true, err
 	}
-	var r readResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Events, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *readResp) *string { return &r.Error })
+	if err != nil {
+		return r.Events, true, err
 	}
 	return r.Events, r.Dark, nil
 }
@@ -193,12 +286,9 @@ func FetchTasks(url string) ([]grammar.Task, bool, error) {
 	if err := checkOK(resp, "/read/tasks"); err != nil {
 		return nil, true, err
 	}
-	var r tasksResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Tasks, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *tasksResp) *string { return &r.Error })
+	if err != nil {
+		return r.Tasks, true, err
 	}
 	return r.Tasks, r.Dark, nil
 }
@@ -221,8 +311,8 @@ func FetchFacets(url string) (grammar.FacetRegistry, bool, error) {
 	if err := checkOK(resp, "/read/facets"); err != nil {
 		return grammar.FacetRegistry{}, true, err
 	}
-	var r grammar.FacetRegistry
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+	r, err := decodeReadJSON[grammar.FacetRegistry](resp.Body)
+	if err != nil {
 		return grammar.FacetRegistry{}, true, err
 	}
 	return r, false, nil
@@ -238,12 +328,9 @@ func FetchDynamics(url string) (grammar.Graph, bool, error) {
 	if err := checkOK(resp, "/read/dynamics"); err != nil {
 		return grammar.Graph{}, true, err
 	}
-	var r dynamicsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.Graph{}, true, err
-	}
-	if r.Error != "" {
-		return r.Graph, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *dynamicsResp) *string { return &r.Error })
+	if err != nil {
+		return r.Graph, true, err
 	}
 	return r.Graph, r.Dark, nil
 }
@@ -265,12 +352,9 @@ func FetchEpistemics(apiURL string) (grammar.EpistemicsSummary, bool, error) {
 	if err := checkOK(resp, "/read/epistemics"); err != nil {
 		return grammar.EpistemicsSummary{}, true, err
 	}
-	var r epistemicsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.EpistemicsSummary{}, true, err
-	}
-	if r.Error != "" {
-		return r.Epistemics, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *epistemicsResp) *string { return &r.Error })
+	if err != nil {
+		return r.Epistemics, true, err
 	}
 	return r.Epistemics, r.Dark, nil
 }
@@ -292,12 +376,9 @@ func FetchSessions(url string) ([]grammar.Session, bool, error) {
 	if err := checkOK(resp, "/read/sessions"); err != nil {
 		return nil, true, err
 	}
-	var r sessionsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Sessions, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *sessionsResp) *string { return &r.Error })
+	if err != nil {
+		return r.Sessions, true, err
 	}
 	return r.Sessions, r.Dark, nil
 }
@@ -319,12 +400,9 @@ func FetchTraces(url string) ([]grammar.Trace, bool, error) {
 	if err := checkOK(resp, "/read/traces"); err != nil {
 		return nil, true, err
 	}
-	var r tracesResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Traces, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *tracesResp) *string { return &r.Error })
+	if err != nil {
+		return r.Traces, true, err
 	}
 	return r.Traces, r.Dark, nil
 }
@@ -346,12 +424,9 @@ func FetchSessionDetail(apiURL, role string) (grammar.SessionDetail, bool, error
 	if err := checkOK(resp, "/read/session"); err != nil {
 		return grammar.SessionDetail{}, true, err
 	}
-	var r sessionDetailResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.SessionDetail{}, true, err
-	}
-	if r.Error != "" {
-		return r.Detail, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *sessionDetailResp) *string { return &r.Error })
+	if err != nil {
+		return r.Detail, true, err
 	}
 	return r.Detail, r.Dark, nil
 }
@@ -382,12 +457,9 @@ func FetchTurnBlocks(role, ts string) ([]grammar.TurnBlock, bool, error) {
 	if err := checkOK(resp, endpoint); err != nil {
 		return nil, true, err
 	}
-	var r turnBlocksResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Blocks, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *turnBlocksResp) *string { return &r.Error })
+	if err != nil {
+		return r.Blocks, true, err
 	}
 	return r.Blocks, r.Dark, nil
 }
@@ -417,12 +489,9 @@ func FetchTurns(role string, before string) ([]grammar.Turn, error) {
 	if err := checkOK(resp, endpoint); err != nil {
 		return nil, err
 	}
-	var r turnsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, err
-	}
-	if r.Error != "" {
-		return r.Turns, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *turnsResp) *string { return &r.Error })
+	if err != nil {
+		return r.Turns, err
 	}
 	if r.Dark {
 		return r.Turns, fmt.Errorf("reins: READ api %s returned dark", endpoint)
@@ -447,12 +516,9 @@ func FetchIntake(apiURL string) (grammar.IntakeSummary, bool, error) {
 	if err := checkOK(resp, "/read/intake"); err != nil {
 		return grammar.IntakeSummary{}, true, err
 	}
-	var r intakeResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.IntakeSummary{}, true, err
-	}
-	if r.Error != "" {
-		return r.Intake, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *intakeResp) *string { return &r.Error })
+	if err != nil {
+		return r.Intake, true, err
 	}
 	return r.Intake, r.Dark, nil
 }
@@ -474,12 +540,9 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 	if err := checkOK(resp, "/read/capabilities"); err != nil {
 		return grammar.CapabilitySummary{}, true, err
 	}
-	var r capabilitiesResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.CapabilitySummary{}, true, err
-	}
-	if r.Error != "" {
-		return r.Capabilities, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *capabilitiesResp) *string { return &r.Error })
+	if err != nil {
+		return r.Capabilities, true, err
 	}
 	return r.Capabilities, r.Dark, nil
 }
@@ -788,17 +851,20 @@ func reqvecComplete(m map[string]int) bool {
 // int map => ReqvecMeasured, anything else (the "absent" sentinel) => not measured (never fabricated).
 func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, bool, error) {
 	c := newReadHTTPClient()
-	var posture grammar.RoutePosture
 	resp, err := c.Get(apiURL + "/route/posture")
 	if err != nil {
-		return posture, nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.RoutePosture{}, nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/route/posture"); err != nil {
-		return posture, nil, true, err
+		return grammar.RoutePosture{}, nil, true, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&posture); err != nil {
-		return posture, nil, true, err
+	posture, err := decodeReadWrapper(
+		resp.Body,
+		func(r *grammar.RoutePosture) *string { return &r.Error },
+	)
+	if err != nil {
+		return grammar.RoutePosture{}, nil, true, err
 	}
 
 	cresp, err := c.Get(apiURL + "/route/candidates")
@@ -809,9 +875,12 @@ func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, 
 	if err := checkOK(cresp, "/route/candidates"); err != nil {
 		return posture, nil, posture.Dark, nil
 	}
-	var cr routeCandidatesResp
-	if err := json.NewDecoder(cresp.Body).Decode(&cr); err != nil {
-		return posture, nil, posture.Dark, nil
+	cr, err := decodeReadWrapper(
+		cresp.Body,
+		func(r *routeCandidatesResp) *string { return &r.Error },
+	)
+	if err != nil {
+		return grammar.RoutePosture{}, nil, true, err
 	}
 	cands := make([]grammar.RouteCandidate, 0, len(cr.Candidates))
 	for _, row := range cr.Candidates {
@@ -844,9 +913,9 @@ func FetchCommands(apiURL string) ([]grammar.Command, string, string, bool, erro
 	if err := checkOK(resp, "/read/commands"); err != nil {
 		return nil, "dark", "unknown", true, err
 	}
-	var r commandsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, "dark", "unknown", true, err
+	r, readErr := decodeReadWrapper(resp.Body, func(r *commandsResp) *string { return &r.Error })
+	if readErr == errReadContract {
+		return nil, "dark", "unknown", true, readErr
 	}
 	out := make([]grammar.Command, 0, len(r.Commands))
 	for _, cr := range r.Commands {
@@ -863,8 +932,8 @@ func FetchCommands(apiURL string) ([]grammar.Command, string, string, bool, erro
 	if integ == "" {
 		integ = "unknown" // never assume verified when the projection omits it
 	}
-	if r.Error != "" {
-		return out, enf, integ, true, fmt.Errorf("%s", r.Error)
+	if readErr != nil {
+		return out, enf, integ, true, readErr
 	}
 	return out, enf, integ, r.Dark, nil
 }
@@ -881,12 +950,9 @@ func FetchObserve(apiURL string) ([]grammar.ObserveDimension, bool, error) {
 	if err := checkOK(resp, "/read/observe"); err != nil {
 		return nil, true, err
 	}
-	var r observeResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Dimensions, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *observeResp) *string { return &r.Error })
+	if err != nil {
+		return r.Dimensions, true, err
 	}
 	return r.Dimensions, r.Dark, nil
 }
@@ -903,12 +969,9 @@ func FetchVault(apiURL string) ([]grammar.VaultNote, bool, error) {
 	if err := checkOK(resp, "/read/vault"); err != nil {
 		return nil, true, err
 	}
-	var r vaultResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, true, err
-	}
-	if r.Error != "" {
-		return r.Notes, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *vaultResp) *string { return &r.Error })
+	if err != nil {
+		return r.Notes, true, err
 	}
 	return r.Notes, r.Dark, nil
 }
@@ -930,12 +993,9 @@ func FetchGates(apiURL string) (grammar.GateSummary, bool, error) {
 	if err := checkOK(resp, "/read/gates"); err != nil {
 		return grammar.GateSummary{}, true, err
 	}
-	var r gatesResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.GateSummary{}, true, err
-	}
-	if r.Error != "" {
-		return r.Gates, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *gatesResp) *string { return &r.Error })
+	if err != nil {
+		return r.Gates, true, err
 	}
 	return r.Gates, r.Dark, nil
 }
@@ -957,12 +1017,9 @@ func FetchDomains(apiURL string) (grammar.DomainSummary, bool, error) {
 	if err := checkOK(resp, "/read/domains"); err != nil {
 		return grammar.DomainSummary{}, true, err
 	}
-	var r domainsResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return grammar.DomainSummary{}, true, err
-	}
-	if r.Error != "" {
-		return r.Domains, true, fmt.Errorf("%s", r.Error)
+	r, err := decodeReadWrapper(resp.Body, func(r *domainsResp) *string { return &r.Error })
+	if err != nil {
+		return r.Domains, true, err
 	}
 	return r.Domains, r.Dark, nil
 }

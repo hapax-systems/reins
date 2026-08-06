@@ -841,11 +841,11 @@ func contextProjectionDomainHash(payload []byte, domainName string, omitted ...s
 	if err != nil {
 		return "", err
 	}
-	domain := []byte(domainName + "\x00")
-	hashInput := make([]byte, 0, len(domain)+len(canonical))
-	hashInput = append(hashInput, domain...)
-	hashInput = append(hashInput, canonical...)
-	return fmt.Sprintf("%x", sha256.Sum256(hashInput)), nil
+	digest := sha256.New()
+	_, _ = io.WriteString(digest, domainName)
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(canonical)
+	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
 func appendContextCanonicalJSON(dst []byte, value any) ([]byte, error) {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,6 +33,175 @@ func withReadAPI(t *testing.T, handler http.HandlerFunc) string {
 	}
 	t.Cleanup(func() { newReadHTTPClient = old })
 	return "http://reins.test"
+}
+
+func TestConsumeReadErrorUsesClosedVocabulary(t *testing.T) {
+	tests := []struct {
+		name string
+		wire string
+		want string
+	}{
+		{
+			name: "approved",
+			wire: "turn_replay_fixture_only",
+			want: "turn_replay_fixture_only",
+		},
+		{name: "version skew", wire: "events_read_error_v2", want: "read_contract_error"},
+		{
+			name: "sentinel",
+			wire: "SENTINEL:/private/operator/path:stack-frame",
+			want: "read_contract_error",
+		},
+		{
+			name: "oversized",
+			wire: strings.Repeat("x", maxReadErrorCodeBytes+1),
+			want: "read_contract_error",
+		},
+		{name: "malformed", wire: string([]byte{0xff}), want: "read_contract_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wire := tt.wire
+			err := consumeReadError(&wire)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("consumeReadError() = %v, want %q", err, tt.want)
+			}
+			if wire != "" {
+				t.Fatalf("wire error bytes retained: %q", wire)
+			}
+			if strings.Contains(err.Error(), "SENTINEL") {
+				t.Fatalf("returned error retained remote detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestFetchEventsRejectsUnknownRemoteErrorDetail(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path:stack-frame"
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"dark":true,"error":%q,"events":[]}`, sentinel)
+	})
+
+	_, dark, err := FetchEvents(apiURL)
+	if !dark || err == nil || err.Error() != "read_contract_error" {
+		t.Fatalf("FetchEvents() dark=%v err=%v", dark, err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("FetchEvents retained remote detail: %q", err)
+	}
+}
+
+func TestFetchEventsCollapsesHostileWrapperDecode(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path:stack-frame"
+	invalidUTF8 := append(
+		[]byte(`{"dark":true,"error":"`),
+		append([]byte{0xff}, []byte(`","events":[]}`)...)...,
+	)
+	tests := []struct {
+		name string
+		wire []byte
+	}{
+		{
+			name: "wrong type error",
+			wire: []byte(`{"dark":true,"error":{"detail":"` + sentinel + `"},"events":[]}`),
+		},
+		{
+			name: "oversized error",
+			wire: []byte(fmt.Sprintf(
+				`{"dark":true,"error":%q,"events":[]}`,
+				strings.Repeat("x", maxReadErrorCodeBytes+1),
+			)),
+		},
+		{
+			name: "malformed error",
+			wire: []byte(`{"dark":true,"error":"` + sentinel + `\q","events":[]}`),
+		},
+		{name: "invalid utf8 error", wire: invalidUTF8},
+		{
+			name: "trailing value",
+			wire: []byte(`{"dark":true,"error":"","events":[]} "` + sentinel + `"`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(tt.wire)
+			})
+
+			events, dark, err := FetchEvents(apiURL)
+			if !dark || err != errReadContract {
+				t.Fatalf("FetchEvents() events=%+v dark=%v err=%v", events, dark, err)
+			}
+			if events != nil {
+				t.Fatalf("contract failure released partially decoded events: %+v", events)
+			}
+			if err.Error() != "read_contract_error" || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("contract failure exposed producer detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestFetchMetaSanitizesRemoteStatusDetail(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	meta := FetchMeta(apiURL)
+	if !meta.Reachable || !meta.Foreign || meta.Detail != "foreign_http_status" {
+		t.Fatalf("FetchMeta() = %+v", meta)
+	}
+}
+
+func TestContextProjectionHashStreamingPreservesFrozenDigests(t *testing.T) {
+	payload, err := os.ReadFile("../../api/fixtures/context-canon-gate0-carriers.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		OperatorProjection json.RawMessage `json:"operator_projection"`
+	}
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	var projection struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(fixture.OperatorProjection, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Events) == 0 {
+		t.Fatal("frozen operator projection has no events")
+	}
+
+	projectionHash, err := grammar.ContextProjectionContentHash(fixture.OperatorProjection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantProjection = "1a7f44abeb2b0bf04d55cb845ffa60d6e67d1c8694cdd77d54b70e5a4efc9079"
+	if projectionHash != wantProjection {
+		t.Fatalf(
+			"ContextProjectionContentHash() = %s, want %s",
+			projectionHash,
+			wantProjection,
+		)
+	}
+
+	eventHash, err := grammar.ContextProjectionEventContentHash(projection.Events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantEvent = "dc34763eca21b0d96ed9ea8853b9dd27ce43ba6949d42742ed0d327f850bc441"
+	if eventHash != wantEvent {
+		t.Fatalf(
+			"ContextProjectionEventContentHash() = %s, want %s",
+			eventHash,
+			wantEvent,
+		)
+	}
 }
 
 func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
@@ -122,6 +293,97 @@ func TestFetchRouteDecodesMeasuredVsAbsent(t *testing.T) {
 	}
 	if by["absent_str"] {
 		t.Fatal("the \"absent\" string must NOT be measured")
+	}
+}
+
+func TestFetchRouteCollapsesPartialWrapperDecode(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path"
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "posture",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/route/posture" {
+					t.Fatalf("posture contract failure must stop before candidates, got %s", r.URL.Path)
+				}
+				_, _ = w.Write([]byte(
+					`{"dark":true,"error":"` + sentinel + `","decision":123}`,
+				))
+			},
+		},
+		{
+			name: "candidates",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/route/posture":
+					_, _ = w.Write([]byte(
+						`{"dark":false,"error":"","decision":"NO SPINE DECISION ON FILE"}`,
+					))
+				case "/route/candidates":
+					_, _ = w.Write([]byte(
+						`{"dark":true,"error":"` + sentinel + `","decision":123,"candidates":[]}`,
+					))
+				default:
+					t.Fatalf("unexpected route path %s", r.URL.Path)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiURL := withReadAPI(t, tt.handler)
+			posture, candidates, dark, err := FetchRoute(apiURL)
+			if !dark || err != errReadContract {
+				t.Fatalf(
+					"FetchRoute() posture=%+v candidates=%+v dark=%v err=%v",
+					posture,
+					candidates,
+					dark,
+					err,
+				)
+			}
+			if !reflect.DeepEqual(posture, grammar.RoutePosture{}) || candidates != nil {
+				t.Fatalf(
+					"contract failure released route state: posture=%+v candidates=%+v",
+					posture,
+					candidates,
+				)
+			}
+			if err.Error() != "read_contract_error" || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("route contract failure exposed producer detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestDecodeReadWrapperPreservesApprovedStructuredData(t *testing.T) {
+	wire := strings.NewReader(`{
+		"dark": true,
+		"error": "turn_replay_fixture_only",
+		"turns": [{
+			"ts": "2026-07-13T10:00:00Z",
+			"role": "cc-reins",
+			"kind": "assistant",
+			"prov": "model",
+			"summary": "approved structured turn"
+		}]
+	}`)
+
+	decoded, err := decodeReadWrapper(
+		wire,
+		func(r *turnsResp) *string { return &r.Error },
+	)
+	if err == nil || err.Error() != "turn_replay_fixture_only" {
+		t.Fatalf("decodeReadWrapper() err=%v", err)
+	}
+	if decoded.Error != "" {
+		t.Fatalf("approved wire error was not cleared: %q", decoded.Error)
+	}
+	if len(decoded.Turns) != 1 || decoded.Turns[0].Summary != "approved structured turn" {
+		t.Fatalf("approved structured data was not preserved: %+v", decoded.Turns)
 	}
 }
 
@@ -622,7 +884,7 @@ func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
 			t.Fatalf("FetchTurns should GET session turns, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"dark": true, "error": "no turn replay fixture for session role: missing", "turns": []}`))
+		_, _ = w.Write([]byte(`{"dark": true, "error": "session_turn_fixture_absent", "turns": []}`))
 	})
 	t.Setenv("REINS_API_URL", apiURL)
 
@@ -633,7 +895,7 @@ func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
 	if len(turns) != 0 {
 		t.Fatalf("dark turns response should not fabricate rows: %+v", turns)
 	}
-	if !strings.Contains(err.Error(), "no turn replay fixture") {
-		t.Fatalf("FetchTurns error should include dark reason, got %q", err.Error())
+	if err.Error() != "session_turn_fixture_absent" {
+		t.Fatalf("FetchTurns error should preserve the approved code, got %q", err.Error())
 	}
 }
