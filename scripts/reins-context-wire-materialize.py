@@ -50,6 +50,20 @@ PREDECESSOR_WHEEL_SHA256 = (
 EXACT_CURRENT_WHEEL_SHA256 = (
     "882c5fc1a154d6340b5ce9ec9cf9698637e2079d6e8c14032f1fbd7907746277"
 )
+# The producer fixtures the regenerator consumes are pinned by content, not by
+# path — a stale-but-schema-valid producer image must refuse at regeneration,
+# not at the boundary. These are the council fixtures at cc2bf944.
+PRODUCER_FIXTURE_SHA256 = {
+    "gate0-projections.json": (
+        "fb0b41086158cbc3bc3c21dc4eb91ff38d8322a4f0776c801e8086213a0a43ca"
+    ),
+    "gate0-purpose-projections.json": (
+        "0bbe63eff12d8e01e8127cc93dc44821bd0d695c13aed388b7594565d84d4106"
+    ),
+    "gate0-compatibility.json": (
+        "128d7397c2512edae7703f3392a9a6f2a9bdbc43406fbdc9b110251921c69bf6"
+    ),
+}
 EXACT_CURRENT_PACKAGE_STATE = "exact_current"
 PACKAGE_STATE = "hold_missing_exact_current_artifact"
 OUTER_KEYS = {
@@ -476,18 +490,29 @@ def _exact_wheel_mode(args: argparse.Namespace) -> None:
             "(rebuild at the pinned council SHA with the pinned SOURCE_DATE_EPOCH)"
         )
     try:
-        package_spec = importlib.util.find_spec("hapax.context_canon")
-    except ModuleNotFoundError:
-        package_spec = None
-    if package_spec is None:
+        import hapax.context_canon as _canon_package
+    except Exception as exc:
         raise SystemExit(
-            "exact-wheel mode requires hapax.context_canon importable from the "
-            "pinned current wheel in the ordinary environment"
-        )
+            "exact-wheel mode requires the pinned current hapax.context_canon "
+            "wheel importable in the ordinary environment"
+        ) from exc
+    module_path = Path(_canon_package.__file__).resolve()
+    for forbidden_root in (REPO_ROOT.resolve(), Path.cwd().resolve()):
+        if module_path.is_relative_to(forbidden_root):
+            raise SystemExit(
+                "hapax.context_canon must import from an installed environment, "
+                f"not the working tree (resolved to {module_path})"
+            )
     fixtures = json.loads(args.fixture.read_bytes())
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"output directory is not empty: {args.output}")
+    if args.output.exists() and not args.output.is_dir():
+        raise SystemExit(
+            f"--output must be a directory in exact-wheel mode: {args.output}"
+        )
     args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if (args.output.stat().st_mode & 0o777) != 0o700:
+        raise SystemExit(f"output directory mode must be exactly 0700: {args.output}")
     # Real wheel models, not the pinned test doubles: with patch_models=False
     # the consumer's _canonical_models() resolves to the installed wheel, so
     # the battery below validates the current carriers through the actual
@@ -500,7 +525,11 @@ def _exact_wheel_mode(args: argparse.Namespace) -> None:
             case.reasons,
             case.active_field,
             query=case.query,
-            validation_mode=case.validation_mode,
+            validation_mode=(
+                "test_only_boundary_stub"
+                if case.validation_mode == "test_only_boundary_stub"
+                else "exact_current_wheel_contract"
+            ),
             patch_models=case.validation_mode == "test_only_boundary_stub",
         )
         for case in _exact_cases(fixtures)
@@ -510,6 +539,9 @@ def _exact_wheel_mode(args: argparse.Namespace) -> None:
         "fixture_sha256": FIXTURE_SHA256,
         "wheel_sha256": observed,
         "package_state": EXACT_CURRENT_PACKAGE_STATE,
+        "omissions": {
+            "no_wheel_dark": "not_applicable_package_present",
+        },
         "max_context_read_bytes": reins_context.MAX_CONTEXT_READ_BYTES,
         "cases": [_materialize_case(args.output, case) for case in cases],
     }
@@ -536,9 +568,20 @@ def _regenerate_fixture_mode(args: argparse.Namespace) -> None:
             "wheel importable in the ordinary environment"
         ) from exc
     producer = args.producer_fixtures.resolve()
-    projections = json.loads((producer / "gate0-projections.json").read_bytes())
-    purposes = json.loads((producer / "gate0-purpose-projections.json").read_bytes())
-    compatibility = json.loads((producer / "gate0-compatibility.json").read_bytes())
+    producer_bytes = {}
+    for fixture_name, expected in PRODUCER_FIXTURE_SHA256.items():
+        raw = (producer / fixture_name).read_bytes()
+        observed = _sha256(raw)
+        if observed != expected:
+            raise SystemExit(
+                f"producer fixture {fixture_name} SHA-256 mismatch: "
+                f"{observed} != {expected} — a stale or drifted producer "
+                "image refuses at regeneration, not at the boundary"
+            )
+        producer_bytes[fixture_name] = raw
+    projections = json.loads(producer_bytes["gate0-projections.json"])
+    purposes = json.loads(producer_bytes["gate0-purpose-projections.json"])
+    compatibility = json.loads(producer_bytes["gate0-compatibility.json"])
     carriers = {
         "operator_projection": projections["operator"],
         "yard_projection": projections["yard"],
@@ -562,10 +605,25 @@ def _regenerate_fixture_mode(args: argparse.Namespace) -> None:
                 f"{name}: canonical round-trip mismatch under the current contract"
             )
     payload = _compact(carriers) + b"\n"
+    observed_payload = _sha256(payload)
+    if observed_payload in REJECTED_FIXTURE_SHA256:
+        raise SystemExit(
+            "the regenerator produced a rejected predecessor generation — refusing"
+        )
+    if observed_payload != FIXTURE_SHA256:
+        raise SystemExit(
+            "the regenerator produced bytes that do not match the pinned "
+            f"FIXTURE_SHA256: {observed_payload} != {FIXTURE_SHA256} — a new "
+            "generation is a deliberate pin act, not a silent regeneration"
+        )
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite existing fixture: {args.output}")
+    if args.output.is_dir():
+        raise SystemExit(
+            f"--output must be a file in regenerate-fixture mode: {args.output}"
+        )
     _write_private(args.output, payload)
-    print(_sha256(payload))
+    print(observed_payload)
 
 
 def _no_wheel_mode(args: argparse.Namespace, fixtures: dict[str, Any]) -> None:

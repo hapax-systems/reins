@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ type contextCarrierManifest struct {
 	FixtureSHA256       string               `json:"fixture_sha256"`
 	WheelSHA256         *string              `json:"wheel_sha256"`
 	PackageState        string               `json:"package_state"`
+	Omissions           map[string]string    `json:"omissions"`
 	MaxContextReadBytes int                  `json:"max_context_read_bytes"`
 	Cases               []contextCarrierCase `json:"cases"`
 }
@@ -81,9 +83,28 @@ func TestContextCarrierWireConformance(t *testing.T) {
 		if manifest.WheelSHA256 != nil {
 			t.Fatalf("manifest falsely claims a current package artifact: %+v", manifest)
 		}
+		if os.Getenv("REINS_CONTEXT_CANON_WHEEL_PATH") != "" {
+			t.Fatalf("HOLD manifest must not observe a wheel path")
+		}
 	case "exact_current":
 		if manifest.WheelSHA256 == nil || *manifest.WheelSHA256 != exactCurrentWheelSHA256 {
 			t.Fatalf("exact-current manifest names the wrong wheel: %+v", manifest.WheelSHA256)
+		}
+		// The Go leg verifies the artifact itself: the manifest's claim is
+		// checked against the pinned wheel's bytes, not trusted.
+		wheelPath := os.Getenv("REINS_CONTEXT_CANON_WHEEL_PATH")
+		if wheelPath == "" {
+			t.Fatalf("exact-current manifest requires REINS_CONTEXT_CANON_WHEEL_PATH")
+		}
+		wheelBytes, err := os.ReadFile(wheelPath)
+		if err != nil {
+			t.Fatalf("read pinned wheel: %v", err)
+		}
+		if got := sha256.Sum256(wheelBytes); hex.EncodeToString(got[:]) != exactCurrentWheelSHA256 {
+			t.Fatalf("pinned wheel SHA-256 mismatch at %s", wheelPath)
+		}
+		if manifest.Omissions["no_wheel_dark"] != "not_applicable_package_present" {
+			t.Fatalf("exact-current manifest lacks the affirmative no_wheel_dark omission")
 		}
 	default:
 		t.Fatalf("manifest package_state = %q", manifest.PackageState)
@@ -112,6 +133,15 @@ func TestContextCarrierWireConformance(t *testing.T) {
 		// absent by construction; exact-current manifests prove the wheel path
 		// instead.
 		required["no_wheel_dark"] = false
+	} else {
+		// Exact-current manifests must not carry the absent-package DARK
+		// case: proving light and dark paths concurrently is not the strict
+		// current boundary.
+		for _, testCase := range manifest.Cases {
+			if testCase.Name == "no_wheel_dark" {
+				t.Fatalf("exact-current manifest carries the no-wheel DARK case")
+			}
+		}
 	}
 	seen := make(map[string]struct{}, len(manifest.Cases))
 	root := filepath.Dir(manifestPath)
@@ -125,9 +155,14 @@ func TestContextCarrierWireConformance(t *testing.T) {
 			t.Fatalf("unexpected manifest case %q", testCase.Name)
 		}
 		required[testCase.Name] = true
-		if testCase.Name == "operator_escaped_pretty_hold" &&
-			testCase.ValidationMode != "test_only_current_fixture_contract" {
-			t.Fatalf("current source fixture has ambiguous validation mode %q", testCase.ValidationMode)
+		if testCase.Name == "operator_escaped_pretty_hold" {
+			wantMode := "test_only_current_fixture_contract"
+			if manifest.PackageState == "exact_current" {
+				wantMode = "exact_current_wheel_contract"
+			}
+			if testCase.ValidationMode != wantMode {
+				t.Fatalf("fixture case has ambiguous validation mode %q", testCase.ValidationMode)
+			}
 		}
 		t.Run(testCase.Name, func(t *testing.T) {
 			body := readContextCarrierArtifact(

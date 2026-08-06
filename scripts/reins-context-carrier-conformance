@@ -13,10 +13,11 @@ go_image="golang:1.26.3"
 go_image_id="sha256:2d6c80227255c3112a4d08e67ba98e58efd3846daf15d9d7d4c389565d881b1a"
 # Exact-current artifact (Gate 0A lockstep): reproducible wheel build —
 # council cc2bf944ad830dbb7c1bf2ed7b80eee04a94cef8, SOURCE_DATE_EPOCH
-# 1754500000. Presence of this exact artifact flips the harness from the
-# designed HOLD into the exact-current conformance pass. Publication remains
-# a separately held act; this pins content identity only.
-current_wheel="${HAPAX_CONTEXT_CANON_CURRENT_WHEEL:-/tmp/hapax-context-canon-current-wheel/hapax_context_canon-0.1.0-py3-none-any.whl}"
+# 1754500000. The exact-current leg runs ONLY on explicit opt-in via
+# HAPAX_CONTEXT_CANON_CURRENT_WHEEL — never from an ambient default path —
+# so the HOLD→PASS transition is always an act, not an environment accident.
+# Publication remains a separately held act; this pins content identity only.
+current_wheel="${HAPAX_CONTEXT_CANON_CURRENT_WHEEL:-}"
 current_wheel_sha="882c5fc1a154d6340b5ce9ec9cf9698637e2079d6e8c14032f1fbd7907746277"
 
 test "$(sha256sum "$fixture" | cut -d' ' -f1)" = "$fixture_sha"
@@ -37,7 +38,8 @@ if test -f "$predecessor_wheel"; then
 fi
 
 wire="$(mktemp -d "${TMPDIR:-/tmp}/reins-context-wire.XXXXXXXX")"
-trap 'rm -rf -- "$wire"' EXIT HUP INT TERM
+wire_exact=""
+trap 'rm -rf -- "$wire" ${wire_exact:+"$wire_exact"}' EXIT HUP INT TERM
 
 uv run --isolated --frozen --project "$repo/api" \
   --with 'httpx==0.28.1' \
@@ -56,7 +58,11 @@ uv run --isolated --frozen --project "$repo/api" \
   --fixture "$fixture"
 
 exact=""
-if test -f "$current_wheel"; then
+if test -n "$current_wheel"; then
+  test -f "$current_wheel" || {
+    echo "HAPAX_CONTEXT_CANON_CURRENT_WHEEL set but unreadable: $current_wheel" >&2
+    exit 1
+  }
   test "$(sha256sum "$current_wheel" | cut -d' ' -f1)" = "$current_wheel_sha" || {
     echo "current wheel present but SHA-256 mismatch — refusing" >&2
     exit 1
@@ -72,6 +78,24 @@ if test -f "$current_wheel"; then
     --output "$wire_exact" \
     --fixture "$fixture" \
     --wheel "$current_wheel"
+fi
+
+# The retired Jul-13 generation must be actively refused, not merely absent:
+# recover its bytes from git history (last carrier: 0633de37) and prove the
+# materializer rejects them. Degrades honestly when history is unavailable.
+if git -C "$repo" cat-file -e 0633de37ae47517ede39d9ff7bbab866f2ad90cc 2>/dev/null; then
+  retired="$wire/retired-fixture.json"
+  git -C "$repo" show 0633de37ae47517ede39d9ff7bbab866f2ad90cc:api/fixtures/context-canon-gate0-carriers.json > "$retired"
+  if uv run --isolated --frozen --project "$repo/api" \
+    --with 'httpx==0.28.1' \
+    --with 'httpx2==2.5.0' \
+    python "$repo/scripts/reins-context-wire-materialize.py" \
+    --mode source-fixture \
+    --output "$wire/retired-out" \
+    --fixture "$retired" 2>/dev/null; then
+    echo "retired Jul-13 fixture was accepted — the rejection law failed" >&2
+    exit 1
+  fi
 fi
 
 PYTHONPATH="$repo/api" "$repo/api/.venv/bin/python" - "$fixture" <<'PY'
@@ -153,11 +177,13 @@ if test -n "$exact"; then
   docker run --rm --pull=never \
     --mount "type=bind,src=$repo,dst=/src,readonly" \
     --mount "type=bind,src=$wire_exact,dst=/wire,readonly" \
+    --mount "type=bind,src=$current_wheel,dst=/pinned/wheel.whl,readonly" \
     --mount type=tmpfs,destination=/go/pkg/mod \
     --mount type=tmpfs,destination=/root/.cache/go-build \
     --workdir /src \
     --env GOTOOLCHAIN=local \
     --env REINS_CONTEXT_CARRIER_CONFORMANCE_MANIFEST=/wire/manifest.json \
+    --env REINS_CONTEXT_CANON_WHEEL_PATH=/pinned/wheel.whl \
     "$go_image" \
     sh -euc '
       go test -mod=readonly ./cmd/reins -run "^TestContextCarrierWireConformance$" -count=1
@@ -167,7 +193,7 @@ if test -n "$exact"; then
       unformatted="$(gofmt -l cmd internal)"
       test -z "$unformatted"
     '
-  printf '%s\n' "PASS exact_current_conformance=pass fixture_sha256=$fixture_sha wheel_sha256=$current_wheel_sha predecessor_wheel_rejected=true source_and_go_conformance=pass may_authorize=false"
+  printf '%s\n' "PASS exact_current_conformance=pass fixture_sha256=$fixture_sha wheel_sha256=$current_wheel_sha predecessor_wheel_rejected=true retired_fixture_rejected=true source_and_go_conformance=pass may_authorize=false"
   exit 0
 fi
 

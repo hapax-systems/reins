@@ -17,6 +17,12 @@ FIXTURE_SHA256 = "34e1c2874f113c4bda72ff69a57a41409b6aa3ed805630d3c333092cd4d851
 PREDECESSOR_FIXTURE_SHA256 = (
     "c16fce720b4bfb80233b0a3b94a9d5903796c646261651788a9084bfc0e97704"
 )
+# The Jul-13 generation, retired by the atomic transition; it survives here
+# only as a rejected value (the harness's retired-fixture probe proves the
+# materializer refuses its bytes).
+RETIRED_JUL13_FIXTURE_SHA256 = (
+    "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+)
 OUTER_KEYS = {
     "schema",
     "state",
@@ -129,6 +135,8 @@ def _assert_dark(body: bytes, reason: str) -> dict:
 
 def test_fixture_is_sha_pinned_current_contract_not_predecessor() -> None:
     assert FIXTURE_SHA256 != PREDECESSOR_FIXTURE_SHA256
+    assert FIXTURE_SHA256 != RETIRED_JUL13_FIXTURE_SHA256
+    assert PREDECESSOR_FIXTURE_SHA256 != RETIRED_JUL13_FIXTURE_SHA256
     fixtures = _fixtures()
     for name in (
         "operator_projection",
