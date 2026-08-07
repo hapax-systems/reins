@@ -197,3 +197,17 @@ def test_the_identity_unexpected_fields_branch_and_the_chain_break_branch(tmp_pa
     chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     with pytest.raises(RoleRegistryError, match="fails verification"):
         sovereign_principal(root)
+
+
+def test_an_identity_naming_a_different_key_is_refused(tmp_path: Path) -> None:
+    """codex r2: the sovereign identity must be the signer's own key — a mismatch is a false
+    witness, refused before any row is written."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    (tmp_path / "other").mkdir()
+    other = _key(tmp_path / "other")
+
+    impostor = SovereignIdentity("operator@estate-0", _fingerprint(other))
+    with pytest.raises(RoleRegistryError, match="the signer's own"):
+        mint_sovereign_identity(root, impostor, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert sovereign_principal(root) is None, "a refused identity writes nothing"

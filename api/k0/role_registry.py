@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -122,6 +123,28 @@ class RoleSet:
         )
 
 
+def _fingerprint_of(key_path: Path) -> str:
+    """The SHA256 fingerprint of the signing key's public half, derived in a temp dir —
+    nothing is written beside the operator's key."""
+    import tempfile
+
+    pub_text = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(key_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    with tempfile.TemporaryDirectory() as td:
+        pub = Path(td) / "key.pub"
+        pub.write_text(pub_text + "\n", encoding="utf-8")
+        return subprocess.run(
+            ["ssh-keygen", "-l", "-f", str(pub)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()[1]
+
+
 def _present_and_accept(
     root: Path,
     stip: Stipulation,
@@ -153,7 +176,23 @@ def mint_sovereign_identity(
     kernel_version: str,
     observed_at: datetime | None = None,
 ) -> Path:
-    """The ceremony's identity act: the principal is consented, key fingerprint bound."""
+    """The ceremony's identity act: the principal is consented, key fingerprint bound —
+    and the fingerprint must be the SIGNING key's own (codex r2): an identity naming a
+    different key would make the ledger's consent rows legible against a key that never
+    signed them."""
+    signer_fingerprint = _fingerprint_of(key_path)
+    if identity.key_fingerprint != signer_fingerprint:
+        raise RoleRegistryError(
+            f"the identity names {identity.key_fingerprint[:20]}… but the signing key is "
+            f"{signer_fingerprint[:20]}… — the sovereign identity must be the signer's own",
+            Refusal(
+                gate="identity.signer-binding",
+                why="an identity minted for a different key than the one signing is a false "
+                "witness, however it came to be",
+                legal_next="mint the identity for the key that signs, or sign with the key the "
+                "identity names",
+            ),
+        )
     return _present_and_accept(
         root,
         identity.stipulation(),
@@ -212,7 +251,17 @@ def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
             f"{sid}: the ratified row pins no artifact digest",
             Refusal(gate=gate, why="a mint that names nothing minted nothing", legal_next="verify_chain"),
         )
-    raw = (root / SIGNATURE_DIRNAME / f"{sid}.body").read_bytes()
+    try:
+        raw = (root / SIGNATURE_DIRNAME / f"{sid}.body").read_bytes()
+    except OSError as exc:
+        raise RoleRegistryError(
+            f"{sid}: the consented body cannot be read ({exc.strerror or 'missing'})",
+            Refusal(
+                gate=gate,
+                why="the chain consents to an artifact that is gone or unreadable (claude r2)",
+                legal_next="restore the body from backup, or re-mint with the same terms",
+            ),
+        ) from None
     actual = hashlib.sha256(raw).hexdigest()
     if actual != pinned or sid.rsplit(".", 1)[1] != actual[:16]:
         raise RoleRegistryError(
