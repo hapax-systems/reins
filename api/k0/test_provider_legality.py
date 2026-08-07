@@ -92,6 +92,7 @@ def test_validate_key_refuses_a_byok_capture_when_it_is_not_legal(
     import k0.provider_legality as pl
     from k0.provider_legality import ProviderLegality
 
+    # Only the DATA is swapped; the predicate under test runs for real (codex/claude r1).
     oauth_only = {
         **dict(PROVIDER_LEGALITY),
         "openai": ProviderLegality(
@@ -101,13 +102,9 @@ def test_validate_key_refuses_a_byok_capture_when_it_is_not_legal(
         ),
     }
     monkeypatch.setattr(pl, "PROVIDER_LEGALITY", oauth_only)
-    # key_capture imported the function by name — patch its reference too
-    import k0.key_capture as kc
-
-    monkeypatch.setattr(kc, "key_capture_legal", lambda provider: False)
 
     root = _root(tmp_path)
-    with pytest.raises(ValueError, match="not a legal acquisition path"):
+    with pytest.raises(ValueError, match="not a legal acquisition path") as exc:
         validate_key(
             root,
             MemoryStore(),
@@ -119,3 +116,7 @@ def test_validate_key_refuses_a_byok_capture_when_it_is_not_legal(
             principal="p",
             scratch_dir=tmp_path,
         )
+    assert "oauth_entitlement" in str(exc.value), (
+        "the refusal names the legal alternative — a refusal without the next move is the "
+        "dead end executive_function forbids"
+    )

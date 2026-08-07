@@ -53,7 +53,7 @@ from bootstrap_receipt import (
 )
 
 from .boot_profile import PROFILES, ratified_profile
-from .provider_legality import key_capture_legal, legal_acquisition_modes
+from . import provider_legality as _legality
 from .egress_consent import EgressConsentError, require_egress
 
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
@@ -585,11 +585,11 @@ def validate_key(
             f"{provider!r}: not a sanctioned provider — the probe endpoint is registry data, "
             "never caller input, and an unknown provider has none"
         )
-    if not key_capture_legal(provider):
+    if not _legality.key_capture_legal(provider):
         raise ValueError(
             f"{provider!r}: key capture is not a legal acquisition path for this provider "
             "(R2.16) — its legal modes are "
-            f"{sorted(m.value for m in legal_acquisition_modes(provider))}; use one of those "
+            f"{sorted(m.value for m in _legality.legal_acquisition_modes(provider))}; use one of those "
             "instead of capturing a key"
         )
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
