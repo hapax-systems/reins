@@ -401,6 +401,34 @@ def required_secrets(root: Path) -> tuple[str, ...]:
     return profile.secret_requirements
 
 
+def _append_row_phased(
+    root: Path,
+    *,
+    act: BootstrapAct,
+    phase: BootstrapPhase,
+    estate_id: str,
+    kernel_version: str,
+    payload_refs: list[str],
+    receipt_id: str,
+    observed_at: datetime | None,
+) -> Path:
+    chain = load_chain(root)
+    if not chain:
+        raise ValueError("no genesis self-attest: there is no ceremony to record within")
+    receipt = BootstrapReceipt(
+        receipt_id=receipt_id,
+        estate_id=estate_id,
+        kernel_version=kernel_version,
+        phase=phase,
+        act=act,
+        payload_refs=payload_refs,
+        evidence_status=EvidenceStatus.OBSERVED,
+        prev_receipt_hash=chain[-1].receipt_hash(),
+        observed_at=observed_at or datetime.now(UTC),
+    )
+    return append_receipt(root, receipt)
+
+
 def _append_row(
     root: Path,
     *,
@@ -562,23 +590,28 @@ def validate_key(
         require_egress(
             root, endpoint.host, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
         )
-    except EgressConsentError:
-        # A refused attempt is durable (claude r7): an operator who never ran the ceremony can
-        # see that something TRIED to validate against an unconsented host. The row names the
-        # host and deliberately NOT the k0-secret ref — supply_state must never read an egress
-        # refusal as a capture decline.
-        _append_row(
-            root,
-            act=BootstrapAct.REFUSED,
-            estate_id=estate_id,
-            kernel_version=kernel_version,
-            payload_refs=[
-                f"egress-host:{endpoint.host}",
-                "egress-attempt:validation-refused-by-consent-gate",
-            ],
-            receipt_id=f"egress-refused-{name}-{len(load_chain(root))}",
-            observed_at=observed_at,
-        )
+    except EgressConsentError as refusal:
+        # A refused attempt is durable (claude r7) — but only a CLEAN denial is recorded, and
+        # never into a suspect chain (codex r23): an integrity or signature refusal means the
+        # ledger itself is in question, and writing to it would mutate state we just declared
+        # untrustworthy. The row rides at the chain's CURRENT tail phase: planting it at
+        # AUTH_MATERIALIZE would make any later STIPULATION_RATIFY consent a phase regression
+        # and brick the documented recovery path.
+        if getattr(refusal.refusal, "gate", None) == "egress.default-deny":
+            chain = load_chain(root)
+            _append_row_phased(
+                root,
+                act=BootstrapAct.REFUSED,
+                phase=chain[-1].phase,
+                estate_id=estate_id,
+                kernel_version=kernel_version,
+                payload_refs=[
+                    f"egress-host:{endpoint.host}",
+                    "egress-attempt:validation-refused-by-consent-gate",
+                ],
+                receipt_id=f"egress-refused-{name}-{len(chain)}",
+                observed_at=observed_at,
+            )
         raise
     value = store.get(name)
     if value is None:

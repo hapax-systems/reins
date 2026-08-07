@@ -78,7 +78,7 @@ def test_the_allowlist_is_a_stipulation_through_the_ceremony(tmp_path: Path) -> 
     materials = _materials(tmp_path, key)
     _consented(root, key)
 
-    got = ratified_allowlist(root)
+    got = ratified_allowlist(root, allow_unauthenticated=True)
     assert got is not None and set(got.allowlist.hosts) == set(ALLOWED.hosts)
     assert got.amendments == 0
     assert egress_decision(root, "api.anthropic.com", **materials)
@@ -94,7 +94,7 @@ def test_default_deny_without_any_ratification(tmp_path: Path) -> None:
     root = _root(tmp_path)
     key = _key(tmp_path)
     materials = _materials(tmp_path, key)
-    assert ratified_allowlist(root) is None, "no consent reads as no allowlist — dark, not empty"
+    assert ratified_allowlist(root, allow_unauthenticated=True) is None, "no consent reads as no allowlist — dark, not empty"
     assert not egress_decision(root, "api.anthropic.com", **materials)
 
 
@@ -123,7 +123,7 @@ def test_a_tampered_allowlist_body_refuses_loudly(tmp_path: Path) -> None:
 
     body.unlink()
     with pytest.raises(EgressConsentError, match="cannot be read"):
-        ratified_allowlist(root)
+        ratified_allowlist(root, allow_unauthenticated=True)
 
 
 def test_the_well_ordering_law_a_probe_before_consent_closes_the_gate(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def test_a_broken_chain_closes_the_gate_loudly(tmp_path: Path) -> None:
     chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     with pytest.raises(EgressConsentError, match="fails verification"):
-        ratified_allowlist(root)
+        ratified_allowlist(root, allow_unauthenticated=True)
 
 
 def test_a_structurally_wrong_body_is_a_refusal_not_a_crash(tmp_path: Path) -> None:
@@ -271,7 +271,7 @@ def test_a_structurally_wrong_body_is_a_refusal_not_a_crash(tmp_path: Path) -> N
         ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
 
         with pytest.raises(EgressConsentError, match="not decodable"):
-            ratified_allowlist(root)
+            ratified_allowlist(root, allow_unauthenticated=True)
 
 
 def test_supersession_is_surfaced_never_silent(tmp_path: Path) -> None:
@@ -287,7 +287,7 @@ def test_supersession_is_surfaced_never_silent(tmp_path: Path) -> None:
     elicit_allowlist(root, amended, estate_id=ESTATE, kernel_version=KERNEL)
     accept(root, amended, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
 
-    got = ratified_allowlist(root)
+    got = ratified_allowlist(root, allow_unauthenticated=True)
     assert got is not None
     assert got.amendments == 1, "the first consent was overridden — that fact must be visible"
     assert set(got.allowlist.hosts) == set(amended.hosts), "the latest consent governs"
@@ -341,7 +341,7 @@ def test_amendments_count_only_digest_pinning_rows(tmp_path: Path) -> None:
     elicit_allowlist(root, amended, estate_id=ESTATE, kernel_version=KERNEL)
     accept(root, amended, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
 
-    got = ratified_allowlist(root)
+    got = ratified_allowlist(root, allow_unauthenticated=True)
     assert got is not None
     assert got.amendments == 1, (
         "two artifact-pinning consents, one amendment — the pinning-nothing row counts for nothing"
@@ -382,7 +382,20 @@ def test_the_authentication_status_of_the_answer_is_data(tmp_path: Path) -> None
     materials = _materials(tmp_path, key)
     _consented(root, key)
 
-    unauthenticated = ratified_allowlist(root)
+    unauthenticated = ratified_allowlist(root, allow_unauthenticated=True)
     assert unauthenticated is not None and unauthenticated.signature_verified is False
     authenticated = ratified_allowlist(root, **materials)
     assert authenticated is not None and authenticated.signature_verified is True
+
+
+def test_the_hash_only_read_requires_an_explicit_opt_in(tmp_path: Path) -> None:
+    """claude r23: an unauthenticated consent object that quietly looks complete is how a
+    forged row becomes an allowlist — the caller must name the risk they're accepting."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+
+    with pytest.raises(EgressConsentError, match="allow_unauthenticated"):
+        ratified_allowlist(root)
+    got = ratified_allowlist(root, allow_unauthenticated=True)
+    assert got is not None and got.signature_verified is False

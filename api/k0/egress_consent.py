@@ -195,6 +195,7 @@ def ratified_allowlist(
     allowed_signers: Path | None = None,
     principal: str | None = None,
     scratch_dir: Path | None = None,
+    allow_unauthenticated: bool = False,
 ) -> RatifiedEgress | None:
     """The consented allowlist, verified against the chain pin at read time. None renders
     dark — but a CORRUPTED consent artifact refuses, because silent-deny would hide tampering
@@ -221,6 +222,21 @@ def ratified_allowlist(
         return None
     sid, receipt = found
     materials_supplied = allowed_signers is not None and principal is not None and scratch_dir is not None
+    if not materials_supplied and not allow_unauthenticated:
+        raise EgressConsentError(
+            "the hash-only read must be opted into explicitly (allow_unauthenticated=True) — "
+            "an unauthenticated consent object that quietly looks complete is how a forged row "
+            "becomes an allowlist (claude r23)",
+            Refusal(
+                gate="egress.signature-verification",
+                why="the consent row's signature was not verified and the caller did not "
+                "explicitly accept that",
+                legal_next=(
+                    "pass the signing materials for an authenticated read, or pass "
+                    "allow_unauthenticated=True and render signature_verified=False with it"
+                ),
+            ),
+        )
     signature_ok = False
     if materials_supplied:
         from .ratification import verify_ratifications
@@ -236,6 +252,12 @@ def ratified_allowlist(
             ok = False
             gate = getattr(getattr(exc, "refusal", None), "gate", None) or "ratifier"
             why = f"the ratifier REFUSED ({gate}): {exc}"  # preserved, never collapsed (claude r21)
+        if ok and not verdict.ok:
+            # The row under study verified, but some OTHER ratification did not: the amendment
+            # count is computed from those rows, so a chain carrying an unverified one cannot
+            # ground the count (claude r23).
+            ok = False
+            why = f"unverified ratification rows present: {[u for u, _ in verdict.unverified]}"
         if not ok:
             raise EgressConsentError(
                 f"{sid}: the ratification does not verify against the sovereign's key: {why}",
