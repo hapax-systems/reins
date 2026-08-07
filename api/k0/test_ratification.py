@@ -167,6 +167,49 @@ def test_ratifying_a_different_artifact_than_the_one_proposed_is_refused(tmp_pat
     assert pending(root) == (), "the artifact that WAS proposed still ratifies cleanly"
 
 
+def test_concurrent_ratifications_of_one_stipulation_record_consent_once(tmp_path: Path) -> None:
+    """Consent-once must hold ATOMICALLY, not only sequentially (codex, round five).
+
+    Two ratify() calls that both observe the stipulation pending were excluded only by each
+    call's own read of the chain — across processes that window is real. What closes it one
+    layer down: the receipt_id is deterministic (`stipulation-ratified-<id>`) and append_receipt
+    validates under the chain's exclusive flock, so the loser's append is refused as a duplicate
+    (and by prev-hash mismatch), and ratify() translates that into the ceremony's consent-once
+    refusal. Race the pair and demand exactly one RATIFIED row.
+    """
+    import threading
+
+    root = _root(tmp_path)
+    key, _, _ = _keypair(tmp_path)
+    s = _stip()
+    propose(root, s, estate_id=ESTATE, kernel_version=KERNEL)
+
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def racer() -> None:
+        barrier.wait()
+        try:
+            ratify(root, s, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+            outcomes.append("ratified")
+        except RatificationError as exc:
+            assert "already ratified" in str(exc), f"wrong refusal: {exc}"
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(outcomes) == ["ratified", "refused"], (
+        f"consent-once must admit exactly one writer; got {outcomes}"
+    )
+    rows = [r for r in load_chain(root) if r.act is BootstrapAct.RATIFIED]
+    assert len(rows) == 1, f"the chain must record ONE consent; got {len(rows)}"
+    assert verify_chain_at(root).ok
+
+
 def test_consent_is_given_once(tmp_path: Path) -> None:
     """Two consents for one act make the ledger ambiguous about which one binds."""
     root = _root(tmp_path)

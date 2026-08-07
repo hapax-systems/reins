@@ -390,18 +390,39 @@ def ratify(
     sig_path = sig_dir / f"{sid}.sig"
     sig_path.write_text(signature, encoding="utf-8")
 
-    return _append(
-        root,
-        chain,
-        act=BootstrapAct.RATIFIED,
-        estate_id=estate_id,
-        kernel_version=kernel_version,
-        payload_refs=[stipulation.ref(), stipulation.bytes_ref()],
-        operator_ratification=stipulation.signature_ref(),
-        evidence_status=EvidenceStatus.OBSERVED,
-        observed_at=observed_at,
-        receipt_id=f"stipulation-ratified-{sid}",
-    )
+    try:
+        return _append(
+            root,
+            chain,
+            act=BootstrapAct.RATIFIED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[stipulation.ref(), stipulation.bytes_ref()],
+            operator_ratification=stipulation.signature_ref(),
+            evidence_status=EvidenceStatus.OBSERVED,
+            observed_at=observed_at,
+            receipt_id=f"stipulation-ratified-{sid}",
+        )
+    except ValueError:
+        # append_receipt's exclusive chain lock refused the write: something appended between
+        # our read of the chain and our write. The receipt_id above is DETERMINISTIC, so two
+        # racing ratifications of this same stipulation collide on it — the winner's row is
+        # durable and the loser's write is refused, which is the consent-once invariant
+        # enforced atomically rather than by the luck of the earlier check. Translate that
+        # outcome into this ceremony's refusal. If the concurrent append was some OTHER act,
+        # the fresh chain will not show this id ratified, and the raw error propagates.
+        fresh = _require_chain(root)
+        if sid in _ratified(fresh):
+            raise RatificationError(
+                f"{sid} is already ratified",
+                Refusal(
+                    gate="k0.ratification.ratify",
+                    why=f"{sid} already carries a ratification; signing it twice would put two consents for one act in the ledger",
+                    legal_next="verify the existing ratification with verify_ratifications(), or supersede it",
+                    teaches="k0.ratification-act: consent is given once, to exact bytes",
+                ),
+            ) from None
+        raise
 
 
 def _append(
