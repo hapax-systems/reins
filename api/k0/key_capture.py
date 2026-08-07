@@ -175,6 +175,7 @@ class ProbeEndpoint:
     host: str
     path: str
     auth_scheme: str  # "bearer" | "x-api-key"
+    key_prefix: str  # the provider's key shape — the negative control must match it
     extra_headers: tuple[tuple[str, str], ...] = ()
 
 
@@ -186,21 +187,25 @@ PROVIDER_PROBE_ENDPOINTS: dict[str, ProbeEndpoint] = {
         "api.anthropic.com",
         "/v1/models",
         "x-api-key",
+        "sk-ant-",
         (("anthropic-version", "2023-06-01"),),
     ),
-    "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer"),
+    "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer", "sk-"),
 }
 
 
-def _negative_control_key() -> bytes:
-    """The deliberately-invalid control key — random and UNMARKED (codex r9/r10).
+def _negative_control_key(endpoint: ProbeEndpoint) -> bytes:
+    """The deliberately-invalid control key — provider-SHAPED and random (r9/r10/r11).
 
-    A fixed or prefix-shaped control can be selector-bypassed: an endpoint that refuses exactly
-    the published shape and accepts all other garbage would 'validate' anything. An unmarked
-    random value is indistinguishable from a real key to the endpoint, so refusing it proves
-    the endpoint actually checks.
+    The bypass ladder ends here: a fixed control can be hardcoded around; an unmarked random
+    one can be shape-selected around (accept sk-*, refuse the rest — and the control is 'the
+    rest'). The terminal form is a key in the provider's own shape with a random payload: to
+    the endpoint it is indistinguishable from a real key, so an endpoint that accepts it is
+    caught by the indiscriminate check, and an endpoint that refuses it actually checked.
     """
-    return __import__("secrets").token_hex(24).encode("ascii")
+    import secrets
+
+    return (endpoint.key_prefix + secrets.token_hex(24)).encode("ascii")
 
 
 @dataclass(frozen=True)
@@ -511,7 +516,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(endpoint.host, endpoint.path, _negative_control_key(), endpoint.auth_scheme, endpoint.extra_headers)
+    control = https_probe_transport(endpoint.host, endpoint.path, _negative_control_key(endpoint), endpoint.auth_scheme, endpoint.extra_headers)
     if control.evidence is not None:
         _append_row(
             root,

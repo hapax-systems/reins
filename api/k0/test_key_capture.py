@@ -83,7 +83,7 @@ class _FakeResponse:
         return self._headers.get(name)
 
 
-def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Exception | None = None, record: list | None = None) -> None:
+def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, valid_keys: tuple[bytes, ...] = (b"sk-canary-value", b"sk-first-value", b"sk-replaced-value", b"sk-real-key", b"sk-bearer-value", b"sk-x"), status: int = 200, error: Exception | None = None, record: list | None = None) -> None:
     """Patch the STDLIB boundary — never the module's surface. The module has no injection seam,
     so the tests meet it at http.client.HTTPSConnection, where production behavior lives."""
     import http.client
@@ -107,9 +107,10 @@ def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Ex
                 raise error
 
         def getresponse(self):
-            # The control key is unmarked random hex; the double's rule is the test-side
-            # mirror: real-looking test keys are sk-*, the control is not.
-            if not self._auth.startswith("sk-"):
+            # The honest endpoint: it holds REGISTERED keys and refuses everything else —
+            # including any shape-shaped garbage. A shape rule here would be the very bypass
+            # the negative control exists to catch (claude r11).
+            if self._auth.encode() not in valid_keys:
                 return _FakeResponse(401)
             return _FakeResponse(status)
 
@@ -493,8 +494,9 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
         "the host the consent check evaluated is the host the kernel's transport dialed"
     )
     requests = [r for r in dialed if r[0] == "request"]
-    assert not requests[0][3].startswith("sk-"), (
-        "the negative control ran first, with an UNMARKED random invalid key (codex r9/r10)"
+    assert requests[0][3].startswith("sk-ant-") and requests[0][3] != "sk-canary-value", (
+        "the negative control ran first — provider-shaped, random-payload, indistinguishable "
+        "from a real key to the endpoint (codex/claude r11)"
     )
     assert requests[1][3] == "sk-canary-value"
 
@@ -518,7 +520,7 @@ def test_the_wire_has_no_injection_seam() -> None:
         "the sanctioned-provider table changed — a deliberate act, not a drive-by"
     )
     assert all(
-        {f.name for f in dataclasses.fields(e)} == {"host", "path", "auth_scheme", "extra_headers"}
+        {f.name for f in dataclasses.fields(e)} == {"host", "path", "auth_scheme", "key_prefix", "extra_headers"}
         for e in PROVIDER_PROBE_ENDPOINTS.values()
     ), "endpoints are data — a callable field would be caller code on the wire"
 
@@ -590,7 +592,7 @@ def test_a_redirect_never_validates(monkeypatch: pytest.MonkeyPatch) -> None:
     from k0.key_capture import failure_next_move, https_probe_transport
 
     _patch_wire(monkeypatch, status=302)
-    out = https_probe_transport(HOST, "/v1/models", b"sk-anything")
+    out = https_probe_transport(HOST, "/v1/models", b"sk-x")
     assert out.evidence is None and out.failure == "http-302-redirect"
     assert "do not follow" in failure_next_move(out.failure)
 

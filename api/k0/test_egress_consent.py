@@ -273,3 +273,55 @@ def test_supersession_is_surfaced_never_silent(tmp_path: Path) -> None:
     assert set(got.allowlist.hosts) == set(amended.hosts), "the latest consent governs"
     assert egress_decision(root, "api.openai.com")
     assert not egress_decision(root, "api.z.ai")
+
+
+def test_require_egress_distinguishes_dark_from_unlisted(tmp_path: Path) -> None:
+    """The two denials are different states and say so (glm r8): never-consented is dark; a
+    ratified list that lacks the host is a named denial with the amendment path."""
+    from k0.egress_consent import require_egress
+
+    root = _root(tmp_path)
+    with pytest.raises(EgressConsentError, match="dark, not broken"):
+        require_egress(root, "api.anthropic.com")
+
+    key = _key(tmp_path)
+    _consented(root, key)
+    require_egress(root, "api.anthropic.com")  # consented: returns, no row, no raise
+    with pytest.raises(EgressConsentError, match="does not name this host"):
+        require_egress(root, "api.openai.com")
+
+
+def test_amendments_count_only_digest_pinning_rows(tmp_path: Path) -> None:
+    """A ratified egress row that pins no artifact claims nothing and must not inflate the
+    amendment count (claude r8)."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+
+    # A hand-built egress-id row pinning NO artifact (chain-legal; claims nothing).
+    chain = load_chain(root)
+    append_receipt(
+        root,
+        BootstrapReceipt(
+            receipt_id="egress-row-pinning-nothing",
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            phase=BootstrapPhase.STIPULATION_RATIFY,
+            act=BootstrapAct.RATIFIED,
+            payload_refs=["ratification-sig:egress-allowlist.forged"],
+            evidence_status=EvidenceStatus.OBSERVED,
+            prev_receipt_hash=chain[-1].receipt_hash(),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+
+    amended = EgressAllowlist(hosts=("api.anthropic.com", "api.openai.com"))
+    elicit_allowlist(root, amended, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, amended, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    got = ratified_allowlist(root)
+    assert got is not None
+    assert got.amendments == 1, (
+        "two artifact-pinning consents, one amendment — the pinning-nothing row counts for nothing"
+    )
+    assert set(got.allowlist.hosts) == set(amended.hosts)
