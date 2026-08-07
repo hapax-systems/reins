@@ -408,6 +408,11 @@ def state(root: Path) -> dict[str, Degradation]:
     return out
 
 
+#: The keys a ratified body must carry before `state()` may read it. Decoding is not enough —
+#: shape is part of the artifact the chain pins.
+_REQUIRED_BODY_KEYS = frozenset({"subject", "level", "why", "tradeoff", "lift_condition"})
+
+
 def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict:
     """Recover the consented body, VERIFYING it against the digest the chain pins.
 
@@ -431,6 +436,9 @@ def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict:
       digest mismatch           -> REFUSES. The tampering case.
       digest matches, not JSON  -> REFUSES. The consented bytes are themselves unusable; the
                                    deficit is real and cannot be rendered.
+      digest matches, bad shape -> REFUSES. Valid JSON that is not a degradation body (not an
+                                   object, keys missing, unknown level, FULL without lifted)
+                                   would crash state() with a bare error instead of a refusal.
 
     THERE IS NO LONGER A ROUTE THAT RETURNS "nothing here" — hence the non-optional return. A
     second review round found the hole the first fix left: the no-digest-and-no-body case still
@@ -497,12 +505,31 @@ def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict:
                 ),
             )
         try:
-            return json.loads(raw.decode("utf-8"))
+            body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             reason = "the consented artifact is not decodable JSON"
             fix = (
                 "restore the body from backup; the chain consents to these exact bytes, so they "
                 "cannot be rewritten into valid JSON without a fresh ratification"
+            )
+        else:
+            # Decoding is not enough: `state()` indexes subject/level/why/tradeoff/
+            # lift_condition directly and constructs a Degradation from them. A body of `[]`,
+            # `null`, a dict missing keys, an unknown level, or FULL-without-lifted would
+            # crash the read with a bare KeyError/TypeError/ValueError — an unreadable deficit
+            # escaping as an accident instead of a refusal. Shape is part of the artifact.
+            if isinstance(body, dict) and _REQUIRED_BODY_KEYS <= set(body):
+                try:
+                    level = Lifecycle(body["level"])
+                except ValueError:
+                    pass
+                else:
+                    if level is not Lifecycle.FULL or body.get("lifted"):
+                        return body
+            reason = "the consented artifact decodes but is not a degradation body"
+            fix = (
+                "restore the body from backup; the chain consents to these exact bytes, so they "
+                "cannot be repaired into shape without a fresh ratification"
             )
     raise DegradationError(
         f"{stipulation_id}: {reason}. Refusing to report the estate as healthier than its ledger "

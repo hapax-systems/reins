@@ -488,10 +488,11 @@ def test_a_failed_ratification_leaves_a_readable_ledger(tmp_path: Path) -> None:
         "may be reported — and nothing may raise either."
     )
     body_path = root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body"
-    if body_path.exists():
-        assert body_path.read_bytes() == REVIEW_FLOOR.body(), (
-            "an orphan body must be the whole artifact, never a partial write"
-        )
+    assert body_path.read_bytes() == REVIEW_FLOOR.body(), (
+        "the body is written BEFORE the ratification that points at it, so a failed accept "
+        "always leaves the whole artifact — never a partial write, and never nothing. Guarding "
+        "this assertion on existence would let a write-order regression pass silently."
+    )
 
 
 def test_deleting_a_ratified_body_does_not_clear_the_deficit(tmp_path: Path) -> None:
@@ -523,6 +524,50 @@ def test_deleting_a_ratified_body_does_not_clear_the_deficit(tmp_path: Path) -> 
     assert REVIEW_FLOOR.stipulation_id() in str(exc.value), (
         "the refusal must name the artifact"
     )
+
+
+def test_a_decodable_body_that_is_not_a_degradation_body_is_refused(tmp_path: Path) -> None:
+    """Shape is part of the artifact (CodeRabbit threads on :407 and :506, held open for this).
+
+    The digest check proves the bytes are the consented ones; it says nothing about whether
+    `state()` can READ them. A body of `[]` decodes fine and then dies as a TypeError one caller
+    later; a dict missing `lift_condition` dies as a KeyError; an unknown `level` dies inside
+    Lifecycle(...); `full` without `lifted` dies in Degradation.__post_init__ — each a bare crash
+    where every sibling route produces a Refusal with a legal next move. The bytes being consented
+    to does not make them a degradation body.
+    """
+    root = _root(tmp_path)
+    body_dir = root / "ratifications"
+    body_dir.mkdir(parents=True, exist_ok=True)
+    target = body_dir / "degradation.shape.body"
+
+    good = {
+        "subject": "s",
+        "level": "degraded",
+        "why": "w",
+        "tradeoff": "t",
+        "lift_condition": "l",
+    }
+    cases = {
+        "not an object": b"[]",
+        "a scalar": b"1",
+        "missing keys": json.dumps({"subject": "s"}).encode(),
+        "unknown level": json.dumps(good | {"level": "mostly"}).encode(),
+        "full without lifted": json.dumps(good | {"level": "full"}).encode(),
+    }
+    for name, blob in cases.items():
+        target.write_bytes(blob)
+        with pytest.raises(DegradationError, match="not a degradation body") as exc:
+            deg._body_for(root, "degradation.shape", digest=hashlib.sha256(blob).hexdigest())
+        assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip(), (
+            f"{name}: the refusal must carry a legal next move"
+        )
+
+    lifted = json.dumps(good | {"level": "full", "lifted": True}).encode()
+    target.write_bytes(lifted)
+    assert deg._body_for(root, "degradation.shape", digest=hashlib.sha256(lifted).hexdigest())[
+        "lifted"
+    ], "a lifted FULL body is the one legal FULL — lift() writes it"
 
 
 def _delete(path: Path) -> tuple[str, str]:
