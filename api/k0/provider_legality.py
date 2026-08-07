@@ -45,6 +45,11 @@ class ProviderLegality:
     provider: str
     legal_modes: frozenset[AcquisitionMode]
     basis: str
+    #: "estate-verdict" = a good-faith determination document exists in the estate record;
+    #: "provider-terms" = the provider's own public terms are the only instrument cited, and an
+    #: estate verdict is outstanding. The weaker standing is DATA, never silently equal
+    #: (codex r2 major).
+    determination_class: str
 
 
 #: IMMUTABLE (MappingProxyType) — the legality table is determination data, not a config a
@@ -59,14 +64,16 @@ PROVIDER_LEGALITY: Mapping[str, ProviderLegality] = MappingProxyType(
                 "and first-party API keys are within the terms; the fingerprint-normalizing "
                 "gateway class is rejected as a violation"
             ),
+            determination_class="estate-verdict",
         ),
         "openai": ProviderLegality(
             "openai",
             frozenset({AcquisitionMode.BYOK}),
             basis=(
-                "first-party API-key offering; no entitlement-OAuth determination on record, "
-                "so the harness path is not asserted for this provider"
+                "OpenAI Terms of Use — the first-party paid API is the product's own channel; "
+                "no estate verdict on record (outstanding), so nothing further is asserted"
             ),
+            determination_class="provider-terms",
         ),
     }
 )

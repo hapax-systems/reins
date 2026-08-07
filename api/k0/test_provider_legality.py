@@ -72,15 +72,38 @@ def test_the_determinations_on_record() -> None:
     assert legal_acquisition_modes("openai") == frozenset({AcquisitionMode.BYOK})
     for entry in PROVIDER_LEGALITY.values():
         assert entry.basis.strip(), "a mode with no cited determination is an assertion"
+    assert PROVIDER_LEGALITY["anthropic"].determination_class == "estate-verdict"
+    assert PROVIDER_LEGALITY["openai"].determination_class == "provider-terms", (
+        "the weaker standing must be visible as data, never silently equal"
+    )
 
 
 def test_elicitation_shaping_matches_the_probe_registry() -> None:
-    """Only BYOK-legal providers WITH sanctioned probe endpoints may be offered for capture —
-    an offered key must be provable (R2.3), and an unprovable offer is a dead end."""
     got = capturable_providers()
     assert got == tuple(sorted(PROVIDER_PROBE_ENDPOINTS)), (
         "every probeable provider is BYOK-legal today; a divergence here means one of the two "
         "registries changed without the other"
+    )
+
+
+def test_the_intersection_is_computed_not_assumed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """glm r2: the shaping test must exercise the intersection, not assert an identity."""
+    import k0.provider_legality as pl
+    from k0.provider_legality import ProviderLegality
+
+    oauth_only = {
+        **dict(PROVIDER_LEGALITY),
+        "openai": ProviderLegality(
+            "openai",
+            frozenset({AcquisitionMode.OAUTH_ENTITLEMENT}),
+            basis="test fixture: entitlement-only",
+            determination_class="provider-terms",
+        ),
+    }
+    monkeypatch.setattr(pl, "PROVIDER_LEGALITY", oauth_only)
+    assert capturable_providers() == ("anthropic",), (
+        "an OAuth-only provider drops out of the capture offer — the ceremony asks only for "
+        "what may legally be captured"
     )
 
 
@@ -99,6 +122,7 @@ def test_validate_key_refuses_a_byok_capture_when_it_is_not_legal(
             "openai",
             frozenset({AcquisitionMode.OAUTH_ENTITLEMENT}),
             basis="test fixture: entitlement-only",
+            determination_class="provider-terms",
         ),
     }
     monkeypatch.setattr(pl, "PROVIDER_LEGALITY", oauth_only)
