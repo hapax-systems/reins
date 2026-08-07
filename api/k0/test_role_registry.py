@@ -305,3 +305,43 @@ def test_readback_enforces_the_empty_and_duplicate_laws(tmp_path: Path) -> None:
         ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
         with pytest.raises(RoleRegistryError, match="not the canonical shape"):
             role_known(root, "alpha")
+
+
+def test_a_role_list_cannot_mutate_after_construction() -> None:
+    """CodeRabbit: a list passed to RoleSet must be normalized — frozen blocks reassignment,
+    not in-place mutation of the caller's list."""
+    as_list = ["alpha", "beta"]
+    roles = RoleSet(as_list)  # type: ignore[arg-type]
+    as_list.append("intruder")
+    assert "intruder" not in roles.roles and isinstance(roles.roles, tuple)
+
+
+def test_trailing_newline_is_not_a_role() -> None:
+    """CodeRabbit: match() with $ accepts a trailing newline — fullmatch does not."""
+    with pytest.raises(ValueError, match="lowercase kebab"):
+        RoleSet(("alpha\n",))
+
+
+def test_partial_mint_inputs_validate_before_any_durable_act(tmp_path: Path) -> None:
+    """CodeRabbit: a bad role set must not leave a minted identity behind it."""
+    from k0.role_registry import mint_genesis_identity
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    with pytest.raises(ValueError, match="lowercase kebab"):
+        mint_genesis_identity(
+            root,
+            principal="operator@estate-0",
+            roles=("BAD ROLE",),
+            key_path=key,
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+        )
+    assert sovereign_principal(root) is None, "nothing minted before validation succeeded"
+
+
+def test_key_inspection_failure_is_a_governed_refusal(tmp_path: Path) -> None:
+    from k0.role_registry import _fingerprint_of
+
+    with pytest.raises(RoleRegistryError, match="fingerprint"):
+        _fingerprint_of(tmp_path / "no-such-key")

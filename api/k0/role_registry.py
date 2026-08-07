@@ -43,8 +43,8 @@ from .ratification import (
 )
 from .refusal import Refusal
 
-ROLE_GRAMMAR = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
-PRINCIPAL_GRAMMAR = re.compile(r"^[a-z][a-z0-9._-]{1,63}@[a-z0-9][a-z0-9.-]{1,62}$")
+ROLE_GRAMMAR = re.compile(r"[a-z][a-z0-9-]{1,31}")
+PRINCIPAL_GRAMMAR = re.compile(r"[a-z][a-z0-9._-]{1,63}@[a-z0-9][a-z0-9.-]{1,62}")
 
 
 class RoleRegistryError(RuntimeError):
@@ -61,7 +61,7 @@ class SovereignIdentity:
     key_fingerprint: str  # SHA256:<base64> from ssh-keygen -l — identity, not material
 
     def __post_init__(self) -> None:
-        if not PRINCIPAL_GRAMMAR.match(self.principal):
+        if not PRINCIPAL_GRAMMAR.fullmatch(self.principal):
             raise ValueError(
                 f"{self.principal!r}: a principal is name@host-shaped, lowercase — it becomes "
                 "a ledger referent"
@@ -94,10 +94,13 @@ class RoleSet:
     roles: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        # frozen blocks reassignment, not construction with a mutable: normalize first
+        # (CodeRabbit), so the registry's bytes cannot drift after minting.
+        object.__setattr__(self, "roles", tuple(self.roles))
         if not self.roles:
             raise ValueError("an empty registry dispatches nothing — elicit the roles first")
         for role in self.roles:
-            if not ROLE_GRAMMAR.match(role):
+            if not ROLE_GRAMMAR.fullmatch(role):
                 raise ValueError(
                     f"{role!r}: a role name is lowercase kebab, 2-32 chars — it becomes a "
                     "dispatch referent"
@@ -125,24 +128,35 @@ class RoleSet:
 
 def _fingerprint_of(key_path: Path) -> str:
     """The SHA256 fingerprint of the signing key's public half, derived in a temp dir —
-    nothing is written beside the operator's key."""
+    nothing is written beside the operator's key. A missing/broken ssh-keygen is a governed
+    refusal, never a bare CalledProcessError (CodeRabbit)."""
     import tempfile
 
-    pub_text = subprocess.run(
-        ["ssh-keygen", "-y", "-f", str(key_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    with tempfile.TemporaryDirectory() as td:
-        pub = Path(td) / "key.pub"
-        pub.write_text(pub_text + "\n", encoding="utf-8")
-        return subprocess.run(
-            ["ssh-keygen", "-l", "-f", str(pub)],
+    try:
+        pub_text = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(key_path)],
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.split()[1]
+        ).stdout.strip()
+        with tempfile.TemporaryDirectory() as td:
+            pub = Path(td) / "key.pub"
+            pub.write_text(pub_text + "\n", encoding="utf-8")
+            return subprocess.run(
+                ["ssh-keygen", "-l", "-f", str(pub)],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.split()[1]
+    except (OSError, subprocess.CalledProcessError, IndexError) as exc:
+        raise RoleRegistryError(
+            f"the signing key's fingerprint could not be derived ({type(exc).__name__})",
+            Refusal(
+                gate="identity.signer-binding",
+                why="key inspection failed — the identity cannot be bound to the signer",
+                legal_next="install OpenSSH and confirm the ratifier key is readable, then re-run",
+            ),
+        ) from None
 
 
 def _present_and_accept(
@@ -239,9 +253,13 @@ def mint_genesis_identity(
     second — the registry's mint is signed BY the identity the first act just bound, so the
     order is the meaning. This is the entry point the external ceremony driver calls; the
     driver itself arrives with the P2 executor and is not this kernel's to invent here."""
+    # Construct BOTH artifacts first (CodeRabbit): their constructors carry the shape laws,
+    # so validating up front means a bad role set cannot leave a minted identity behind it.
+    identity = SovereignIdentity(principal, _fingerprint_of(key_path))
+    role_set = RoleSet(roles)
     mint_sovereign_identity(
         root,
-        SovereignIdentity(principal, _fingerprint_of(key_path)),
+        identity,
         key_path=key_path,
         estate_id=estate_id,
         kernel_version=kernel_version,
@@ -249,7 +267,7 @@ def mint_genesis_identity(
     )
     mint_role_registry(
         root,
-        RoleSet(roles),
+        role_set,
         key_path=key_path,
         estate_id=estate_id,
         kernel_version=kernel_version,
@@ -257,8 +275,21 @@ def mint_genesis_identity(
     )
 
 
-def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
-    """The verified-read half of the ceremony shape, for this module's two artifacts."""
+def _read_consented_body(
+    root: Path,
+    prefix: str,
+    gate: str,
+    *,
+    allowed_signers: Path | None = None,
+    principal: str | None = None,
+    scratch_dir: Path | None = None,
+) -> dict | None:
+    """The verified-read half of the ceremony shape, for this module's two artifacts.
+
+    With the signing materials supplied, the ratification row must also authenticate against
+    the sovereign's key (CodeRabbit: hash links alone cannot catch an appended forged row).
+    Without them the read is hash-only — callers needing the authenticated answer pass all
+    three."""
     if not verify_chain_at(root).ok:
         raise RoleRegistryError(
             "the bootstrap chain fails verification",
@@ -277,6 +308,35 @@ def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
         return None
     receipt = rows[-1]
     sid = _id_of(receipt)
+    if not re.fullmatch(rf"{re.escape(prefix)}[0-9a-f]{{16}}", sid):
+        raise RoleRegistryError(
+            f"{sid}: not a canonical id for {prefix}<digest16> — the prefix is reserved",
+            Refusal(
+                gate=gate,
+                why="a malformed id in a reserved namespace is not this artifact",
+                legal_next="verify_chain; establish how the row was minted",
+            ),
+        )
+    if allowed_signers is not None and principal is not None and scratch_dir is not None:
+        from .ratification import verify_ratifications
+        from .refusal import RefusalError
+
+        try:
+            verdict = verify_ratifications(
+                root, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+            )
+            ok = sid in verdict.verified and verdict.ok
+        except RefusalError:
+            ok = False
+        if not ok:
+            raise RoleRegistryError(
+                f"{sid}: the ratification does not authenticate against the sovereign's key",
+                Refusal(
+                    gate=f"{gate}.signature",
+                    why="a consent row that does not verify is not consent",
+                    legal_next="verify_ratifications() shows every unverified row with its reason",
+                ),
+            )
     pinned = artifact_digest(receipt)
     if pinned is None:
         raise RoleRegistryError(
@@ -317,9 +377,23 @@ def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
         ) from None
 
 
-def sovereign_principal(root: Path) -> str | None:
-    """The ratified principal, or None — dark, never a default identity."""
-    body = _read_consented_body(root, "sovereign-identity.", "identity.integrity")
+def sovereign_principal(
+    root: Path,
+    *,
+    allowed_signers: Path | None = None,
+    principal: str | None = None,
+    scratch_dir: Path | None = None,
+) -> str | None:
+    """The ratified principal, or None — dark, never a default identity. With the signing
+    materials supplied, the consent row is authenticated first."""
+    body = _read_consented_body(
+        root,
+        "sovereign-identity.",
+        "identity.integrity",
+        allowed_signers=allowed_signers,
+        principal=principal,
+        scratch_dir=scratch_dir,
+    )
     if body is None:
         return None
     if set(body) != {"principal", "key_fingerprint"}:
@@ -347,10 +421,17 @@ def sovereign_principal(root: Path) -> str | None:
     return body["principal"]
 
 
-def role_known(root: Path, role: str) -> bool:
+def role_known(
+    root: Path,
+    role: str,
+    *,
+    allowed_signers: Path | None = None,
+    principal: str | None = None,
+    scratch_dir: Path | None = None,
+) -> bool:
     """Is this role registered? The fail-close must be LEGIBLE (the graph's whole point):
     an unregistered-but-plausible role and a malformed one are different answers."""
-    if not ROLE_GRAMMAR.match(role):
+    if not ROLE_GRAMMAR.fullmatch(role):
         raise RoleRegistryError(
             f"{role!r} is not a role name — nothing to look up",
             Refusal(
@@ -359,7 +440,14 @@ def role_known(root: Path, role: str) -> bool:
                 legal_next="role names are lowercase kebab, 2-32 chars",
             ),
         )
-    body = _read_consented_body(root, "role-registry.", "role-registry.integrity")
+    body = _read_consented_body(
+        root,
+        "role-registry.",
+        "role-registry.integrity",
+        allowed_signers=allowed_signers,
+        principal=principal,
+        scratch_dir=scratch_dir,
+    )
     if body is None:
         raise RoleRegistryError(
             "no role registry is minted — dispatch cannot fail-close legibly without one",
@@ -374,7 +462,7 @@ def role_known(root: Path, role: str) -> bool:
         or not isinstance(body["roles"], list)
         or not body["roles"]
         or len(set(body["roles"])) != len(body["roles"])
-        or not all(isinstance(r, str) and ROLE_GRAMMAR.match(r) for r in body["roles"])
+        or not all(isinstance(r, str) and ROLE_GRAMMAR.fullmatch(r) for r in body["roles"])
     ):
         raise RoleRegistryError(
             "the consented registry is not the canonical shape (exactly {'roles': [valid names]})",
