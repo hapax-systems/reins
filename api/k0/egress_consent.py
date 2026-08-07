@@ -221,6 +221,7 @@ def ratified_allowlist(
         return None
     sid, receipt = found
     materials_supplied = allowed_signers is not None and principal is not None and scratch_dir is not None
+    signature_ok = False
     if materials_supplied:
         from .ratification import verify_ratifications
         from .refusal import RefusalError
@@ -248,8 +249,19 @@ def ratified_allowlist(
                     ),
                 ),
             ) from None
+        signature_ok = True  # reached only when the row authenticated (claude r22)
     gate = "egress.allowlist-integrity"
     pinned = artifact_digest(receipt)
+    if pinned is None:
+        raise EgressConsentError(
+            f"{sid}: the latest ratified egress row pins NO artifact digest — an egress consent "
+            "that names no artifact is not a consent",
+            Refusal(
+                gate=gate,
+                why="the row claims ratification without naming what was ratified",
+                legal_next="verify_chain; establish where the stipulation ref went, restore or re-ratify",
+            ),
+        )
     path = root / SIGNATURE_DIRNAME / f"{sid}.body"
     try:
         raw = path.read_bytes()
@@ -265,7 +277,19 @@ def ratified_allowlist(
                 ),
             ),
         ) from None
-    if pinned is None or hashlib.sha256(raw).hexdigest() != pinned:
+    actual = hashlib.sha256(raw).hexdigest()
+    if not re.fullmatch(r"egress-allowlist\.[0-9a-f]{16}", sid) or sid.rsplit(".", 1)[1] != actual[:16]:
+        raise EgressConsentError(
+            f"{sid}: the stipulation id does not bind this body — a well-formed egress id is "
+            "egress-allowlist.<first 16 hex of the body digest>, and this pair disagrees",
+            Refusal(
+                gate=gate,
+                why="an id that does not embed its artifact's digest lets any signed row wear "
+                "the egress prefix (codex r22)",
+                legal_next="verify_chain; the id/body pair was minted apart — establish which moved",
+            ),
+        )
+    if actual != pinned:
         raise EgressConsentError(
             f"{sid}: the stored allowlist does not hash to the digest the chain pins — the "
             "artifact changed after consent",
@@ -300,7 +324,7 @@ def ratified_allowlist(
         # no parseable digest claims nothing, and must not inflate the amendment count
         # (claude r8).
         amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
-        signature_verified=materials_supplied,
+        signature_verified=signature_ok,
     )
 
 

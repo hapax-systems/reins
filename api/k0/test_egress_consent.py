@@ -117,7 +117,7 @@ def test_a_tampered_allowlist_body_refuses_loudly(tmp_path: Path) -> None:
 
     body = root / SIGNATURE_DIRNAME / f"{ALLOWED.stipulation_id()}.body"
     body.write_text('{"hosts":["api.attacker.example"]}', encoding="utf-8")
-    with pytest.raises(EgressConsentError, match="changed after consent") as exc:
+    with pytest.raises(EgressConsentError, match="changed after consent|does not bind this body") as exc:
         egress_decision(root, "api.anthropic.com", **materials)
     assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
 
@@ -263,7 +263,7 @@ def test_a_structurally_wrong_body_is_a_refusal_not_a_crash(tmp_path: Path) -> N
         key = _key(sub)
         import hashlib as _hashlib
 
-        sid = f"egress-allowlist.{_hashlib.sha256(bad).hexdigest()[:8]}"
+        sid = f"egress-allowlist.{_hashlib.sha256(bad).hexdigest()[:16]}"
         stip = Stipulation.over(sid, "EGRESS CONSENT: shape test", bad)
         (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
         (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
