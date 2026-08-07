@@ -114,3 +114,32 @@ def test_a_refusal_midway_stops_the_ceremony_honestly(tmp_path: Path) -> None:
     assert ratified_forge(root, allow_unauthenticated=True) is None, (
         "the refused act never reached the chain"
     )
+
+
+def test_completeness_requires_the_foundation_too(tmp_path: Path) -> None:
+    """codex r5: a ceremony missing its identity or registry is not complete, however many
+    narrowings landed."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+
+    # Narrowings only — no identity, no registry.
+    from k0.boot_profile import present as present_profile
+    from k0.egress_consent import accept as accept_allowlist
+    from k0.egress_consent import elicit_allowlist
+    from k0.forge_choice import accept as accept_forge
+    from k0.forge_choice import present as present_forge
+    from k0.ratification import ratify
+
+    profile = PROFILES["existing-agent-harness"]
+    allowlist = EgressAllowlist(hosts=("api.anthropic.com",))
+    forge = FORGE_PROFILES[ForgeChoice.GITHUB_ONLY]
+    present_profile(root, profile, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, profile.stipulation(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    elicit_allowlist(root, allowlist, estate_id=ESTATE, kernel_version=KERNEL)
+    accept_allowlist(root, allowlist, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    present_forge(root, forge, estate_id=ESTATE, kernel_version=KERNEL)
+    accept_forge(root, forge, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    assert not ceremony_complete(root), (
+        "every narrowing present but no identity and no registry — complete would be a lie"
+    )

@@ -32,7 +32,15 @@ from .forge_choice import accept as accept_forge
 from .forge_choice import present as present_forge
 from .forge_choice import ratified_forge
 from .ratification import ratify
-from .role_registry import RoleSet, SovereignIdentity, _fingerprint_of, mint_genesis_identity
+from .role_registry import (
+    RoleRegistryError,
+    RoleSet,
+    SovereignIdentity,
+    _fingerprint_of,
+    mint_genesis_identity,
+    role_known,
+    sovereign_principal,
+)
 
 
 @dataclass(frozen=True)
@@ -108,15 +116,30 @@ def ratify_genesis_stipulations(
     )
 
 
+def _registry_minted(root: Path) -> bool:
+    """A well-formed probe name: absent registry refuses with its gate; a minted one answers
+    False for a name nobody registered."""
+    try:
+        role_known(root, "zz-unregistered")
+        return True
+    except RoleRegistryError as exc:
+        return getattr(exc.refusal, "gate", None) != "role-registry.absent"
+
+
 def ceremony_complete(root: Path) -> bool:
-    """Every genesis narrowing answered? Derived from the readers, never from a cursor.
+    """Every genesis act answered? Derived from the readers, never from a cursor — and that
+    includes the identity and the registry the spine mints FIRST (codex/claude r5: the earlier
+    version checked only the narrowings, so a ceremony missing its own foundation read
+    'complete').
 
     The forge/egress readers demand signing materials on enforcement paths; this completeness
     check is a READ, so it uses the explicit unauthenticated opt-in — it answers "is it on the
     chain", never "may I transmit".
     """
     return (
-        ratified_profile(root) is not None
+        sovereign_principal(root) is not None
+        and _registry_minted(root)
+        and ratified_profile(root) is not None
         and ratified_allowlist(root, allow_unauthenticated=True) is not None
         and ratified_forge(root, allow_unauthenticated=True) is not None
     )

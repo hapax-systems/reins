@@ -284,3 +284,24 @@ def test_undecodable_body_is_a_refusal_with_a_next_action(tmp_path: Path) -> Non
     with pytest.raises(RoleRegistryError, match="not decodable") as exc:
         role_known(root, "alpha")
     assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
+
+
+def test_readback_enforces_the_empty_and_duplicate_laws(tmp_path: Path) -> None:
+    """codex r5: the read-back enforces ALL the construction laws, not only the grammar."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    for bad in (b'{"roles":[]}', b'{"roles":["alpha","alpha"]}'):
+        sub = tmp_path / str(abs(hash(bad)))
+        sub.mkdir()
+        root = _root(sub)
+        key = _key(sub)
+        sid = f"role-registry.{_hashlib.sha256(bad).hexdigest()[:16]}"
+        stip = Stipulation.over(sid, "ROLE REGISTRY: law test", bad)
+        (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+        (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+        propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+        ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+        with pytest.raises(RoleRegistryError, match="not the canonical shape"):
+            role_known(root, "alpha")

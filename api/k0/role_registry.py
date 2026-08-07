@@ -372,6 +372,8 @@ def role_known(root: Path, role: str) -> bool:
     if (
         set(body) != {"roles"}
         or not isinstance(body["roles"], list)
+        or not body["roles"]
+        or len(set(body["roles"])) != len(body["roles"])
         or not all(isinstance(r, str) and ROLE_GRAMMAR.match(r) for r in body["roles"])
     ):
         raise RoleRegistryError(
