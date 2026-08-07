@@ -230,9 +230,42 @@ def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
     if 200 <= response.status < 400:
         request_id = response.getheader("x-request-id") or response.getheader("server") or "unknown"
         return ProbeOutcome(f"https-status:{response.status}:server:{request_id}", None)
-    if 400 <= response.status < 500:
-        return ProbeOutcome(None, f"http-{response.status}")
     return ProbeOutcome(None, f"http-{response.status}")
+
+
+#: Every failure class the wire can report, with the operator's next move (executive_function:
+#: an error without a next action is a dead end). Renderers look the class up here; the ledger
+#: row carries the class itself.
+FAILURE_NEXT_MOVES: dict[str, str] = {
+    "timeout": "the host did not answer in 10s — check reachability, then retry; the key is unproven, not condemned",
+    "connection-refused": "the host refused the connection — check the host name and egress path, then retry",
+    "tls-error": "the TLS handshake failed — do not retry blindly; establish whether the endpoint is the real one before offering the key again",
+    "key-not-utf8": "the stored value is not UTF-8 — it cannot ride an Authorization header; re-capture the key",
+    "transport-error": "an unclassified transport failure — inspect locally, then retry",
+    "unknown": "the probe failed without a classified cause — inspect locally, then retry",
+}
+
+
+def failure_next_move(failure_class: str) -> str:
+    """The operator's next move for a failed validation class — including the http-<status>
+    classes, which are per-status data, not prose to parse."""
+    if failure_class in FAILURE_NEXT_MOVES:
+        return FAILURE_NEXT_MOVES[failure_class]
+    if failure_class.startswith("http-"):
+        status = failure_class.removeprefix("http-")
+        if status.startswith("4"):
+            return (
+                f"the provider answered {status} — the key does not work (wrong, expired, or "
+                "revoked); capture a working key, then validate again"
+            )
+        if status.startswith("5"):
+            return (
+                f"the provider answered {status} — the failure is theirs; retry later, the key "
+                "is unproven, not condemned"
+            )
+    return FAILURE_NEXT_MOVES["unknown"]
+
+
 def required_secrets(root: Path) -> tuple[str, ...]:
     """The secret set GENERATED from the ratified capability set — read off the chain.
 

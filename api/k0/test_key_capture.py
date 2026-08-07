@@ -523,3 +523,34 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch:
 
     _patch_wire(monkeypatch, error=ConnectionRefusedError())
     assert https_probe_transport(HOST, "/v1/models", b"x").failure == "connection-refused"
+
+
+def test_remaining_transport_and_descriptor_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rest of the wire vocabulary (codex r6): each failure class classifies, and the
+    descriptor refuses bad shapes at construction."""
+    import ssl
+
+    from k0.key_capture import failure_next_move, https_probe_transport
+
+    _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
+    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "tls-error"
+
+    _patch_wire(monkeypatch, error=OSError("reset"))
+    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "transport-error"
+
+    _patch_wire(monkeypatch, status=503)
+    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "http-503"
+
+    assert https_probe_transport(HOST, "/v1/models", b"\xff\xfe").failure == "key-not-utf8"
+
+    with pytest.raises(ValueError, match="not an exact hostname"):
+        KeyProbe(host="UPPER.example", path="/v1/models")
+    with pytest.raises(ValueError, match="absolute URL path"):
+        KeyProbe(host=HOST, path="no-leading-slash")
+
+    assert "expired" in failure_next_move("http-401")
+    assert "theirs" in failure_next_move("http-503")
+    assert failure_next_move("tls-error") != failure_next_move("timeout"), (
+        "each class carries its own next move — one generic string would be the dead end "
+        "executive_function forbids"
+    )
