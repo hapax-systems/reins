@@ -232,10 +232,13 @@ def _https_probe_transport(
     # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
     # headers are caller-controlled content on the wire. Registry membership is verified here,
     # so the consented destination is the only reachable one.
-    if endpoint not in PROVIDER_PROBE_ENDPOINTS.values():
+    if all(endpoint is not registered for registered in PROVIDER_PROBE_ENDPOINTS.values()):
+        # IDENTITY, not equality (claude r20): with the registry immutable, the endpoint must BE
+        # the registry's object — a caller rebuilding an equal one is shaping their own
+        # destination, and that is not consent.
         raise ValueError(
-            "the kernel's wire dials sanctioned registry endpoints only — an endpoint that is "
-            "not registry data is not a legal destination"
+            "the kernel's wire dials the registry's own endpoint objects only — an endpoint "
+            "that is not the registry's is not a legal destination"
         )
     """THE KERNEL'S OWN WIRE — AND IT IS SELF-GATING (codex r15). A public transport that does
     not check consent would be the bypass around the gate: any caller could import it and dial

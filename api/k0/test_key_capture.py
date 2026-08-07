@@ -851,16 +851,20 @@ def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: p
     dialed: list[tuple] = []
     _patch_wire(monkeypatch, record=dialed)
 
-    forged = ProbeEndpoint("api.anthropic.com", "/v1/models", "x-api-key", "sk-ant-", (("anthropic-version", "2023-06-01"),))
-    # identical FIELDS, but not the registry object —
     from k0.key_capture import PROVIDER_PROBE_ENDPOINTS
 
+    forged = ProbeEndpoint("api.anthropic.com", "/v1/models", "x-api-key", "sk-ant-", (("anthropic-version", "2023-06-01"),))
     assert forged == PROVIDER_PROBE_ENDPOINTS["anthropic"], "fixture premise: fields match"
-    assert forged in PROVIDER_PROBE_ENDPOINTS.values(), "equality holds — the guard admits it"
+    with pytest.raises(ValueError, match="registry"):
+        _https_probe_transport(root, forged, b"sk-canary-value", **materials)
+    # — an EQUAL-but-rebuilt endpoint is refused: the guard compares identity, so the caller
+    # must pass the registry's own object (claude r20).
+    registered = PROVIDER_PROBE_ENDPOINTS["anthropic"]
+    _https_probe_transport(root, registered, b"sk-canary-value", **materials)
+    assert ("connect", "api.anthropic.com") in dialed, "the registry's own object dials"
     custom = ProbeEndpoint("api.anthropic.com", "/v1/messages", "x-api-key", "sk-ant-", ())
     with pytest.raises(ValueError, match="registry"):
         _https_probe_transport(root, custom, b"sk-canary-value", **materials)
-    assert dialed == [], "a non-registry endpoint never reaches the wire"
 
 
 def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

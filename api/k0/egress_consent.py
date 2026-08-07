@@ -277,14 +277,7 @@ def ratified_allowlist(
         hosts = parsed["hosts"] if isinstance(parsed, dict) else None
         if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
             raise TypeError("hosts is not a list of hostnames")
-        return RatifiedEgress(
-            allowlist=EgressAllowlist(hosts=tuple(hosts)),
-            # Count only rows that actually pin a consent artifact: a ratified egress row with
-            # no parseable digest claims nothing, and must not inflate the amendment count
-            # (claude r8).
-            amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
-        )
-    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
         raise EgressConsentError(
             f"{sid}: the consented allowlist is not decodable as an allowlist",
             Refusal(
@@ -293,6 +286,15 @@ def ratified_allowlist(
                 legal_next="restore the body from backup, or elicit and accept a fresh allowlist",
             ),
         ) from None
+    # Construction is OUTSIDE the try (claude r20): a bug in these constructors is a real bug
+    # and must crash as itself, never masquerade as "not decodable".
+    return RatifiedEgress(
+        allowlist=EgressAllowlist(hosts=tuple(hosts)),
+        # Count only rows that actually pin a consent artifact: a ratified egress row with
+        # no parseable digest claims nothing, and must not inflate the amendment count
+        # (claude r8).
+        amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
+    )
 
 
 def egress_decision(
