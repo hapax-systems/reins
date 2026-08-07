@@ -71,7 +71,7 @@ def test_canonical_segment_verifies() -> None:
 
 #: The expected pin, anchored HERE as its own literal (review: claude PR#10 r2 blocker).
 #: A coordinated data edit must now also edit this file — two files, both diff-visible.
-EXPECTED_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
+EXPECTED_PIN = "2be6b5a018fce1d92655b6931382a5b3ae1a283007bab856b700b798834322da"
 
 
 def test_canonical_content_matches_pinned_shape() -> None:
@@ -93,13 +93,13 @@ def test_canonical_content_matches_pinned_shape() -> None:
         "k0-arm-genesis-lock": "built",
         "host-reconcile": "partial",
         "identity": "built",
-        "key-capture": "unbuilt",
-        "first-consent": "partial",
-        "first-stipulations": "unbuilt",
+        "key-capture": "built",
+        "first-consent": "built",
+        "first-stipulations": "partial",
     }
     assert seg.terminal_r_node == "R2.15"
     assert seg.ratified is True
-    assert seg.mandatory_act_count is None
+    assert seg.mandatory_act_count == 11
 
 
 def test_pin_is_recomputed_independently_of_import() -> None:
@@ -213,10 +213,16 @@ def test_dishonest_act_tally_refuses() -> None:
         verify(replace(DETERMINISTIC_SEGMENT, mandatory_act_count=2))
 
 
-def test_tally_is_pending_ratification_today() -> None:
-    """The mandatory-act tally is an open ratification question (spec §8.3); freezing a
-    guessed number into the pin would be a false precision."""
-    assert DETERMINISTIC_SEGMENT.mandatory_act_count is None
+def test_tally_is_the_performed_count() -> None:
+    """The tally act is performed (spec §8.3): 11, the exact count of the membership's governed
+    act instances, set with R2.3/R2.4 on main. The count must always cover the data — verify()
+    refuses anything less, so the pin and the membership cannot silently disagree."""
+    assert DETERMINISTIC_SEGMENT.mandatory_act_count == 11
+    instances = sum(len(m.acts) for m in DETERMINISTIC_SEGMENT.members)
+    assert DETERMINISTIC_SEGMENT.mandatory_act_count == instances, (
+        "the tally is the membership's own act-instance count — a divergence means one of them "
+        "was edited without the other"
+    )
 
 
 def test_ratified_flag_is_true_and_pinned() -> None:
@@ -312,19 +318,23 @@ def test_segment_code_paths_cover_evidence_cited_modules() -> None:
 
 
 def test_substrate_accounting_is_honest_today() -> None:
-    """The declaration must not claim the segment is more built than main is."""
+    """The declaration must not claim the segment is more built than main is.
+
+    Updated at the tally act (2026-08-07): R2.3 (reins#12), R2.4 (reins#13), and the
+    ratification/degradation machinery (reins#7) are ON MAIN, so key-capture and first-consent
+    count built and first-stipulations advances to partial (R2.6 landed; R2.5 and
+    R2.7/R2.11-R2.13 have not). The accounting moves only when main does.
+    """
     states = {m.id: m.substrate_state for m in SEGMENT_MEMBERS}
-    assert states["key-capture"] == "unbuilt"
+    assert states["key-capture"] == "built"
     assert states["install-verify"] == "unbuilt"
-    assert (
-        states["first-stipulations"] == "unbuilt"
-    )  # R2.8/R2.6 are on-branch, not substrate
-    assert states["first-consent"] == "partial"
+    assert states["first-stipulations"] == "partial"  # R2.6 on main; the rest of its nodes not
+    assert states["first-consent"] == "built"
     assert states["host-reconcile"] == "partial"
     assert states["identity"] == "built"
-    assert sum(1 for s in states.values() if s == "unbuilt") == 3
+    assert sum(1 for s in states.values() if s == "unbuilt") == 1
     assert sum(1 for s in states.values() if s == "partial") == 2
-    assert sum(1 for s in states.values() if s == "built") == 3
+    assert sum(1 for s in states.values() if s == "built") == 5
 
 
 def test_terminal_r_node_shape_and_membership() -> None:
