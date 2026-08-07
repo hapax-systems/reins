@@ -72,6 +72,44 @@ def _consent_egress(root: Path, key: Path) -> None:
     )
 
 
+class _FakeResponse:
+    def __init__(self, status: int, headers: dict | None = None) -> None:
+        self.status = status
+        self._headers = headers or {}
+
+    def read(self) -> bytes:
+        return b""
+
+    def getheader(self, name: str):
+        return self._headers.get(name)
+
+
+def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Exception | None = None, record: list | None = None) -> None:
+    """Patch the STDLIB boundary — never the module's surface. The module has no injection seam,
+    so the tests meet it at http.client.HTTPSConnection, where production behavior lives."""
+    import http.client
+
+    class _FakeConn:
+        def __init__(self, host: str, timeout: int = 10) -> None:
+            self._host = host
+            if record is not None:
+                record.append(("connect", host))
+
+        def request(self, method: str, path: str, headers: dict | None = None) -> None:
+            if record is not None:
+                record.append(("request", self._host, path, (headers or {}).get("Authorization", "")))
+            if error is not None:
+                raise error
+
+        def getresponse(self):
+            return _FakeResponse(status)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _FakeConn)
+
+
 def test_the_secret_set_is_generated_from_the_ratified_profile(tmp_path: Path) -> None:
     """The requirement is IN the ratified artifact, not in a config table (codex r2 critical).
 
@@ -122,10 +160,11 @@ def test_the_requirement_rides_inside_the_consented_bytes() -> None:
         )
 
 
-def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
+def test_the_supply_ladder_absent_to_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
     _consent_egress(root, _key(tmp_path))
+    _patch_wire(monkeypatch)
 
     assert supply_state(root, store, NAME) is SecretSupply.ABSENT
     assert needs_elicitation(root, store, NAME), "absent and unasked is the one askable state"
@@ -149,7 +188,6 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
         store,
         NAME,
         probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: "probe-receipt:ok-1",
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -166,10 +204,11 @@ def _chain(root: Path):
     return load_chain(root)
 
 
-def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -> None:
+def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
     _consent_egress(root, _key(tmp_path))
+    _patch_wire(monkeypatch, status=401)
     store.put(NAME, b"sk-canary-value")
 
     ok = validate_key(
@@ -177,7 +216,6 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
         store,
         NAME,
         probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: None,
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -192,6 +230,10 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
         "but the failure is DURABLE: silent retries would let a wrong key burn quota forever "
         "(codex r4). The row carries no value and no response body."
     )
+    assert any("key-validation-failed:http-401" in r.payload_refs for r in failures), (
+        "and the cause is CLASSIFIED — a 401 and a timeout are different problems with "
+        "different next moves, and the ledger says which"
+    )
     assert b"sk-canary-value" not in (root / RECEIPT_CHAIN_FILENAME).read_bytes()
 
 
@@ -205,7 +247,6 @@ def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_pa
             store,
             NAME,
             probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: "x",
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -231,18 +272,18 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             store,
             NAME,
             probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: "probe-receipt:ok-1",
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
     assert verify_chain_at(root).ok
 
 
-def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
+def test_no_secret_value_ever_touches_the_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The canary test: run the whole ceremony with a distinctive value, then scan the ledger."""
     root = _root(tmp_path)
     store = MemoryStore()
     _consent_egress(root, _key(tmp_path))
+    _patch_wire(monkeypatch)
     canary = b"sk-canary-7f3c9a1b-never-on-disk"
 
     elicit_capture(root, NAME, estate_id=ESTATE, kernel_version=KERNEL)
@@ -252,7 +293,6 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
         store,
         NAME,
         probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: "probe-receipt:ok-1",
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -265,17 +305,17 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
     )
 
 
-def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path) -> None:
+def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The receipt consents to EXACT BYTES (codex r1 critical). Replace the stored value after
     validation and the name must drop to CAPTURED_UNVALIDATED; delete it and the answer is
     ABSENT. A stale receipt can never keep a replaced secret reading as supply."""
     root = _root(tmp_path)
     store = MemoryStore()
     _consent_egress(root, _key(tmp_path))
+    _patch_wire(monkeypatch)
     store.put(NAME, b"sk-first-value")
     assert validate_key(
         root, store, NAME, probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: "probe-receipt:ok-1",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert supply_state(root, store, NAME) is SecretSupply.VALIDATED
@@ -393,7 +433,7 @@ def test_pass_backend_errors_never_carry_the_value(tmp_path: Path, monkeypatch: 
     )
 
 
-def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_path: Path) -> None:
+def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate on the ACTUAL egress path (codex r2 critical): the validator is the wire, so an
     unconsented host must refuse before the callable is invoked — not after, not with a warning."""
     from k0.egress_consent import EgressConsentError
@@ -402,20 +442,20 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
     store = MemoryStore()
     store.put(NAME, b"sk-canary-value")
 
-    calls: list[bytes] = []
+    dialed: list[tuple] = []
+    _patch_wire(monkeypatch, record=dialed)
     with pytest.raises(EgressConsentError, match="no ratified egress allowlist"):
         validate_key(
             root, store, NAME, probe=KeyProbe(host="api.never-consented.example", path="/v1/models"),
-        transport=lambda h, pth, v: calls.append((h, v,) or "ok"),
             estate_id=ESTATE, kernel_version=KERNEL,
         )
-    assert calls == [], "the transport — the transmitting act — was never invoked"
+    assert dialed == [], "the wire — the transmitting act — was never touched"
     assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED, (
         "a refused validation is not a disposition; the name stays unvalidated"
     )
 
 
-def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path) -> None:
+def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The binding, proven: validate_key passes probe.host — the attribute it checked consent
     against — to the transport itself. A recording transport witnesses that the consented host
     is the dialed host; there is no second channel for a caller to whisper a different one."""
@@ -424,16 +464,16 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path) -> Non
     _consent_egress(root, _key(tmp_path))
     store.put(NAME, b"sk-canary-value")
 
-    dialed: list[tuple[str, str]] = []
+    dialed: list[tuple] = []
+    _patch_wire(monkeypatch, record=dialed)
     ok = validate_key(
         root, store, NAME,
         probe=KeyProbe(host=HOST, path="/v1/models"),
-        transport=lambda h, pth, v: dialed.append((h, pth)) or "probe-receipt:ok-9",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert ok
-    assert dialed == [(HOST, "/v1/models")], (
-        "the host the consent check evaluated is the host the transport received"
+    assert ("connect", HOST) in dialed and ("request", HOST, "/v1/models", "Bearer sk-canary-value") in dialed, (
+        "the host the consent check evaluated is the host the kernel's transport dialed"
     )
 
 
@@ -444,8 +484,9 @@ def test_the_default_transport_is_the_kernels_own_wire() -> None:
 
     from k0.key_capture import https_probe_transport
 
-    default = inspect.signature(validate_key).parameters["transport"].default
-    assert default is None, "None means the kernel's own transport runs"
+    assert "transport" not in inspect.signature(validate_key).parameters, (
+        "no injection seam: there is no transport parameter to substitute"
+    )
     assert callable(https_probe_transport)
     import dataclasses
 
@@ -453,3 +494,32 @@ def test_the_default_transport_is_the_kernels_own_wire() -> None:
     assert probe_fields == {"host", "path"}, (
         "the probe is a descriptor — a callable field would be caller code on the wire"
     )
+
+
+def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The production wire code, exercised (codex r5): header shape, evidence format, classified
+    failures, and the response body consumed-and-discarded."""
+    import socket
+
+    from k0.key_capture import https_probe_transport
+
+    record: list[tuple] = []
+    _patch_wire(monkeypatch, status=200, record=record)
+    # _FakeResponse carries no request-id header -> server token "unknown"
+    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    assert out.evidence == "https-status:200:server:unknown" and out.failure is None
+    assert ("request", HOST, "/v1/models", "Bearer sk-bearer-value") in record, (
+        "the key rides the Authorization header and nowhere else"
+    )
+
+    out = https_probe_transport.__wrapped__ if hasattr(https_probe_transport, "__wrapped__") else None
+    _patch_wire(monkeypatch, status=401)
+    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    assert out.evidence is None and out.failure == "http-401", "a refused key is its own class"
+
+    _patch_wire(monkeypatch, error=socket.timeout())
+    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    assert out.failure == "timeout", "an unreachable host says so — the operator's next move differs"
+
+    _patch_wire(monkeypatch, error=ConnectionRefusedError())
+    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "connection-refused"

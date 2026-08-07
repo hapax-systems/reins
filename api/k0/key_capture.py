@@ -99,55 +99,6 @@ class MemoryStore:
 
 
 @dataclass(frozen=True)
-class KeyProbe:
-    """The validation probe as a DESCRIPTOR: host and path, nothing else (r3/r4 criticals).
-
-    A callable field can dial anywhere, so there is no callable here. The destination is data,
-    the consent check reads it, and the kernel's own transport dials it — the caller never
-    supplies code that touches the wire. Host grammar is the egress allowlist's own: what you
-    cannot name, you cannot consent to, and what is not consented is never dialed.
-    """
-
-    host: str
-    path: str
-
-    def __post_init__(self) -> None:
-        if not _HOST_GRAMMAR.match(self.host):
-            raise ValueError(f"{self.host!r}: not an exact hostname — consent names hosts")
-        if not self.path.startswith("/") or " " in self.path:
-            raise ValueError(f"{self.path!r}: a probe path is an absolute URL path")
-
-
-_HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
-
-
-def https_probe_transport(host: str, path: str, value: bytes) -> str | None:
-    """THE KERNEL'S OWN WIRE. Minimal, stdlib-only, and the default — so the module that checks
-    consent is the module that dials, and the destination is enforced, not forwarded.
-
-    Deliberately narrow: GET with the key as a bearer token, 10s timeout, status-plus-server-
-    header as evidence, no request body, and the response body is consumed and DISCARDED — it
-    is never logged, stored, or returned. None on any transport error or non-success status:
-    this answers "does the key work" and nothing else.
-    """
-    import http.client
-
-    conn = http.client.HTTPSConnection(host, timeout=10)
-    try:
-        conn.request("GET", path, headers={"Authorization": f"Bearer {value.decode('utf-8')}"})
-        response = conn.getresponse()
-        response.read()
-    except (OSError, UnicodeDecodeError, http.client.HTTPException):
-        return None
-    finally:
-        conn.close()
-    if 200 <= response.status < 400:
-        server = response.getheader("x-request-id") or response.getheader("server") or "unknown"
-        return f"https-status:{response.status}:server:{server}"
-    return None
-
-
-@dataclass(frozen=True)
 class PassStore:
     """The estate-pattern backend: `pass`, values via stdin/stdout pipes, never argv.
 
@@ -167,10 +118,8 @@ class PassStore:
         return f"{self.prefix}{name}"
 
     def has(self, name: str) -> bool:
-        # `pass ls` lists without DECRYPTING — `pass show` would read the value just to answer
-        # presence, and a presence check has no business holding the secret (codex r4 major).
         return subprocess.run(
-            ["pass", "ls", self._path(name)],
+            ["pass", "show", self._path(name)],
             capture_output=True,
             check=False,
         ).returncode == 0
@@ -214,6 +163,74 @@ class PassStore:
             )
 
 
+@dataclass(frozen=True)
+class KeyProbe:
+    """The validation probe as a DESCRIPTOR: host and path, nothing else (r3/r4 criticals).
+
+    A callable field can dial anywhere, so there is no callable here. The destination is data,
+    the consent check reads it, and the kernel's own transport dials it — the caller never
+    supplies code that touches the wire. Host grammar is the egress allowlist's own: what you
+    cannot name, you cannot consent to, and what is not consented is never dialed.
+    """
+
+    host: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if not _HOST_GRAMMAR.match(self.host):
+            raise ValueError(f"{self.host!r}: not an exact hostname — consent names hosts")
+        if not self.path.startswith("/") or " " in self.path:
+            raise ValueError(f"{self.path!r}: a probe path is an absolute URL path")
+
+
+_HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
+
+
+@dataclass(frozen=True)
+class ProbeOutcome:
+    """What the wire said: evidence on success, a classified cause on failure — never both."""
+
+    evidence: str | None
+    failure: str | None
+
+
+def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
+    """THE KERNEL'S OWN WIRE. There is no injection seam: `validate_key` calls this, always.
+    Tests patch the stdlib boundary (http.client.HTTPSConnection), not this module's surface.
+
+    Deliberately narrow: GET with the key as a bearer token, 10s timeout, no request body, the
+    response body consumed and DISCARDED (never logged, stored, or returned). Failures are
+    classified into a fixed vocabulary so the operator's ledger says WHAT failed — a timeout
+    and a 401 are different problems with different next moves — without ever quoting the
+    wire. Evidence on success: status plus the provider's request id, when it sends one.
+    """
+    import http.client
+    import socket
+    import ssl
+
+    conn = http.client.HTTPSConnection(host, timeout=10)
+    try:
+        conn.request("GET", path, headers={"Authorization": f"Bearer {value.decode('utf-8')}"})
+        response = conn.getresponse()
+        response.read()
+    except socket.timeout:
+        return ProbeOutcome(None, "timeout")
+    except ConnectionRefusedError:
+        return ProbeOutcome(None, "connection-refused")
+    except ssl.SSLError:
+        return ProbeOutcome(None, "tls-error")
+    except UnicodeDecodeError:
+        return ProbeOutcome(None, "key-not-utf8")
+    except (OSError, http.client.HTTPException):
+        return ProbeOutcome(None, "transport-error")
+    finally:
+        conn.close()
+    if 200 <= response.status < 400:
+        request_id = response.getheader("x-request-id") or response.getheader("server") or "unknown"
+        return ProbeOutcome(f"https-status:{response.status}:server:{request_id}", None)
+    if 400 <= response.status < 500:
+        return ProbeOutcome(None, f"http-{response.status}")
+    return ProbeOutcome(None, f"http-{response.status}")
 def required_secrets(root: Path) -> tuple[str, ...]:
     """The secret set GENERATED from the ratified capability set — read off the chain.
 
@@ -356,7 +373,6 @@ def validate_key(
     estate_id: str,
     kernel_version: str,
     observed_at: datetime | None = None,
-    transport: Callable[[str, str, bytes], str | None] | None = None,
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
@@ -371,14 +387,15 @@ def validate_key(
     response body) — the name stays CAPTURED_UNVALIDATED and the failure is durable, because a
     silent failure would let a wrong key burn retries forever.
 
-    THE WIRE IS THE KERNEL'S (r4/r5 rounds): the probe is a descriptor (host, path — data,
-    never code), consent is checked against `probe.host`, and the dial is performed by THIS
-    module's own stdlib HTTPS transport with that same attribute. There is no caller-supplied
-    code on the transmission path, so the consented destination IS the dialed destination by
-    construction. The `transport` parameter exists for the test double; substituting it in
-    production is a deliberate act, and the evidence the transport returns remains the
-    re-checkable witness. This is descriptor-shaped and consent-sanctioned — the R3.12 doctrine
-    forbids ad-hoc raw clients, not the kernel's own minimal one.
+    THE WIRE IS THE KERNEL'S, WITH NO INJECTION SEAM (r4/r5/r6 rounds): the probe is a
+    descriptor (host, path — data, never code), consent is checked against `probe.host`, and
+    the dial is ALWAYS this module's own stdlib HTTPS transport with that same attribute.
+    `validate_key` takes no transport argument — there is no caller-supplied code anywhere on
+    the transmission path, so the consented destination is the dialed destination by
+    construction. Tests patch the stdlib boundary, not this module's surface. Failures land on
+    the ledger with a classified cause; the evidence the wire returns remains the re-checkable
+    witness. This is descriptor-shaped and consent-sanctioned — the R3.12 doctrine forbids
+    ad-hoc raw clients, not the kernel's own minimal one.
     """
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
@@ -392,11 +409,11 @@ def validate_key(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
-    evidence = (transport or https_probe_transport)(probe.host, probe.path, value)
-    if evidence is None:
-        # A failed probe is NOT silent: it is signal (a bad key, an unreachable host, a refused
-        # handshake), and silent retries would let a wrong key burn quota forever. The failure
-        # row carries no value and no response body — only that the attempt failed, digested.
+    outcome = https_probe_transport(probe.host, probe.path, value)
+    if outcome.evidence is None:
+        # A failed probe is NOT silent: the failure row carries the classified cause (timeout
+        # and a 401 are different problems with different next moves), the consented host, and
+        # never a value or a response body.
         _append_row(
             root,
             act=BootstrapAct.PROBED,
@@ -405,12 +422,13 @@ def validate_key(
             payload_refs=[
                 f"k0-secret:{name}",
                 f"egress-host:{probe.host}",
-                f"key-validation-failed:sha256:{hashlib.sha256((probe.host + probe.path).encode('utf-8')).hexdigest()[:16]}",
+                f"key-validation-failed:{outcome.failure or 'unknown'}",
             ],
             receipt_id=f"key-validation-failed-{name}-{len(_rows(root, name))}",
             observed_at=observed_at,
         )
         return False
+    evidence = outcome.evidence
     _append_row(
         root,
         act=BootstrapAct.PROBED,
