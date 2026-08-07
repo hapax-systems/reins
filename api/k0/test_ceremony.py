@@ -143,3 +143,60 @@ def test_completeness_requires_the_foundation_too(tmp_path: Path) -> None:
     assert not ceremony_complete(root), (
         "every narrowing present but no identity and no registry — complete would be a lie"
     )
+
+
+def test_a_corrupt_registry_makes_completeness_loud_not_true(tmp_path: Path) -> None:
+    """codex/claude r6: integrity failure is not a completeness answer in either direction."""
+    from k0.role_registry import RoleRegistryError, RoleSet
+    from k0.ratification import SIGNATURE_DIRNAME
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    result = ratify_genesis_stipulations(
+        root,
+        principal="operator@estate-0",
+        roles=("alpha",),
+        boot_profile=PROFILES["existing-agent-harness"],
+        allowlist=EgressAllowlist(hosts=("api.anthropic.com",)),
+        forge_profile=FORGE_PROFILES[ForgeChoice.GITHUB_ONLY],
+        key_path=key,
+        estate_id=ESTATE,
+        kernel_version=KERNEL,
+    )
+    assert ceremony_complete(root)
+
+    roles = RoleSet(("alpha",))
+    (root / SIGNATURE_DIRNAME / f"{roles.stipulation_id()}.body").write_text(
+        '{"roles":["intruder"]}', encoding="utf-8"
+    )
+    with pytest.raises(RoleRegistryError):
+        ceremony_complete(root)
+
+
+def test_a_broken_chain_makes_completeness_loud(tmp_path: Path) -> None:
+    import json as _json
+
+    from bootstrap_receipt import RECEIPT_CHAIN_FILENAME
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    ratify_genesis_stipulations(
+        root,
+        principal="operator@estate-0",
+        roles=("alpha",),
+        boot_profile=PROFILES["existing-agent-harness"],
+        allowlist=EgressAllowlist(hosts=("api.anthropic.com",)),
+        forge_profile=FORGE_PROFILES[ForgeChoice.GITHUB_ONLY],
+        key_path=key,
+        estate_id=ESTATE,
+        kernel_version=KERNEL,
+    )
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = chain_path.read_text(encoding="utf-8").splitlines()
+    forged = _json.loads(rows[1])
+    forged["payload_refs"] = ["stipulation:sha256:" + "f" * 64]
+    rows[1] = _json.dumps(forged)
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="fails verification"):
+        ceremony_complete(root)

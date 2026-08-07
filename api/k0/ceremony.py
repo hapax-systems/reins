@@ -118,12 +118,16 @@ def ratify_genesis_stipulations(
 
 def _registry_minted(root: Path) -> bool:
     """A well-formed probe name: absent registry refuses with its gate; a minted one answers
-    False for a name nobody registered."""
+    False for a name nobody registered. INTEGRITY failures propagate (codex/claude r6): a
+    corrupt registry is not "incomplete" — it is broken, and completeness over a suspect
+    ledger refuses rather than answering in either direction."""
     try:
         role_known(root, "zz-unregistered")
         return True
     except RoleRegistryError as exc:
-        return getattr(exc.refusal, "gate", None) != "role-registry.absent"
+        if getattr(exc.refusal, "gate", None) == "role-registry.absent":
+            return False
+        raise
 
 
 def ceremony_complete(root: Path) -> bool:
