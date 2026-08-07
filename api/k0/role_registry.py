@@ -225,6 +225,38 @@ def mint_role_registry(
     )
 
 
+def mint_genesis_identity(
+    root: Path,
+    *,
+    principal: str,
+    roles: tuple[str, ...],
+    key_path: Path,
+    estate_id: str,
+    kernel_version: str,
+    observed_at: datetime | None = None,
+) -> None:
+    """The ceremony's identity composition (codex r3 critical): identity first, registry
+    second — the registry's mint is signed BY the identity the first act just bound, so the
+    order is the meaning. This is the entry point the external ceremony driver calls; the
+    driver itself arrives with the P2 executor and is not this kernel's to invent here."""
+    mint_sovereign_identity(
+        root,
+        SovereignIdentity(principal, _fingerprint_of(key_path)),
+        key_path=key_path,
+        estate_id=estate_id,
+        kernel_version=kernel_version,
+        observed_at=observed_at,
+    )
+    mint_role_registry(
+        root,
+        RoleSet(roles),
+        key_path=key_path,
+        estate_id=estate_id,
+        kernel_version=kernel_version,
+        observed_at=observed_at,
+    )
+
+
 def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
     """The verified-read half of the ceremony shape, for this module's two artifacts."""
     if not verify_chain_at(root).ok:
@@ -272,7 +304,17 @@ def _read_consented_body(root: Path, prefix: str, gate: str) -> dict | None:
                 legal_next="restore the pinned body from backup, or re-mint with the changed terms",
             ),
         )
-    return json.loads(raw.decode("utf-8"))
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise RoleRegistryError(
+            f"{sid}: the consented body is not decodable JSON",
+            Refusal(
+                gate=gate,
+                why="the consented bytes are unusable",
+                legal_next="restore the body from backup, or re-mint with the same terms",
+            ),
+        ) from None
 
 
 def sovereign_principal(root: Path) -> str | None:
@@ -289,6 +331,19 @@ def sovereign_principal(root: Path) -> str | None:
                 legal_next="restore the body from backup, or re-mint the identity",
             ),
         )
+    try:
+        # Re-run the construction laws on the read-back (codex r3): a body that parses but
+        # violates the grammars is not canonical, however it got signed.
+        SovereignIdentity(body["principal"], body["key_fingerprint"])
+    except ValueError as exc:
+        raise RoleRegistryError(
+            f"the consented identity violates the construction laws: {exc}",
+            Refusal(
+                gate="identity.integrity",
+                why="parses but is not canonical",
+                legal_next="restore the body from backup, or re-mint the identity",
+            ),
+        ) from None
     return body["principal"]
 
 

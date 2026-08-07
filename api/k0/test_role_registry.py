@@ -211,3 +211,76 @@ def test_an_identity_naming_a_different_key_is_refused(tmp_path: Path) -> None:
     with pytest.raises(RoleRegistryError, match="the signer's own"):
         mint_sovereign_identity(root, impostor, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     assert sovereign_principal(root) is None, "a refused identity writes nothing"
+
+
+def test_the_ceremony_composition_mints_identity_then_registry(tmp_path: Path) -> None:
+    """codex r3: the ceremony invokes the mints — one entry point, identity first, registry
+    second, and the registry's consent rows are signed by the identity just bound."""
+    from k0.role_registry import mint_genesis_identity
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    mint_genesis_identity(
+        root,
+        principal="operator@estate-0",
+        roles=("alpha", "beta"),
+        key_path=key,
+        estate_id=ESTATE,
+        kernel_version=KERNEL,
+    )
+    assert sovereign_principal(root) == "operator@estate-0"
+    assert role_known(root, "alpha")
+    assert verify_chain_at(root).ok
+
+
+def test_the_missing_body_branch_refuses(tmp_path: Path) -> None:
+    """claude r3: a consented body that is gone refuses with a legal next, never a bare OSError."""
+    from k0.ratification import SIGNATURE_DIRNAME
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    roles = RoleSet(("alpha",))
+    mint_role_registry(root, roles, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    (root / SIGNATURE_DIRNAME / f"{roles.stipulation_id()}.body").unlink()
+    with pytest.raises(RoleRegistryError, match="cannot be read") as exc:
+        role_known(root, "alpha")
+    assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
+
+
+def test_a_noncanonical_principal_on_readback_is_refused(tmp_path: Path) -> None:
+    """codex r3: parses-but-illegal is not canonical, even signed."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b'{"key_fingerprint":"SHA256:x","principal":"Not A Principal"}'
+    sid = f"sovereign-identity.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "SOVEREIGN IDENTITY: noncanonical test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(RoleRegistryError, match="construction laws"):
+        sovereign_principal(root)
+
+
+def test_undecodable_body_is_a_refusal_with_a_next_action(tmp_path: Path) -> None:
+    """codex r3: malformed bytes carry a governed next action, never a bare decode error."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b"not json at all{"
+    sid = f"role-registry.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "ROLE REGISTRY: decode test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(RoleRegistryError, match="not decodable") as exc:
+        role_known(root, "alpha")
+    assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
