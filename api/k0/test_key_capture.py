@@ -148,7 +148,7 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
+        probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: "probe-receipt:ok-1"),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -175,7 +175,7 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, check=lambda value: None),
+        probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: None),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -194,7 +194,7 @@ def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_pa
             root,
             store,
             NAME,
-            probe=KeyProbe(host=HOST, check=lambda value: "x"),
+            probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: "x"),
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -219,7 +219,7 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             root,
             store,
             NAME,
-            probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
+            probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: "probe-receipt:ok-1"),
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -239,7 +239,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
+        probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: "probe-receipt:ok-1"),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -261,7 +261,7 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     _consent_egress(root, _key(tmp_path))
     store.put(NAME, b"sk-first-value")
     assert validate_key(
-        root, store, NAME, probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
+        root, store, NAME, probe=KeyProbe(host=HOST, path="/v1/models", transport=lambda h, pth, v: "probe-receipt:ok-1"),
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert supply_state(root, store, NAME) is SecretSupply.VALIDATED
@@ -391,10 +391,35 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
     calls: list[bytes] = []
     with pytest.raises(EgressConsentError, match="no ratified egress allowlist"):
         validate_key(
-            root, store, NAME, probe=KeyProbe(host="api.never-consented.example", check=lambda value: calls.append(value) or "ok"),
+            root, store, NAME, probe=KeyProbe(host="api.never-consented.example", path="/v1/models", transport=lambda h, pth, v: calls.append((h, v)) or "ok"),
             estate_id=ESTATE, kernel_version=KERNEL,
         )
-    assert calls == [], "the validator — the transmitting act — was never invoked"
+    assert calls == [], "the transport — the transmitting act — was never invoked"
     assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED, (
         "a refused validation is not a disposition; the name stays unvalidated"
+    )
+
+
+def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path) -> None:
+    """The binding, proven: validate_key passes probe.host — the attribute it checked consent
+    against — to the transport itself. A recording transport witnesses that the consented host
+    is the dialed host; there is no second channel for a caller to whisper a different one."""
+    root = _root(tmp_path)
+    store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
+    store.put(NAME, b"sk-canary-value")
+
+    dialed: list[tuple[str, str]] = []
+    ok = validate_key(
+        root, store, NAME,
+        probe=KeyProbe(
+            host=HOST,
+            path="/v1/models",
+            transport=lambda h, pth, v: dialed.append((h, pth)) or "probe-receipt:ok-9",
+        ),
+        estate_id=ESTATE, kernel_version=KERNEL,
+    )
+    assert ok
+    assert dialed == [(HOST, "/v1/models")], (
+        "the host the consent check evaluated is the host the transport received"
     )

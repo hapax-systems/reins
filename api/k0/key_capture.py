@@ -99,15 +99,21 @@ class MemoryStore:
 
 @dataclass(frozen=True)
 class KeyProbe:
-    """A transmitting validator WITH its destination, as one object (codex r3 critical).
+    """A transmitting validator whose destination is COMPOSED BY THE KERNEL, not asserted by
+    the caller (r3 criticals, all seats).
 
-    A separate `host` argument can say anything; binding host and check into one frozen value
-    makes the consent name the thing that runs. The binding is structural, not cryptographic —
-    the wire truth is the probe's own behavior, witnessed by the evidence ref it returns.
+    An arbitrary callable can dial anywhere while its neighbor argument says anything. So there
+    is no `check` callable here: there is a transport — `(host, path, value) -> evidence` — and
+    `validate_key` passes `probe.host` to it itself, the same attribute it just checked consent
+    against. One attribute feeds both the consent check and the wire; a caller cannot split
+    them without forging the attribute, which is the consent check's own input. The wire truth
+    is witnessed by the evidence the transport returns, and a recording transport in the tests
+    proves the consented host is what reached it.
     """
 
     host: str
-    check: Callable[[bytes], str | None]
+    path: str
+    transport: Callable[[str, str, bytes], str | None]
 
 
 @dataclass(frozen=True)
@@ -337,14 +343,14 @@ def validate_key(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
-    require_egress(root, probe.host)  # consent before the probe is ever invoked
+    require_egress(root, probe.host)  # the SAME attribute that reaches the transport below
     value = store.get(name)
     if value is None:
         raise ValueError(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
-    evidence = probe.check(value)
+    evidence = probe.transport(probe.host, probe.path, value)
     if evidence is None:
         return False
     _append_row(
