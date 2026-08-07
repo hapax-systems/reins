@@ -28,6 +28,16 @@ from k0.egress_consent import (
 from k0.ratification import SIGNATURE_DIRNAME
 
 ESTATE = "estate-0000000000000000"
+
+
+def _materials(tmp_path: Path, key: Path) -> dict:
+    from k0.ratifier import write_allowed_signers
+
+    allowed = tmp_path / "allowed_signers"
+    write_allowed_signers(allowed, "ratifier@test", key.with_suffix(".pub").read_text().strip())
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(exist_ok=True)
+    return {"allowed_signers": allowed, "principal": "ratifier@test", "scratch_dir": scratch}
 KERNEL = "k0-test"
 ALLOWED = EgressAllowlist(hosts=("api.anthropic.com", "api.z.ai"))
 
@@ -281,14 +291,15 @@ def test_require_egress_distinguishes_dark_from_unlisted(tmp_path: Path) -> None
     from k0.egress_consent import require_egress
 
     root = _root(tmp_path)
-    with pytest.raises(EgressConsentError, match="dark, not broken"):
-        require_egress(root, "api.anthropic.com")
-
     key = _key(tmp_path)
+    materials = _materials(tmp_path, key)
+    with pytest.raises(EgressConsentError, match="dark, not broken"):
+        require_egress(root, "api.anthropic.com", **materials)
+
     _consented(root, key)
-    require_egress(root, "api.anthropic.com")  # consented: returns, no row, no raise
+    require_egress(root, "api.anthropic.com", **materials)  # consented: returns, no row, no raise
     with pytest.raises(EgressConsentError, match="does not name this host"):
-        require_egress(root, "api.openai.com")
+        require_egress(root, "api.openai.com", **materials)
 
 
 def test_amendments_count_only_digest_pinning_rows(tmp_path: Path) -> None:

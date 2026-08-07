@@ -61,6 +61,17 @@ def _root(tmp_path: Path) -> Path:
 
 HOST = "api.anthropic.com"
 
+
+def _materials(tmp_path: Path, key: Path) -> dict:
+    """The sovereign's verification materials — mandatory on the enforcement path (r19)."""
+    from k0.ratifier import write_allowed_signers
+
+    allowed = tmp_path / "allowed_signers"
+    write_allowed_signers(allowed, "ratifier@test", key.with_suffix(".pub").read_text().strip())
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(exist_ok=True)
+    return {"allowed_signers": allowed, "principal": "ratifier@test", "scratch_dir": scratch}
+
 from k0.key_capture import PROVIDER_PROBE_ENDPOINTS as _ENDPOINTS
 
 ANTHROPIC = _ENDPOINTS["anthropic"]
@@ -177,7 +188,9 @@ def test_the_requirement_rides_inside_the_consented_bytes() -> None:
 def test_the_supply_ladder_absent_to_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch)
 
     assert supply_state(root, store, NAME) is SecretSupply.ABSENT
@@ -201,7 +214,7 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path, monkeypatch: pyte
         root,
         store,
         NAME,
-        provider="anthropic",
+        provider="anthropic", **materials,
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -221,7 +234,9 @@ def _chain(root: Path):
 def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch, status=401)
     store.put(NAME, b"sk-canary-value")
 
@@ -229,7 +244,7 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, m
         root,
         store,
         NAME,
-        provider="anthropic",
+        provider="anthropic", **materials,
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -254,13 +269,15 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, m
 def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     with pytest.raises(ValueError, match="nothing captured"):
         validate_key(
             root,
             store,
             NAME,
-            provider="anthropic",
+            provider="anthropic", **materials,
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -269,6 +286,8 @@ def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_pa
 def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
+    key = _key(tmp_path)
+    materials = _materials(tmp_path, key)
 
     elicit_capture(root, NAME, estate_id=ESTATE, kernel_version=KERNEL)
     decline_capture(root, NAME, estate_id=ESTATE, kernel_version=KERNEL)
@@ -285,7 +304,7 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             root,
             store,
             NAME,
-            provider="anthropic",
+            provider="anthropic", **materials,
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -296,7 +315,9 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path, monkeypatch: pyt
     """The canary test: run the whole ceremony with a distinctive value, then scan the ledger."""
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch)
     canary = b"sk-canary-7f3c9a1b-never-on-disk"
 
@@ -306,7 +327,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path, monkeypatch: pyt
         root,
         store,
         NAME,
-        provider="anthropic",
+        provider="anthropic", **materials,
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -325,11 +346,13 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     ABSENT. A stale receipt can never keep a replaced secret reading as supply."""
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch)
     store.put(NAME, b"sk-first-value")
     assert validate_key(
-        root, store, NAME, provider="anthropic",
+        root, store, NAME, provider="anthropic", **materials,
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert supply_state(root, store, NAME) is SecretSupply.VALIDATED
@@ -454,13 +477,15 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
 
     root = _root(tmp_path)
     store = MemoryStore()
+    key = _key(tmp_path)
+    materials = _materials(tmp_path, key)
     store.put(NAME, b"sk-canary-value")
 
     dialed: list[tuple] = []
     _patch_wire(monkeypatch, record=dialed)
     with pytest.raises(EgressConsentError, match="no egress allowlist is ratified"):
         validate_key(
-            root, store, NAME, provider="openai",
+            root, store, NAME, provider="openai", **materials,
             estate_id=ESTATE, kernel_version=KERNEL,
         )
     assert dialed == [], "the wire — the transmitting act — was never touched"
@@ -483,14 +508,16 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
     is the dialed host; there is no second channel for a caller to whisper a different one."""
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     store.put(NAME, b"sk-canary-value")
 
     dialed: list[tuple] = []
     _patch_wire(monkeypatch, record=dialed)
     ok = validate_key(
         root, store, NAME,
-        provider="anthropic",
+        provider="anthropic", **materials,
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert ok
@@ -537,26 +564,28 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(tmp_path: Pa
     from k0.key_capture import _https_probe_transport
 
     root = _root(tmp_path)
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     record: list[tuple] = []
     _patch_wire(monkeypatch, status=200, record=record)
     # _FakeResponse carries no request-id header -> server token "unknown"
-    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value", **materials)
     assert out.evidence == "https-status:200:server:unknown" and out.failure is None
     assert ("request", HOST, "/v1/models", "sk-bearer-value") in record, (
         "the key rides the provider's auth header and nowhere else"
     )
 
     _patch_wire(monkeypatch, status=401)
-    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value", **materials)
     assert out.evidence is None and out.failure == "http-401", "a refused key is its own class"
 
     _patch_wire(monkeypatch, error=socket.timeout())
-    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value", **materials)
     assert out.failure == "timeout", "an unreachable host says so — the operator's next move differs"
 
     _patch_wire(monkeypatch, error=ConnectionRefusedError())
-    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "connection-refused"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials).failure == "connection-refused"
 
 
 def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -567,21 +596,23 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
     from k0.key_capture import failure_next_move, _https_probe_transport
 
     root = _root(tmp_path)
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
-    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "tls-error"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials).failure == "tls-error"
 
     _patch_wire(monkeypatch, error=OSError("reset"))
-    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "transport-error"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials).failure == "transport-error"
 
     _patch_wire(monkeypatch, status=503)
-    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "http-503"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials).failure == "http-503"
 
-    assert _https_probe_transport(root, ANTHROPIC, b"\xff\xfe").failure == "key-not-utf8"
+    assert _https_probe_transport(root, ANTHROPIC, b"\xff\xfe", **materials).failure == "key-not-utf8"
 
     with pytest.raises(ValueError, match="not a sanctioned provider"):
         validate_key(
-            root, MemoryStore(), NAME, provider="some-random-provider",
+            root, MemoryStore(), NAME, provider="some-random-provider", **materials,
             estate_id=ESTATE, kernel_version=KERNEL,
         )
 
@@ -599,9 +630,11 @@ def test_a_redirect_never_validates(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     from k0.key_capture import failure_next_move, _https_probe_transport
 
     root = _root(tmp_path)
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     _patch_wire(monkeypatch, status=302)
-    out = _https_probe_transport(root, ANTHROPIC, b"sk-x")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials)
     assert out.evidence is None and out.failure == "http-302-redirect"
     assert "do not follow" in failure_next_move(out.failure)
 
@@ -627,8 +660,10 @@ def test_the_tls_context_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     from k0.key_capture import _https_probe_transport
 
     root = _root(tmp_path)
-    _consent_egress(root, _key(tmp_path))
-    _https_probe_transport(root, ANTHROPIC, b"sk-x")
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
+    _https_probe_transport(root, ANTHROPIC, b"sk-x", **materials)
     ctx = captured.get("context")
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_REQUIRED
@@ -644,7 +679,9 @@ def test_an_indiscriminate_endpoint_can_validate_nothing(tmp_path: Path, monkeyp
 
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     store.put(NAME, b"sk-real-key")
 
     class _LaxResponse:
@@ -671,7 +708,7 @@ def test_an_indiscriminate_endpoint_can_validate_nothing(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _LaxConn)
     ok = validate_key(
-        root, store, NAME, provider="anthropic",
+        root, store, NAME, provider="anthropic", **materials,
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert not ok
@@ -695,7 +732,9 @@ def test_an_inconclusive_control_proves_nothing(tmp_path: Path, monkeypatch: pyt
         sub.mkdir()
         root = _root(sub)
         store = MemoryStore()
-        _consent_egress(root, _key(sub))
+        key = _key(sub)
+        _consent_egress(root, key)
+        materials = _materials(sub, key)
         store.put(NAME, b"sk-real-key")
 
         class _Conn:
@@ -717,7 +756,7 @@ def test_an_inconclusive_control_proves_nothing(tmp_path: Path, monkeypatch: pyt
 
         monkeypatch.setattr(http.client, "HTTPSConnection", _Conn)
         ok = validate_key(
-            root, store, NAME, provider="anthropic",
+            root, store, NAME, provider="anthropic", **materials,
             estate_id=ESTATE, kernel_version=KERNEL,
         )
         assert not ok
@@ -737,7 +776,9 @@ def test_a_non_auth_4xx_control_proves_nothing_either(tmp_path: Path, monkeypatc
 
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     store.put(NAME, b"sk-real-key")
 
     class _FourOhFour:
@@ -755,7 +796,7 @@ def test_a_non_auth_4xx_control_proves_nothing_either(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _FourOhFour)
     ok = validate_key(
-        root, store, NAME, provider="anthropic",
+        root, store, NAME, provider="anthropic", **materials,
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert not ok
@@ -770,7 +811,9 @@ def test_a_blanket_403_control_proves_nothing(tmp_path: Path, monkeypatch: pytes
 
     root = _root(tmp_path)
     store = MemoryStore()
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     store.put(NAME, b"sk-real-key")
 
     class _FourOhThree:
@@ -788,7 +831,7 @@ def test_a_blanket_403_control_proves_nothing(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _FourOhThree)
     ok = validate_key(
-        root, store, NAME, provider="anthropic",
+        root, store, NAME, provider="anthropic", **materials,
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert not ok
@@ -802,7 +845,9 @@ def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: p
     from k0.key_capture import ProbeEndpoint, _https_probe_transport
 
     root = _root(tmp_path)
-    _consent_egress(root, _key(tmp_path))
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    materials = _materials(tmp_path, key)
     dialed: list[tuple] = []
     _patch_wire(monkeypatch, record=dialed)
 
@@ -814,7 +859,7 @@ def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: p
     assert forged in PROVIDER_PROBE_ENDPOINTS.values(), "equality holds — the guard admits it"
     custom = ProbeEndpoint("api.anthropic.com", "/v1/messages", "x-api-key", "sk-ant-", ())
     with pytest.raises(ValueError, match="registry"):
-        _https_probe_transport(root, custom, b"sk-canary-value")
+        _https_probe_transport(root, custom, b"sk-canary-value", **materials)
     assert dialed == [], "a non-registry endpoint never reaches the wire"
 
 
@@ -831,6 +876,7 @@ def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monk
     from k0.egress_consent import elicit_allowlist
 
     key = _key(tmp_path)
+    materials = _materials(tmp_path, key)
     both = EgressAllowlist(hosts=("api.anthropic.com", "api.openai.com"))
     elicit_allowlist(root, both, estate_id=ESTATE, kernel_version=KERNEL)
     accept_egress(root, both, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
@@ -851,10 +897,33 @@ def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monk
             pass
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _Conn)
-    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["openai"], b"sk-x")
+    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["openai"], b"sk-x", **materials)
     assert seen[0]["headers"].get("Authorization") == "Bearer sk-x"
-    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["anthropic"], b"sk-ant-x")
+    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["anthropic"], b"sk-ant-x", **materials)
     assert seen[1]["headers"].get("x-api-key") == "sk-ant-x"
     assert seen[1]["headers"].get("anthropic-version") == "2023-06-01", (
         "the provider's extra headers ride the request"
     )
+
+
+def test_the_wire_gate_authenticates_the_consent_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The REAL wire path, with wrong-principal materials (codex r19): hash links alone cannot
+    catch an appended forged row, so validate_key must refuse before dialing when the consent
+    row does not authenticate."""
+    from k0.egress_consent import EgressConsentError
+
+    root = _root(tmp_path)
+    store = MemoryStore()
+    key = _key(tmp_path)
+    _consent_egress(root, key)
+    store.put(NAME, b"sk-real-key")
+
+    dialed: list[tuple] = []
+    _patch_wire(monkeypatch, record=dialed)
+    bad = {**_materials(tmp_path, key), "principal": "somebody-else@test"}
+    with pytest.raises(EgressConsentError, match="does not verify"):
+        validate_key(
+            root, store, NAME, provider="anthropic", **bad,
+            estate_id=ESTATE, kernel_version=KERNEL,
+        )
+    assert dialed == [], "an unauthenticated consent row closes the wire before any dial"

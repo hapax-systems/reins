@@ -216,7 +216,15 @@ class ProbeOutcome:
     failure: str | None
 
 
-def _https_probe_transport(root: Path, endpoint: ProbeEndpoint, value: bytes) -> ProbeOutcome:
+def _https_probe_transport(
+    root: Path,
+    endpoint: ProbeEndpoint,
+    value: bytes,
+    *,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
+) -> ProbeOutcome:
     # The wire dials ONLY registry endpoints (codex r16): a transport taking free host/path/
     # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
     # headers are caller-controlled content on the wire. Registry membership is verified here,
@@ -239,7 +247,9 @@ def _https_probe_transport(root: Path, endpoint: ProbeEndpoint, value: bytes) ->
     and a 401 are different problems with different next moves — without ever quoting the
     wire. Evidence on success: status plus the provider's request id, when it sends one.
     """
-    require_egress(root, endpoint.host)
+    require_egress(
+        root, endpoint.host, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
     import http.client
     import socket
     import ssl
@@ -496,6 +506,9 @@ def validate_key(
     provider: str,
     estate_id: str,
     kernel_version: str,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
     observed_at: datetime | None = None,
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
@@ -533,7 +546,9 @@ def validate_key(
             "by another door"
         )
     try:
-        require_egress(root, endpoint.host)
+        require_egress(
+            root, endpoint.host, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+        )
     except EgressConsentError:
         # A refused attempt is durable (claude r7): an operator who never ran the ceremony can
         # see that something TRIED to validate against an unconsented host. The row names the
@@ -561,7 +576,9 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = _https_probe_transport(root, endpoint, _negative_control_key(endpoint))
+    control = _https_probe_transport(
+        root, endpoint, _negative_control_key(endpoint), allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
     if control.evidence is not None:
         _append_row(
             root,
@@ -604,7 +621,9 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    outcome = _https_probe_transport(root, endpoint, value)
+    outcome = _https_probe_transport(
+        root, endpoint, value, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout
         # and a 401 are different problems with different next moves), the consented host, and

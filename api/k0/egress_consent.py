@@ -312,16 +312,25 @@ def egress_decision(root: Path, host: str) -> bool:
     return host in ratified.allowlist.hosts
 
 
-def require_egress(root: Path, host: str) -> None:
+def require_egress(
+    root: Path,
+    host: str,
+    *,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
+) -> None:
     """The enforcement primitive: transmitting callers call this FIRST, or not at all legally.
 
-    `egress_decision` answers; this REFUSES. Every transmitting seam in the kernel — today the
-    working-key validation in key_capture, later the sanctioned call path and the Crow channel —
-    takes `root` and routes through here, so "the gate" is not a function a caller may forget
-    but the only way to reach the wire (r2 criticals: a gate that is never invoked gates
-    nothing).
+    `egress_decision` answers (hash-verified, for readers); this REFUSES, and on the enforcement
+    path the consent row must also authenticate against the sovereign's key (r19, both seats):
+    hash links cannot catch an appended forged row — the hashes recompute from content — so a
+    gate that skips the signature trusts whatever the file says. The signing materials are
+    MANDATORY here; a caller without them does not transmit.
     """
-    ratified = ratified_allowlist(root)
+    ratified = ratified_allowlist(
+        root, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
     if ratified is None:
         raise EgressConsentError(
             f"{host}: no egress allowlist is ratified at all — the estate is dark, not broken",
