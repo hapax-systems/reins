@@ -1,0 +1,121 @@
+"""R2.16 — provider ToS conformance: the forbidden class is unrepresentable, legality shapes."""
+
+from __future__ import annotations
+
+import subprocess
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from bootstrap_receipt import append_receipt, genesis_self_attest
+from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, MemoryStore, validate_key
+from k0.provider_legality import (
+    PROVIDER_LEGALITY,
+    AcquisitionMode,
+    capturable_providers,
+    key_capture_legal,
+    legal_acquisition_modes,
+)
+
+ESTATE = "estate-0000000000000000"
+KERNEL = "k0-test"
+NAME = "frontier-provider-key"
+
+
+def _key(tmp_path: Path) -> Path:
+    key = tmp_path / "ratifier_ed25519"
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "ratifier@test", "-f", str(key)],
+        check=True,
+        capture_output=True,
+    )
+    return key
+
+
+def _root(tmp_path: Path) -> Path:
+    root = tmp_path / "root"
+    root.mkdir()
+    append_receipt(
+        root,
+        genesis_self_attest(
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            kernel_manifest_sha256="a" * 64,
+            observed_at=datetime.now(UTC) - timedelta(days=365),
+        ),
+    )
+    return root
+
+
+def test_the_forbidden_class_is_unrepresentable() -> None:
+    """The gateway/relay/proxy/shared-entitlement wiring the ToS determination rejected has no
+    VALUE in the acquisition-mode vocabulary — the kit cannot architect what it cannot name."""
+    forbidden = ("gateway", "relay", "proxy", "shared", "resell", "pool")
+    for mode in AcquisitionMode:
+        for word in forbidden:
+            assert word not in mode.value and word not in mode.name.lower(), (
+                f"{mode} drifts toward the forbidden class — the vocabulary's negative space "
+                "is the control, and adding a member here is a governance act"
+            )
+
+
+def test_legality_is_fail_closed_for_unknown_providers() -> None:
+    with pytest.raises(KeyError, match="no ToS determination on record"):
+        legal_acquisition_modes("a-provider-with-no-determination")
+    assert not key_capture_legal("a-provider-with-no-determination")
+
+
+def test_the_determinations_on_record() -> None:
+    assert legal_acquisition_modes("anthropic") == frozenset(
+        {AcquisitionMode.BYOK, AcquisitionMode.OAUTH_ENTITLEMENT}
+    )
+    assert legal_acquisition_modes("openai") == frozenset({AcquisitionMode.BYOK})
+    for entry in PROVIDER_LEGALITY.values():
+        assert entry.basis.strip(), "a mode with no cited determination is an assertion"
+
+
+def test_elicitation_shaping_matches_the_probe_registry() -> None:
+    """Only BYOK-legal providers WITH sanctioned probe endpoints may be offered for capture —
+    an offered key must be provable (R2.3), and an unprovable offer is a dead end."""
+    got = capturable_providers()
+    assert got == tuple(sorted(PROVIDER_PROBE_ENDPOINTS)), (
+        "every probeable provider is BYOK-legal today; a divergence here means one of the two "
+        "registries changed without the other"
+    )
+
+
+def test_validate_key_refuses_a_byok_capture_when_it_is_not_legal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wiring, exercised: a provider whose legal path is entitlement-OAuth gets a refusal
+    naming the legal alternative, not a key capture."""
+    import k0.provider_legality as pl
+    from k0.provider_legality import ProviderLegality
+
+    oauth_only = {
+        **dict(PROVIDER_LEGALITY),
+        "openai": ProviderLegality(
+            "openai",
+            frozenset({AcquisitionMode.OAUTH_ENTITLEMENT}),
+            basis="test fixture: entitlement-only",
+        ),
+    }
+    monkeypatch.setattr(pl, "PROVIDER_LEGALITY", oauth_only)
+    # key_capture imported the function by name — patch its reference too
+    import k0.key_capture as kc
+
+    monkeypatch.setattr(kc, "key_capture_legal", lambda provider: False)
+
+    root = _root(tmp_path)
+    with pytest.raises(ValueError, match="not a legal acquisition path"):
+        validate_key(
+            root,
+            MemoryStore(),
+            NAME,
+            provider="openai",
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            allowed_signers=tmp_path / "a",
+            principal="p",
+            scratch_dir=tmp_path,
+        )
