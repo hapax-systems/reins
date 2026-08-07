@@ -18,11 +18,12 @@ The shape here is the K0 form applied to egress:
     reads as "deny everything" would hide tampering inside the safe-looking answer.
   * THE GATE IS DEFAULT-DENY. `egress_decision` allows only an exact host in the ratified
     allowlist. No wildcards: a pattern language is a way to consent to more than was named.
-  * THE WELL-ORDERING IS INHERITED LAW. The receipt spine's phase-legality already forbids a
-    MEASURED_PROBE row ahead of any later STIPULATION_RATIFY row (phases never regress), so a
-    ceremony that probed before consenting fails chain verification — and this gate verifies
-    the chain before trusting any row in it. Post-probe rotation is chain-illegal for the same
-    reason; egress consent is exactly-once per ceremony, which is what "first consent" means.
+  * THE WELL-ORDERING IS ENFORCED AT THE WIRE, AUDITED BY THE CHAIN. The kernel's one
+    transmitting transport self-gates through `require_egress`, so no dial can precede consent
+    in fact; independently, the receipt spine's phase-legality forbids a MEASURED_PROBE row
+    ahead of any later STIPULATION_RATIFY row, and this gate verifies the chain before trusting
+    any row in it. Post-probe rotation of the receipt record is chain-illegal; egress consent
+    is exactly-once per ceremony, which is what "first consent" means.
 
 Identity note: the graph's third clause ("ceremony-elicited identity lands AIR-classed") belongs
 to the identity-elicitation node; k0 has no operator-identity elicitation surface yet, and this
@@ -256,11 +257,12 @@ def egress_decision(root: Path, host: str) -> bool:
     """May the estate transmit to `host`? Default-DENY, and the well-ordering is INHERITED law.
 
     False when no allowlist is ratified (dark, not an error) or the host is not named. The
-    ordering guarantee — no model call before egress consent — is not re-implemented here: the
-    receipt spine's phase-legality law already makes a MEASURED_PROBE row before any later
-    STIPULATION_RATIFY row chain-illegal (phases never regress), and `ratified_allowlist`
-    verifies the chain before trusting a row in it. A ceremony that probed before consenting
-    fails verification, and this gate is loud through exactly that path.
+    ordering guarantee has two layers, stated exactly (claude r16): ACTUAL TRANSMISSIONS are
+    ordered at the wire — the kernel's one transport self-gates through `require_egress`, so no
+    dial can precede consent regardless of what rows exist. RECEIPT ROWS are ordered by the
+    spine's phase-legality law (a MEASURED_PROBE row before a later STIPULATION_RATIFY row is
+    chain-illegal), and `ratified_allowlist` verifies the chain before trusting a row in it.
+    The wire is the enforcement; the chain is the audit.
     """
     ratified = ratified_allowlist(root)
     if ratified is None:

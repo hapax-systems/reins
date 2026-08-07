@@ -61,6 +61,10 @@ def _root(tmp_path: Path) -> Path:
 
 HOST = "api.anthropic.com"
 
+from k0.key_capture import PROVIDER_PROBE_ENDPOINTS as _ENDPOINTS
+
+ANTHROPIC = _ENDPOINTS["anthropic"]
+
 
 def _consent_egress(root: Path, key: Path) -> None:
     """The consent that makes a validation ping legal: the allowlist naming the provider host."""
@@ -537,22 +541,22 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(tmp_path: Pa
     record: list[tuple] = []
     _patch_wire(monkeypatch, status=200, record=record)
     # _FakeResponse carries no request-id header -> server token "unknown"
-    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.evidence == "https-status:200:server:unknown" and out.failure is None
     assert ("request", HOST, "/v1/models", "sk-bearer-value") in record, (
         "the key rides the provider's auth header and nowhere else"
     )
 
     _patch_wire(monkeypatch, status=401)
-    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.evidence is None and out.failure == "http-401", "a refused key is its own class"
 
     _patch_wire(monkeypatch, error=socket.timeout())
-    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.failure == "timeout", "an unreachable host says so — the operator's next move differs"
 
     _patch_wire(monkeypatch, error=ConnectionRefusedError())
-    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "connection-refused"
+    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "connection-refused"
 
 
 def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -565,15 +569,15 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
-    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "tls-error"
+    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "tls-error"
 
     _patch_wire(monkeypatch, error=OSError("reset"))
-    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "transport-error"
+    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "transport-error"
 
     _patch_wire(monkeypatch, status=503)
-    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "http-503"
+    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "http-503"
 
-    assert https_probe_transport(root, HOST, "/v1/models", b"\xff\xfe").failure == "key-not-utf8"
+    assert https_probe_transport(root, ANTHROPIC, b"\xff\xfe").failure == "key-not-utf8"
 
     with pytest.raises(ValueError, match="not a sanctioned provider"):
         validate_key(
@@ -597,7 +601,7 @@ def test_a_redirect_never_validates(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, status=302)
-    out = https_probe_transport(root, HOST, "/v1/models", b"sk-x")
+    out = https_probe_transport(root, ANTHROPIC, b"sk-x")
     assert out.evidence is None and out.failure == "http-302-redirect"
     assert "do not follow" in failure_next_move(out.failure)
 
@@ -624,7 +628,7 @@ def test_the_tls_context_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
-    https_probe_transport(root, HOST, "/v1/models", b"sk-x")
+    https_probe_transport(root, ANTHROPIC, b"sk-x")
     ctx = captured.get("context")
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_REQUIRED

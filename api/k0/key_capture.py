@@ -216,14 +216,16 @@ class ProbeOutcome:
     failure: str | None
 
 
-def https_probe_transport(
-    root: Path,
-    host: str,
-    path: str,
-    value: bytes,
-    auth_scheme: str = "bearer",
-    extra_headers: tuple[tuple[str, str], ...] = (),
-) -> ProbeOutcome:
+def https_probe_transport(root: Path, endpoint: ProbeEndpoint, value: bytes) -> ProbeOutcome:
+    # The wire dials ONLY registry endpoints (codex r16): a transport taking free host/path/
+    # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
+    # headers are caller-controlled content on the wire. Registry membership is verified here,
+    # so the consented destination is the only reachable one.
+    if endpoint not in PROVIDER_PROBE_ENDPOINTS.values():
+        raise ValueError(
+            "the kernel's wire dials sanctioned registry endpoints only — an endpoint that is "
+            "not registry data is not a legal destination"
+        )
     """THE KERNEL'S OWN WIRE — AND IT IS SELF-GATING (codex r15). A public transport that does
     not check consent would be the bypass around the gate: any caller could import it and dial
     without a ratified allowlist. So the transport takes the root and runs `require_egress`
@@ -237,7 +239,7 @@ def https_probe_transport(
     and a 401 are different problems with different next moves — without ever quoting the
     wire. Evidence on success: status plus the provider's request id, when it sends one.
     """
-    require_egress(root, host)
+    require_egress(root, endpoint.host)
     import http.client
     import socket
     import ssl
@@ -245,14 +247,14 @@ def https_probe_transport(
     # Explicit, not assumed: the default context verifies certificates and hostnames
     # (CERT_REQUIRED, check_hostname). Passing it makes the verification a choice this code
     # makes, visible to a reader and capturable by a test double.
-    conn = http.client.HTTPSConnection(host, timeout=10, context=ssl.create_default_context())
+    conn = http.client.HTTPSConnection(endpoint.host, timeout=10, context=ssl.create_default_context())
     try:
-        if auth_scheme == "x-api-key":
+        if endpoint.auth_scheme == "x-api-key":
             auth_headers = {"x-api-key": value.decode("utf-8")}
         else:
             auth_headers = {"Authorization": f"Bearer {value.decode('utf-8')}"}
-        headers = {**auth_headers, **dict(extra_headers)}
-        conn.request("GET", path, headers=headers)
+        headers = {**auth_headers, **dict(endpoint.extra_headers)}
+        conn.request("GET", endpoint.path, headers=headers)
         response = conn.getresponse()
         response.read()
     except socket.timeout:
@@ -559,7 +561,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(root, endpoint.host, endpoint.path, _negative_control_key(endpoint), endpoint.auth_scheme, endpoint.extra_headers)
+    control = https_probe_transport(root, endpoint, _negative_control_key(endpoint))
     if control.evidence is not None:
         _append_row(
             root,
@@ -596,7 +598,7 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    outcome = https_probe_transport(root, endpoint.host, endpoint.path, value, endpoint.auth_scheme, endpoint.extra_headers)
+    outcome = https_probe_transport(root, endpoint, value)
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout
         # and a 401 are different problems with different next moves), the consented host, and
