@@ -243,6 +243,9 @@ def _https_probe_transport(
         # IDENTITY, not equality (claude r20): with the registry immutable, the endpoint must BE
         # the registry's object — a caller rebuilding an equal one is shaping their own
         # destination, and that is not consent.
+        # SEAT SPLIT, recorded: glm r23 holds that `is` is the wrong comparison for dataclass
+        # instances. Identity is the point: equality proves only that the caller can construct
+        # a lookalike, and the guard exists to make that insufficient.
         raise ValueError(
             "the kernel's wire dials the registry's own endpoint objects only — an endpoint "
             "that is not the registry's is not a legal destination"

@@ -58,7 +58,10 @@ from .ratification import (
 )
 from .refusal import Refusal
 
-HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
+#: Exact hostnames, label by label (codex r24): no empty labels, no leading/trailing hyphens,
+#: no wildcard or pattern syntax — consent names hosts, and a malformed name is not a host.
+_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+HOST_GRAMMAR = re.compile(rf"^{_HOST_LABEL}(?:\.{_HOST_LABEL})*$")
 
 
 class EgressConsentError(RuntimeError):
@@ -252,6 +255,7 @@ def ratified_allowlist(
             ok = False
             gate = getattr(getattr(exc, "refusal", None), "gate", None) or "ratifier"
             why = f"the ratifier REFUSED ({gate}): {exc}"  # preserved, never collapsed (claude r21)
+        verified_sids = verdict.verified if ok else ()
         if ok and not verdict.ok:
             # The row under study verified, but some OTHER ratification did not: the amendment
             # count is computed from those rows, so a chain carrying an unverified one cannot
@@ -340,12 +344,18 @@ def ratified_allowlist(
         ) from None
     # Construction is OUTSIDE the try (claude r20): a bug in these constructors is a real bug
     # and must crash as itself, never masquerade as "not decodable".
-    return RatifiedEgress(
-        allowlist=EgressAllowlist(hosts=tuple(hosts)),
+    if signature_ok:
+        # Count from the VERIFIED row set, not a fresh unauthenticated re-read (claude r24):
+        # verdict.verified is the rows the sovereign's key actually signed.
+        amendments = sum(1 for s in verified_sids if s.startswith("egress-allowlist.")) - 1
+    else:
         # Count only rows that actually pin a consent artifact: a ratified egress row with
         # no parseable digest claims nothing, and must not inflate the amendment count
         # (claude r8).
-        amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
+        amendments = sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1
+    return RatifiedEgress(
+        allowlist=EgressAllowlist(hosts=tuple(hosts)),
+        amendments=amendments,
         signature_verified=signature_ok,
     )
 

@@ -164,6 +164,9 @@ def test_bad_allowlist_shapes_are_refused_at_construction() -> None:
         EgressAllowlist(hosts=("*.anthropic.com",))
     with pytest.raises(ValueError, match="never patterns"):
         EgressAllowlist(hosts=("API.Anthropic.com",))  # case is data; lowercase or refuse
+    for bad in ("a..b", "-bad.com", "bad-.com", "bad..com", ".bad.com", "bad.com."):
+        with pytest.raises(ValueError, match="never patterns"):
+            EgressAllowlist(hosts=(bad,))
 
 
 def _probe_row(root: Path, receipt_id: str) -> None:
