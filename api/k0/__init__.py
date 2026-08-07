@@ -36,15 +36,17 @@ each claim carries the command that re-establishes it, runnable from `api/`:
   ceremony progress really is DERIVED (no cursor field exists to desynchronise)
     uv run python -c "import k0.ratification as r; print(r.pending.__doc__)"
 
-  estate-independence, over the whole package, exempting nothing
-    uv run --with pytest pytest k0/test_k0.py -q -k estate_independent
+  estate-independence, over the whole package, exempting nothing (ARMED — fails rather than
+  skipping if the token file is absent, so green is always evidence the scan ran)
+    K0_REQUIRE_ESTATE_SCAN=1 uv run --with pytest pytest k0/test_k0.py -q -k estate_independent
 
   the export list agrees with the module in BOTH directions
     uv run --with pytest pytest k0/test_k0.py -q -k all_agrees
 
 The estate-independence scan needs the token file described in `api/conftest.py`; without it the
-test SKIPS rather than passing, so a green run on a stranger's checkout is not evidence the scan
-ran. `pytest -rs` shows the skip reason.
+test SKIPS rather than passing, so an UNARMED green run on a stranger's checkout is not evidence
+the scan ran. The armed form above sets `K0_REQUIRE_ESTATE_SCAN=1`, which converts the skip into a
+FAIL — that is the only invocation whose green is a witness. `pytest -rs` shows the skip reason.
 """
 
 from .fail_closed import Evaluation, decide, evaluate_optional
