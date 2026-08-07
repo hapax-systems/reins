@@ -123,6 +123,22 @@ class ForgeConsentError(RuntimeError):
         self.refusal = refusal
 
 
+def _require_sanctioned(profile: ForgeProfile) -> None:
+    """The profile must BE a registry object (codex r2 major): a caller-constructed profile
+    could carry empty or invented trade-offs, and the trade-offs are what the sovereign signs.
+    Identity — the same discipline as the key-capture wire."""
+    if all(profile is not p for p in FORGE_PROFILES.values()):
+        raise ForgeConsentError(
+            f"{profile.choice.value}: not a registry profile — the sovereign signs only the "
+            "sanctioned trade-offs, never caller-invented ones",
+            Refusal(
+                gate="forge.profile-registry",
+                why="a profile outside FORGE_PROFILES carries costs nobody vetted",
+                legal_next="present one of FORGE_PROFILES; a new posture is a governance act",
+            ),
+        )
+
+
 def present(
     root: Path,
     profile: ForgeProfile,
@@ -132,6 +148,7 @@ def present(
     observed_at: datetime | None = None,
 ) -> Path:
     """Put the forge choice to the sovereign: a HELD row, pending until ratified."""
+    _require_sanctioned(profile)
     return propose(
         root,
         profile.stipulation(),
@@ -151,6 +168,7 @@ def accept(
     observed_at: datetime | None = None,
 ) -> Path:
     """The sovereign consents to the rails. The body is durable BEFORE the row that pins it."""
+    _require_sanctioned(profile)
     stip = profile.stipulation()
     _write_body_durably(root / SIGNATURE_DIRNAME / f"{stip.stipulation_id}.body", profile.body())
     return ratify(

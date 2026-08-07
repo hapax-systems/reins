@@ -214,3 +214,15 @@ def test_the_refusal_branches(tmp_path: Path) -> None:
     bad = {**_materials(sub, key), "principal": "somebody-else@test"}
     with pytest.raises(ForgeConsentError, match="does not verify"):
         ratified_forge(root, **bad)
+
+
+def test_a_caller_constructed_profile_is_refused(tmp_path: Path) -> None:
+    """codex r2: the sovereign signs the sanctioned trade-offs, never caller-invented ones."""
+    from k0.forge_choice import ForgeProfile
+
+    root = _root(tmp_path)
+    invented = ForgeProfile(ForgeChoice.GITHUB_ONLY, tradeoffs=("whatever the caller says",))
+    with pytest.raises(ForgeConsentError, match="not a registry profile"):
+        present(root, invented, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(ForgeConsentError, match="not a registry profile"):
+        accept(root, invented, key_path=_key(tmp_path), estate_id=ESTATE, kernel_version=KERNEL)
