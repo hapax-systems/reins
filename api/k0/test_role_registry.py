@@ -136,3 +136,64 @@ def test_a_tampered_registry_body_refuses(tmp_path: Path) -> None:
     body.write_text('{"roles":["alpha","intruder"]}', encoding="utf-8")
     with pytest.raises(RoleRegistryError, match="not the artifact"):
         role_known(root, "intruder")
+
+
+def test_the_read_back_validates_the_registry_shape(tmp_path: Path) -> None:
+    """codex r1: a parsed-but-wrong body is not a registry."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    sub = tmp_path / "bad"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    bad = b'{"roles":["alpha",1]}'
+    sid = f"role-registry.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "ROLE REGISTRY: shape test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(RoleRegistryError, match="not the canonical shape"):
+        role_known(root, "alpha")
+
+
+def test_the_identity_unexpected_fields_branch_and_the_chain_break_branch(tmp_path: Path) -> None:
+    """claude r1: both refusal branches, exercised."""
+    import hashlib as _hashlib
+    import json as _json
+
+    from bootstrap_receipt import RECEIPT_CHAIN_FILENAME
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    sub = tmp_path / "extra"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    bad = b'{"key_fingerprint":"SHA256:x","principal":"operator@estate-0","surprise":true}'
+    sid = f"sovereign-identity.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "SOVEREIGN IDENTITY: extra-field test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(RoleRegistryError, match="unexpected fields"):
+        sovereign_principal(root)
+
+    sub = tmp_path / "broken"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    mint_sovereign_identity(
+        root, SovereignIdentity("operator@estate-0", _fingerprint(key)),
+        key_path=key, estate_id=ESTATE, kernel_version=KERNEL,
+    )
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = chain_path.read_text(encoding="utf-8").splitlines()
+    forged = _json.loads(rows[1])
+    forged["payload_refs"] = ["stipulation:sha256:" + "f" * 64]
+    rows[1] = _json.dumps(forged)
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    with pytest.raises(RoleRegistryError, match="fails verification"):
+        sovereign_principal(root)

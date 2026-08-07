@@ -265,4 +265,17 @@ def role_known(root: Path, role: str) -> bool:
                 legal_next="mint_role_registry with the elicited role set",
             ),
         )
+    if (
+        set(body) != {"roles"}
+        or not isinstance(body["roles"], list)
+        or not all(isinstance(r, str) and ROLE_GRAMMAR.match(r) for r in body["roles"])
+    ):
+        raise RoleRegistryError(
+            "the consented registry is not the canonical shape (exactly {'roles': [valid names]})",
+            Refusal(
+                gate="role-registry.integrity",
+                why="the consented bytes parse but are not a role registry (codex r1 major)",
+                legal_next="restore the body from backup, or re-mint the registry",
+            ),
+        )
     return role in body["roles"]
