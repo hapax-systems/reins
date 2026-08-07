@@ -13,9 +13,11 @@ gap is four claims, and this module is each of them as machinery:
     ratified cannot have a secret requirement — that is what "generated from the ratified set"
     means, and it is why this module reads the chain rather than a config list.
   * UNVALIDATED KEY IS NOT SUPPLY. Presence in the store is capture, not capability. Only a
-    PROBED row — the working-key validation receipt — moves a name to VALIDATED. The validator is
-    injected: this module never transmits, and the first transmitting call remains
-    MEASURED_PROBE's wall, post-consent.
+    PROBED row — the working-key validation receipt — moves a name to VALIDATED, and the row
+    pins the digest of the exact bytes proven to work: edit the stored key and it falls back to
+    CAPTURED_UNVALIDATED, delete it and the answer is ABSENT. The validator is injected: this
+    module never transmits, and the first transmitting call remains MEASURED_PROBE's wall,
+    post-consent.
   * DECLINE IS A LEGAL ANSWER. A REFUSED row leaves the capability credential_gated: it renders
     dark and is never re-elicited. "Never nags" is machine-checked, not a tone of voice.
 
@@ -103,6 +105,10 @@ class PassStore:
     argv is world-readable (`ps`); stdin is not. A value must never appear on a command line,
     in an environment block, or in an error message — subprocess errors are re-raised without
     captured output attached.
+
+    Single-line invariant: `pass insert --echo` reads exactly one line, so multiline values are
+    refused here rather than truncated by the backend. `pass show` appends exactly one newline
+    on output; `get` strips exactly that byte, so put/get round-trips byte-identically.
     """
 
     prefix: str = "first-init/"
@@ -126,12 +132,20 @@ class PassStore:
         )
         if result.returncode != 0:
             return None
-        return result.stdout
+        out = result.stdout
+        if out.endswith(b"\n"):
+            out = out[:-1]
+        return out
 
     def put(self, name: str, value: bytes) -> None:
+        if b"\n" in value or b"\r" in value:
+            raise ValueError(
+                f"{name}: pass entries here are single-line — a multiline value would be "
+                "silently truncated by insert --echo, and a truncated key is a wrong key"
+            )
         subprocess.run(
-            ["pass", "insert", "--force", self._path(name)],
-            input=value,
+            ["pass", "insert", "--echo", "--force", self._path(name)],
+            input=value + b"\n",
             capture_output=True,
             check=True,
         )
@@ -229,17 +243,21 @@ def supply_state(root: Path, store: SecretStore, name: str) -> SecretSupply:
     """Derive the ladder rung from the chain plus the store — there is no cursor to drift.
 
     REFUSED wins over presence: a key captured and then declined reads credential_gated, because
-    the no is later and sovereign. A PROBED success wins over everything below it: validation is
-    the only rung that is supply.
+    the no is later and sovereign. VALIDATED requires the PROBED row to pin the digest of the
+    value IN THE STORE NOW: the receipt consents to exact bytes, so a key changed after
+    validation falls back to CAPTURED_UNVALIDATED and a deleted one to ABSENT — a stale receipt
+    can never keep a replaced secret reading as supply.
     """
     rows = _rows(root, name)
     if any(r.act is BootstrapAct.REFUSED for r in rows):
         return SecretSupply.CREDENTIAL_GATED
-    if any(r.act is BootstrapAct.PROBED for r in rows):
+    value = store.get(name)
+    if value is None:
+        return SecretSupply.ABSENT
+    validated_ref = f"key-value:sha256:{hashlib.sha256(value).hexdigest()[:16]}"
+    if any(r.act is BootstrapAct.PROBED and validated_ref in r.payload_refs for r in rows):
         return SecretSupply.VALIDATED
-    if store.has(name):
-        return SecretSupply.CAPTURED_UNVALIDATED
-    return SecretSupply.ABSENT
+    return SecretSupply.CAPTURED_UNVALIDATED
 
 
 def needs_elicitation(root: Path, store: SecretStore, name: str) -> bool:
@@ -293,6 +311,11 @@ def validate_key(
         payload_refs=[
             f"k0-secret:{name}",
             f"key-validation:sha256:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()[:16]}",
+            # The receipt binds the EXACT bytes proven to work. sha256 over a provider key is
+            # identification, not disclosure — the value is high-entropy, so its digest is not
+            # a brute-force oracle. Without this, editing the stored key afterwards would leave
+            # the old receipt attesting to a value nobody validated (codex r1 critical).
+            f"key-value:sha256:{hashlib.sha256(value).hexdigest()[:16]}",
         ],
         receipt_id=f"key-validation-{name}-{len(_rows(root, name))}",
         observed_at=observed_at,
