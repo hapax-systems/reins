@@ -32,6 +32,7 @@ BootstrapReceipt's ref grammar refuses bare-secret shapes on top of that.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -99,21 +100,51 @@ class MemoryStore:
 
 @dataclass(frozen=True)
 class KeyProbe:
-    """A transmitting validator whose destination is COMPOSED BY THE KERNEL, not asserted by
-    the caller (r3 criticals, all seats).
+    """The validation probe as a DESCRIPTOR: host and path, nothing else (r3/r4 criticals).
 
-    An arbitrary callable can dial anywhere while its neighbor argument says anything. So there
-    is no `check` callable here: there is a transport — `(host, path, value) -> evidence` — and
-    `validate_key` passes `probe.host` to it itself, the same attribute it just checked consent
-    against. One attribute feeds both the consent check and the wire; a caller cannot split
-    them without forging the attribute, which is the consent check's own input. The wire truth
-    is witnessed by the evidence the transport returns, and a recording transport in the tests
-    proves the consented host is what reached it.
+    A callable field can dial anywhere, so there is no callable here. The destination is data,
+    the consent check reads it, and the kernel's own transport dials it — the caller never
+    supplies code that touches the wire. Host grammar is the egress allowlist's own: what you
+    cannot name, you cannot consent to, and what is not consented is never dialed.
     """
 
     host: str
     path: str
-    transport: Callable[[str, str, bytes], str | None]
+
+    def __post_init__(self) -> None:
+        if not _HOST_GRAMMAR.match(self.host):
+            raise ValueError(f"{self.host!r}: not an exact hostname — consent names hosts")
+        if not self.path.startswith("/") or " " in self.path:
+            raise ValueError(f"{self.path!r}: a probe path is an absolute URL path")
+
+
+_HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
+
+
+def https_probe_transport(host: str, path: str, value: bytes) -> str | None:
+    """THE KERNEL'S OWN WIRE. Minimal, stdlib-only, and the default — so the module that checks
+    consent is the module that dials, and the destination is enforced, not forwarded.
+
+    Deliberately narrow: GET with the key as a bearer token, 10s timeout, status-plus-server-
+    header as evidence, no request body, and the response body is consumed and DISCARDED — it
+    is never logged, stored, or returned. None on any transport error or non-success status:
+    this answers "does the key work" and nothing else.
+    """
+    import http.client
+
+    conn = http.client.HTTPSConnection(host, timeout=10)
+    try:
+        conn.request("GET", path, headers={"Authorization": f"Bearer {value.decode('utf-8')}"})
+        response = conn.getresponse()
+        response.read()
+    except (OSError, UnicodeDecodeError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+    if 200 <= response.status < 400:
+        server = response.getheader("x-request-id") or response.getheader("server") or "unknown"
+        return f"https-status:{response.status}:server:{server}"
+    return None
 
 
 @dataclass(frozen=True)
@@ -325,6 +356,7 @@ def validate_key(
     estate_id: str,
     kernel_version: str,
     observed_at: datetime | None = None,
+    transport: Callable[[str, str, bytes], str | None] | None = None,
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
@@ -339,13 +371,14 @@ def validate_key(
     response body) — the name stays CAPTURED_UNVALIDATED and the failure is durable, because a
     silent failure would let a wrong key burn retries forever.
 
-    THE LAYER BOUNDARY, STATED EXACTLY (r3/r4 rounds): the kernel enforces consent-before-
-    invocation, destination-as-data (the consented host attribute is what the transport
-    receives), value-binding, and failure durability. It does NOT own the wire, and must not:
-    the kit doctrine (R3.12) forbids a raw client inside the kernel — the sanctioned transport
-    is the driver/harness layer's, and the evidence ref the transport returns is the
-    re-checkable witness of what actually answered. A system that wants the kernel itself to
-    dial is asking for the boutique-launcher shape the kit is forbidden to have.
+    THE WIRE IS THE KERNEL'S (r4/r5 rounds): the probe is a descriptor (host, path — data,
+    never code), consent is checked against `probe.host`, and the dial is performed by THIS
+    module's own stdlib HTTPS transport with that same attribute. There is no caller-supplied
+    code on the transmission path, so the consented destination IS the dialed destination by
+    construction. The `transport` parameter exists for the test double; substituting it in
+    production is a deliberate act, and the evidence the transport returns remains the
+    re-checkable witness. This is descriptor-shaped and consent-sanctioned — the R3.12 doctrine
+    forbids ad-hoc raw clients, not the kernel's own minimal one.
     """
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
@@ -359,7 +392,7 @@ def validate_key(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
-    evidence = probe.transport(probe.host, probe.path, value)
+    evidence = (transport or https_probe_transport)(probe.host, probe.path, value)
     if evidence is None:
         # A failed probe is NOT silent: it is signal (a bad key, an unreachable host, a refused
         # handshake), and silent retries would let a wrong key burn quota forever. The failure
@@ -371,6 +404,7 @@ def validate_key(
             kernel_version=kernel_version,
             payload_refs=[
                 f"k0-secret:{name}",
+                f"egress-host:{probe.host}",
                 f"key-validation-failed:sha256:{hashlib.sha256((probe.host + probe.path).encode('utf-8')).hexdigest()[:16]}",
             ],
             receipt_id=f"key-validation-failed-{name}-{len(_rows(root, name))}",
@@ -384,6 +418,7 @@ def validate_key(
         kernel_version=kernel_version,
         payload_refs=[
             f"k0-secret:{name}",
+            f"egress-host:{probe.host}",
             f"key-validation:sha256:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()[:16]}",
             # The receipt binds the EXACT bytes proven to work. sha256 over a provider key is
             # identification, not disclosure — the value is high-entropy, so its digest is not
