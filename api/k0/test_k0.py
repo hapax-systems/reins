@@ -18,7 +18,11 @@ from k0 import (
 
 # --- W1: refusal-as-data ------------------------------------------------------------------
 def test_a_refusal_carries_why_and_legal_next():
-    r = Refusal(gate="durable-root", why="tmpfs is volatile", legal_next="declare a durable root")
+    r = Refusal(
+        gate="durable-root",
+        why="tmpfs is volatile",
+        legal_next="declare a durable root",
+    )
     assert "tmpfs is volatile" in r.render()
     assert "legal next" in r.render()
 
@@ -61,14 +65,23 @@ def test_satisfied_admits():
 
 def test_violated_refuses():
     with pytest.raises(RefusalError) as e:
-        decide("g", Evaluation.VIOLATED, legal_next="fix it", violated_why="predicate false")
+        decide(
+            "g",
+            Evaluation.VIOLATED,
+            legal_next="fix it",
+            violated_why="predicate false",
+        )
     assert e.value.refusal.why == "predicate false"
 
 
 def test_UNEVALUABLE_REFUSES_this_is_the_whole_law():
     """The arm systems forget. declare_durable_root forgot it and accepted /dev/shm."""
     with pytest.raises(RefusalError) as e:
-        decide("durable-root", Evaluation.UNEVALUABLE, legal_next="make /proc/mounts readable")
+        decide(
+            "durable-root",
+            Evaluation.UNEVALUABLE,
+            legal_next="make /proc/mounts readable",
+        )
     assert "could not be evaluated" in e.value.refusal.why
     assert e.value.refusal.legal_next
 
@@ -76,9 +89,21 @@ def test_UNEVALUABLE_REFUSES_this_is_the_whole_law():
 def test_the_two_why_strings_are_not_interchangeable():
     """'we checked and it failed' and 'we could not check' are different facts."""
     with pytest.raises(RefusalError) as v:
-        decide("g", Evaluation.VIOLATED, legal_next="n", violated_why="V", unevaluable_why="U")
+        decide(
+            "g",
+            Evaluation.VIOLATED,
+            legal_next="n",
+            violated_why="V",
+            unevaluable_why="U",
+        )
     with pytest.raises(RefusalError) as u:
-        decide("g", Evaluation.UNEVALUABLE, legal_next="n", violated_why="V", unevaluable_why="U")
+        decide(
+            "g",
+            Evaluation.UNEVALUABLE,
+            legal_next="n",
+            violated_why="V",
+            unevaluable_why="U",
+        )
     assert v.value.refusal.why == "V"
     assert u.value.refusal.why == "U"
 
@@ -115,10 +140,29 @@ def test_the_kernel_package_is_estate_independent():
     and is supplied from outside the tree (see api/conftest.py). With the tokens external, the
     scan can now cover every file in the package including this one.
     """
+    import os
     import pathlib
 
     tokens = estate_tokens()
     if tokens is None:
+        # A SKIP IS NOT A PASS, AND EVIDENCE THAT CANNOT TELL THEM APART IS NOT EVIDENCE.
+        #
+        # The scan needs the estate's token file, which is gitignored — so on a stranger's checkout
+        # this SKIPS, and `pytest -q` renders a skip and a pass identically enough that a release
+        # note saying "the suite is green" carries no information about whether the guard ran. That
+        # is the review finding, and a docstring warning does not fix it: the caveat lived in prose
+        # while the mechanism kept quietly permitting the thing the prose warned about.
+        #
+        # So the requirement is declarable. Anything asserting the scan as evidence sets
+        # K0_REQUIRE_ESTATE_SCAN=1, and an unarmed run then FAILS instead of skipping. The default
+        # stays a skip because a stranger cloning this repo has no tokens and must not be handed a
+        # red suite for it — the scan is about THIS estate's fingerprints, and a stranger has none.
+        if os.environ.get("K0_REQUIRE_ESTATE_SCAN") == "1":
+            pytest.fail(
+                f"K0_REQUIRE_ESTATE_SCAN=1 demands an ARMED estate-independence scan, and the "
+                f"token file was not found. {UNARMED} Refusing to report a skip as evidence that "
+                f"the kernel carries no estate fingerprints."
+            )
         pytest.skip(UNARMED)
 
     hits = scan_tree_for_tokens(pathlib.Path(__file__).parent, tokens)
@@ -209,3 +253,62 @@ def test_the_dropped_arm_is_structurally_unreachable_as_a_pass():
     assert Evaluation.UNEVALUABLE not in (Evaluation.SATISFIED,)
     with pytest.raises(RefusalError):
         decide("g", Evaluation.UNEVALUABLE, legal_next="n")
+
+
+def test_all_agrees_with_what_the_module_exposes_in_both_directions():
+    """`__all__` MUST AGREE WITH WHAT THE MODULE ACTUALLY EXPOSES — BOTH WAYS.
+
+    The branch that built the degradation ledger and the ratification act added their IMPORTS to
+    this package and not their `__all__` entries. So `from k0 import *` gave a caller the whole
+    kernel EXCEPT its completing member — and nothing said so, because both halves looked fine on
+    their own. An export list that disagrees with the module it describes is the same
+    two-records-disagree defect as a task note disagreeing with a claim file, or two gates
+    disagreeing about one frontmatter block.
+
+    THE FIRST VERSION OF THIS TEST CHECKED ONE DIRECTION and would have passed with `__all__` full
+    of names that do not resolve — where `from k0 import *` raises AttributeError and the kernel
+    is unimportable outright. Catching the omission and not the phantom is the same half-a-pair
+    error the omission itself was: a set difference has two sides, and asserting one of them reads
+    as agreement.
+
+    Derived rather than enumerated: a hand-written second list would be a third record to drift.
+    """
+    import types
+
+    import k0
+
+    declared = set(k0.__all__)
+    public = {name for name in dir(k0) if not name.startswith("_")}
+
+    # `from .refusal import Refusal` binds `k0.refusal` as a side effect of import machinery, and
+    # those bindings are not exports. The exemption is deliberately narrow: it applies ONLY to
+    # submodules of this package that `__all__` does not list. A module the author does mean to
+    # export appears in `__all__`, so it never reaches this set — and the reverse direction below
+    # proves it resolves. Blanket-filtering every module value (the earlier form) would have hidden
+    # a genuine missing export whose value happened to be a module.
+    incidental = {
+        name
+        for name in public - declared
+        if isinstance(getattr(k0, name), types.ModuleType)
+        and getattr(getattr(k0, name), "__name__", "") == f"{k0.__name__}.{name}"
+    }
+
+    undeclared = sorted(public - declared - incidental)
+    assert not undeclared, (
+        f"{len(undeclared)} names are importable from k0 but missing from __all__: {undeclared}. "
+        f"A star-import would silently omit them."
+    )
+
+    # THE OTHER SIDE: every declared name must actually resolve. This is what `import *` does, so a
+    # phantom entry is not a documentation slip — it is an ImportError for every caller.
+    phantom = sorted(name for name in declared if not hasattr(k0, name))
+    assert not phantom, (
+        f"{len(phantom)} names in __all__ do not resolve on the module: {phantom}. "
+        f"`from k0 import *` raises AttributeError, so the kernel does not import at all."
+    )
+
+    duplicated = sorted({name for name in k0.__all__ if k0.__all__.count(name) > 1})
+    assert not duplicated, (
+        f"__all__ lists {duplicated} more than once — a sign of two edits adding the same export, "
+        f"which is how the halves drift apart in the first place."
+    )
