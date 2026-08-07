@@ -139,6 +139,12 @@ def test_amendment_surfaces_as_data(tmp_path: Path) -> None:
     assert got.choice is ForgeChoice.FORGE_AGNOSTIC, "the latest consent governs"
     assert got.amendments == 1, "the override is visible, never silent"
 
+    authenticated = ratified_forge(root, **_materials(tmp_path, key))
+    assert authenticated.amendments == 1 and authenticated.signature_verified, (
+        "the amendment count on the AUTHENTICATED path counts the rows the key actually signed "
+        "(CodeRabbit) — never an unverified re-read"
+    )
+
 
 def test_the_refusal_branches(tmp_path: Path) -> None:
     """Every loud path (codex/claude r1 majors): chain break, digest-less row, unreadable body,
@@ -226,3 +232,36 @@ def test_a_caller_constructed_profile_is_refused(tmp_path: Path) -> None:
         present(root, invented, estate_id=ESTATE, kernel_version=KERNEL)
     with pytest.raises(ForgeConsentError, match="not a registry profile"):
         accept(root, invented, key_path=_key(tmp_path), estate_id=ESTATE, kernel_version=KERNEL)
+
+
+def test_partial_signing_materials_are_a_loud_caller_bug(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    present(root, GITHUB, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, GITHUB, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    materials = _materials(tmp_path, key)
+
+    with pytest.raises(ForgeConsentError, match="partial signing materials"):
+        ratified_forge(root, allowed_signers=materials["allowed_signers"])
+
+
+def test_an_unsanctioned_body_is_refused_on_readback(tmp_path: Path) -> None:
+    """A body that binds to its row but is not the registry's profile refuses (CodeRabbit):
+    the id/digest binding proves the row points at these bytes, not that the bytes were
+    signable."""
+    import hashlib as _hashlib
+
+    from k0.ratification import Stipulation, propose, ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b'{"choice":"github-only-ceiling","tradeoffs":["invented"]}'
+    sid = f"forge-choice.github-only-ceiling.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "FORGE CHOICE: unsanctioned-tradeoffs test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    with pytest.raises(ForgeConsentError, match="not a sanctioned profile"):
+        ratified_forge(root, allow_unauthenticated=True)

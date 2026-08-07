@@ -230,7 +230,18 @@ def ratified_forge(
     sid = _id_of(receipt)
     gate = "forge.choice-integrity"
 
-    materials_supplied = allowed_signers is not None and principal is not None and scratch_dir is not None
+    supplied = [allowed_signers is not None, principal is not None, scratch_dir is not None]
+    if any(supplied) and not all(supplied):
+        raise ForgeConsentError(
+            "partial signing materials — the authentication inputs are all three or none; a "
+            "subset is a caller bug, not a hash-only read",
+            Refusal(
+                gate="forge.signature-verification",
+                why="half an authentication is none",
+                legal_next="pass allowed_signers + principal + scratch_dir together",
+            ),
+        )
+    materials_supplied = all(supplied)
     if not materials_supplied and not allow_unauthenticated:
         raise ForgeConsentError(
             "the hash-only read must be opted into explicitly (allow_unauthenticated=True)",
@@ -330,6 +341,18 @@ def ratified_forge(
                 legal_next="restore the body from backup, or present and accept a fresh choice",
             ),
         ) from None
+    sanctioned = FORGE_PROFILES.get(choice)
+    if sanctioned is None or tuple(tradeoffs) != sanctioned.tradeoffs:
+        raise ForgeConsentError(
+            f"{sid}: the ratified body is not a sanctioned profile — the registry's trade-offs "
+            "are what a consent may carry, and these differ",
+            Refusal(
+                gate="forge.profile-registry",
+                why="id-and-digest binding proves the row points at these bytes; it says nothing "
+                "about whether the bytes are a profile anyone sanctioned",
+                legal_next="verify_chain; establish how an unsanctioned profile was ratified",
+            ),
+        )
     if signature_ok:
         amendments = sum(1 for s in verified_sids if s.startswith("forge-choice.")) - 1
     else:
