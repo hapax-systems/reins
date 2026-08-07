@@ -58,6 +58,11 @@ class BootProfile:
     fallback_policy: str
     freshness: str
     tradeoffs: tuple[str, ...]
+    #: The secrets this floor needs captured (R2.3). Carried IN the consented bytes, so the
+    #: secret set is generated from the ratified capability set — literally: the requirement is
+    #: part of what the operator signs. The harness profile needs nothing (the sanctioned
+    #: harness IS the secret store for entitlement auth — access-bootstrap amendment).
+    secret_requirements: tuple[str, ...]
 
     def body(self) -> bytes:
         """The exact bytes consented to. Canonical JSON so the digest is stable across readers."""
@@ -70,6 +75,7 @@ class BootProfile:
                 "fallback_policy": self.fallback_policy,
                 "freshness": self.freshness,
                 "tradeoffs": list(self.tradeoffs),
+                "secret_requirements": sorted(self.secret_requirements),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -107,6 +113,7 @@ PROFILES: dict[str, BootProfile] = {
                 "the harness's own provider terms bound what the estate may ask of it; the "
                 "kit does not architect around them",
             ),
+            secret_requirements=(),
         ),
         BootProfile(
             profile_id="hosted-model-kit-minimal",
@@ -124,6 +131,7 @@ PROFILES: dict[str, BootProfile] = {
                 "key custody stays with the operator's store; the kit captures presence, "
                 "never values",
             ),
+            secret_requirements=("frontier-provider-key",),
         ),
     )
 }
