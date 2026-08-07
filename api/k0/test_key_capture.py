@@ -310,3 +310,45 @@ def test_pass_store_contract_round_trips_single_line_values(
     )
     with pytest.raises(ValueError, match="single-line"):
         store.put(NAME, b"two\nlines")
+
+
+FAILING_PASS = """#!/bin/sh
+# A pass(1) double whose insert FAILS and quotes its stdin on stderr — the leak case.
+cmd="$1"; shift
+case "$cmd" in
+  show) exit 1 ;;
+  insert)
+    IFS= read -r line
+    echo "gpg: cannot encrypt for $line: no key" >&2
+    exit 1
+    ;;
+esac
+"""
+
+
+def test_pass_backend_errors_never_carry_the_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing backend may quote what it was fed; the caller must never see it (r3 majors).
+
+    Also pins the get()-on-missing arm: an absent entry reads None, not an error.
+    """
+    import os
+
+    from k0.key_capture import PassStore
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "pass"
+    script.write_text(FAILING_PASS, encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    store = PassStore()
+    assert store.get(NAME) is None, "a missing entry is None, not an exception"
+
+    with pytest.raises(RuntimeError, match="rc=1") as exc:
+        store.put(NAME, b"sk-leak-canary-99")
+    assert "sk-leak-canary-99" not in str(exc.value)
+    assert "cannot encrypt" not in str(exc.value), "backend stderr is suppressed entirely"
+    assert exc.value.__cause__ is None and exc.value.__context__ is None, (
+        "the suppressed error must not leak through the exception chain either"
+    )

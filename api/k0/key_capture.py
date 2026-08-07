@@ -21,11 +21,12 @@ gap is four claims, and this module is each of them as machinery:
   * DECLINE IS A LEGAL ANSWER. A REFUSED row leaves the capability credential_gated: it renders
     dark and is never re-elicited. "Never nags" is machine-checked, not a tone of voice.
 
-VALUE DISCIPLINE: secret values move exactly once — from the operator's input into the backend —
-and exist afterward only in process memory, handed to an injected validator. The chain carries
-refs (`k0-secret:<name>`, `key-validation:sha256:<digest>`), and BootstrapReceipt's ref grammar
-refuses bare-secret shapes on top of that. No value is ever logged, persisted, or transmitted
-by this module.
+VALUE DISCIPLINE: secret values move exactly twice — from the operator's input into the backend,
+and from the backend to an injected validator, in memory. The backend's own encrypted store is
+persistence WITH the operator's consent and is the store's reason to exist; apart from it, no
+value is ever logged, written to the chain, or transmitted by this module. The chain carries
+refs (`k0-secret:<name>`, `key-validation:sha256:<digest>`, `key-value:sha256:<digest>`), and
+BootstrapReceipt's ref grammar refuses bare-secret shapes on top of that.
 """
 
 from __future__ import annotations
@@ -140,6 +141,7 @@ class PassStore:
                 f"{name}: pass entries here are single-line — a multiline value would be "
                 "silently truncated by insert --echo, and a truncated key is a wrong key"
             )
+        rc = None
         try:
             subprocess.run(
                 ["pass", "insert", "--echo", "--force", self._path(name)],
@@ -149,12 +151,14 @@ class PassStore:
             )
         except subprocess.CalledProcessError as exc:
             # CalledProcessError RETAINS the captured stdout/stderr, and a backend error can
-            # quote what it was fed. The failure surfaces as an exit code and nothing else
-            # (codex r3 major — the docstring's "no output attached" claim is now true).
+            # quote what it was fed. Keep only the exit code; the exception object — and its
+            # place in the raised error's __context__ chain — must not survive (codex r3 major).
+            rc = exc.returncode
+        if rc is not None:
             raise RuntimeError(
-                f"pass insert {self._path(name)!r} failed (rc={exc.returncode}); "
+                f"pass insert {self._path(name)!r} failed (rc={rc}); "
                 "backend output deliberately suppressed"
-            ) from None
+            )
 
 
 def required_secrets(root: Path) -> tuple[str, ...]:
