@@ -50,6 +50,7 @@ from bootstrap_receipt import (
 )
 
 from .boot_profile import PROFILES, ratified_profile
+from .egress_consent import require_egress
 
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
 
@@ -301,6 +302,7 @@ def validate_key(
     store: SecretStore,
     name: str,
     *,
+    host: str,
     validator: Callable[[bytes], str | None],
     estate_id: str,
     kernel_version: str,
@@ -308,17 +310,21 @@ def validate_key(
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
-    The validator is injected and receives the value in memory; this module never transmits.
-    It returns an evidence string on success (a probe-receipt ref, a response id — something a
-    stranger could re-check), which is DIGESTED into the row: the chain pins that validation
-    happened against this evidence without carrying the evidence itself. Failure writes no row:
-    a failed validation is not a disposition, and the name stays CAPTURED_UNVALIDATED.
+    The validator TRANSMITS — a validation ping is the kernel's one real egress seam today —
+    so it is gated: `require_egress(root, host)` runs before the validator is ever invoked, and a
+    host the operator has not consented to is refused, never dialed. The validator is injected and
+    receives the value in memory; this module never transmits itself. It returns an evidence
+    string on success (a probe-receipt ref, a response id — something a stranger could
+    re-check), which is DIGESTED into the row: the chain pins that validation happened against
+    this evidence without carrying the evidence itself. Failure writes no row: a failed
+    validation is not a disposition, and the name stays CAPTURED_UNVALIDATED.
     """
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
+    require_egress(root, host)  # consent is evaluated before the validator is ever invoked
     value = store.get(name)
     if value is None:
         raise ValueError(

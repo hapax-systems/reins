@@ -15,6 +15,9 @@ from bootstrap_receipt import (
     verify_chain_at,
 )
 from k0.boot_profile import PROFILES
+from k0.egress_consent import EgressAllowlist
+from k0.egress_consent import accept as accept_egress
+from k0.egress_consent import elicit_allowlist
 from k0.key_capture import (
     MemoryStore,
     SecretSupply,
@@ -54,6 +57,18 @@ def _root(tmp_path: Path) -> Path:
         ),
     )
     return root
+
+
+HOST = "api.anthropic.com"
+
+
+def _consent_egress(root: Path, key: Path) -> None:
+    """The consent that makes a validation ping legal: the allowlist naming the provider host."""
+    elicit_allowlist(root, EgressAllowlist(hosts=(HOST,)), estate_id=ESTATE, kernel_version=KERNEL)
+    accept_egress(
+        root, EgressAllowlist(hosts=(HOST,)), key_path=key, estate_id=ESTATE,
+        kernel_version=KERNEL,
+    )
 
 
 def test_the_secret_set_is_generated_from_the_ratified_profile(tmp_path: Path) -> None:
@@ -109,6 +124,7 @@ def test_the_requirement_rides_inside_the_consented_bytes() -> None:
 def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
 
     assert supply_state(root, store, NAME) is SecretSupply.ABSENT
     assert needs_elicitation(root, store, NAME), "absent and unasked is the one askable state"
@@ -131,6 +147,7 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
         root,
         store,
         NAME,
+        host=HOST,
         validator=lambda value: "probe-receipt:ok-1",
         estate_id=ESTATE,
         kernel_version=KERNEL,
@@ -151,12 +168,14 @@ def _chain(root: Path):
 def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
     store.put(NAME, b"sk-canary-value")
 
     ok = validate_key(
         root,
         store,
         NAME,
+        host=HOST,
         validator=lambda value: None,
         estate_id=ESTATE,
         kernel_version=KERNEL,
@@ -170,11 +189,13 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
 def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
     with pytest.raises(ValueError, match="nothing captured"):
         validate_key(
             root,
             store,
             NAME,
+            host=HOST,
             validator=lambda value: "x",
             estate_id=ESTATE,
             kernel_version=KERNEL,
@@ -200,6 +221,7 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             root,
             store,
             NAME,
+            host=HOST,
             validator=lambda value: "probe-receipt:ok-1",
             estate_id=ESTATE,
             kernel_version=KERNEL,
@@ -211,6 +233,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
     """The canary test: run the whole ceremony with a distinctive value, then scan the ledger."""
     root = _root(tmp_path)
     store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
     canary = b"sk-canary-7f3c9a1b-never-on-disk"
 
     elicit_capture(root, NAME, estate_id=ESTATE, kernel_version=KERNEL)
@@ -219,6 +242,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
         root,
         store,
         NAME,
+        host=HOST,
         validator=lambda value: "probe-receipt:ok-1",
         estate_id=ESTATE,
         kernel_version=KERNEL,
@@ -238,9 +262,10 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     ABSENT. A stale receipt can never keep a replaced secret reading as supply."""
     root = _root(tmp_path)
     store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
     store.put(NAME, b"sk-first-value")
     assert validate_key(
-        root, store, NAME,
+        root, store, NAME, host=HOST,
         validator=lambda value: "probe-receipt:ok-1",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
@@ -356,4 +381,26 @@ def test_pass_backend_errors_never_carry_the_value(tmp_path: Path, monkeypatch: 
     assert "cannot encrypt" not in str(exc.value), "backend stderr is suppressed entirely"
     assert exc.value.__cause__ is None and exc.value.__context__ is None, (
         "the suppressed error must not leak through the exception chain either"
+    )
+
+
+def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_path: Path) -> None:
+    """The gate on the ACTUAL egress path (codex r2 critical): the validator is the wire, so an
+    unconsented host must refuse before the callable is invoked — not after, not with a warning."""
+    from k0.egress_consent import EgressConsentError
+
+    root = _root(tmp_path)
+    store = MemoryStore()
+    store.put(NAME, b"sk-canary-value")
+
+    calls: list[bytes] = []
+    with pytest.raises(EgressConsentError, match="no ratified egress allowlist"):
+        validate_key(
+            root, store, NAME, host="api.never-consented.example",
+            validator=lambda value: calls.append(value) or "ok",
+            estate_id=ESTATE, kernel_version=KERNEL,
+        )
+    assert calls == [], "the validator — the transmitting act — was never invoked"
+    assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED, (
+        "a refused validation is not a disposition; the name stays unvalidated"
     )

@@ -248,3 +248,28 @@ def egress_decision(root: Path, host: str) -> bool:
     if allowlist is None:
         return False
     return host in allowlist.hosts
+
+
+def require_egress(root: Path, host: str) -> None:
+    """The enforcement primitive: transmitting callers call this FIRST, or not at all legally.
+
+    `egress_decision` answers; this REFUSES. Every transmitting seam in the kernel — today the
+    working-key validation in key_capture, later the sanctioned call path and the Crow channel —
+    takes `root` and routes through here, so "the gate" is not a function a caller may forget
+    but the only way to reach the wire (r2 criticals: a gate that is never invoked gates
+    nothing).
+    """
+    if egress_decision(root, host):
+        return
+    raise EgressConsentError(
+        f"{host}: no ratified egress allowlist names this host",
+        Refusal(
+            gate="egress.default-deny",
+            why="the estate may not transmit where the operator has not consented — an absent "
+            "or unlisted host is a denial, never a guess",
+            legal_next=(
+                f"elicit_allowlist + accept an allowlist naming {host} (the consent ceremony), "
+                "then retry — or hold the act; dark is a legal state"
+            ),
+        ),
+    )
