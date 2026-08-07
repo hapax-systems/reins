@@ -185,11 +185,24 @@ class RatifiedEgress:
     amendments: int
 
 
-def ratified_allowlist(root: Path) -> RatifiedEgress | None:
+def ratified_allowlist(
+    root: Path,
+    *,
+    allowed_signers: Path | None = None,
+    principal: str | None = None,
+    scratch_dir: Path | None = None,
+) -> RatifiedEgress | None:
     """The consented allowlist, verified against the chain pin at read time. None renders
     dark — but a CORRUPTED consent artifact refuses, because silent-deny would hide tampering
     inside the safe-looking answer. The chain itself is verified first: load_chain does not
-    check hashes, and a gate that trusts an unverified chain is a gate over nothing."""
+    check hashes, and a gate that trusts an unverified chain is a gate over nothing.
+
+    SIGNATURES (claude r18): hash-pinning proves the artifact matches the ROW; it does not
+    prove the row was signed by the sovereign's key. When the signing materials are supplied
+    (allowed_signers + principal + scratch_dir), the ratification is also verified against the
+    key — and a row that does not verify is a refusal, not a consent. Callers that have the
+    materials MUST pass them; the hash-only path exists for readers that genuinely lack them,
+    and it says so."""
     if not verify_chain_at(root).ok:
         raise EgressConsentError(
             "the bootstrap chain fails verification — no row in it may ground an egress decision",
@@ -203,6 +216,32 @@ def ratified_allowlist(root: Path) -> RatifiedEgress | None:
     if found is None:
         return None
     sid, receipt = found
+    if allowed_signers is not None and principal is not None and scratch_dir is not None:
+        from .ratification import verify_ratifications
+        from .refusal import RefusalError
+
+        try:
+            verdict = verify_ratifications(
+                root, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+            )
+            ok = sid in verdict.verified
+            why = dict(verdict.unverified).get(sid, "not present among the verified ratifications")
+        except RefusalError as exc:
+            ok = False
+            why = str(exc)
+        if not ok:
+            raise EgressConsentError(
+                f"{sid}: the ratification does not verify against the sovereign's key: {why}",
+                Refusal(
+                    gate="egress.signature-verification",
+                    why="a consent row that does not verify is not consent, however the bytes line up",
+                    legal_next=(
+                        "verify_ratifications() shows every unverified row with its reason; "
+                        "establish whether the key rotated or the row is forged before trusting "
+                        "anything on this chain"
+                    ),
+                ),
+            ) from None
     gate = "egress.allowlist-integrity"
     pinned = artifact_digest(receipt)
     path = root / SIGNATURE_DIRNAME / f"{sid}.body"

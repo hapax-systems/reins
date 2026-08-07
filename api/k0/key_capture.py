@@ -216,7 +216,7 @@ class ProbeOutcome:
     failure: str | None
 
 
-def https_probe_transport(root: Path, endpoint: ProbeEndpoint, value: bytes) -> ProbeOutcome:
+def _https_probe_transport(root: Path, endpoint: ProbeEndpoint, value: bytes) -> ProbeOutcome:
     # The wire dials ONLY registry endpoints (codex r16): a transport taking free host/path/
     # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
     # headers are caller-controlled content on the wire. Registry membership is verified here,
@@ -513,7 +513,7 @@ def validate_key(
 
     THE WIRE IS THE KERNEL'S, WITH NO INJECTION SEAM (r4/r5/r6 rounds): the probe is a
     descriptor (host, path — data, never code), consent is checked against `endpoint.host`, and
-    the dial is ALWAYS this module's own stdlib HTTPS transport with that same attribute.
+    the dial is ALWAYS this module's own stdlib HTTPS transport with that same attribute. The transport is PRIVATE — validate_key is the only public transmitting surface, so the validation discipline (negative control, value-binding, durable classified failures) cannot be stepped around by importing the wire directly (glm/claude r18).
     `validate_key` takes no transport argument — there is no caller-supplied code anywhere on
     the transmission path, so the consented destination is the dialed destination by
     construction. Tests patch the stdlib boundary, not this module's surface. Failures land on
@@ -561,7 +561,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(root, endpoint, _negative_control_key(endpoint))
+    control = _https_probe_transport(root, endpoint, _negative_control_key(endpoint))
     if control.evidence is not None:
         _append_row(
             root,
@@ -604,7 +604,7 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    outcome = https_probe_transport(root, endpoint, value)
+    outcome = _https_probe_transport(root, endpoint, value)
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout
         # and a 401 are different problems with different next moves), the consented host, and

@@ -510,12 +510,12 @@ def test_the_wire_has_no_injection_seam() -> None:
     criticals): validate_key always runs the module's own HTTPS transport."""
     import inspect
 
-    from k0.key_capture import https_probe_transport
+    from k0.key_capture import _https_probe_transport
 
     assert "transport" not in inspect.signature(validate_key).parameters, (
         "no injection seam: there is no transport parameter to substitute"
     )
-    assert callable(https_probe_transport)
+    assert callable(_https_probe_transport)
     import dataclasses
 
     from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, ProbeEndpoint
@@ -534,29 +534,29 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(tmp_path: Pa
     failures, and the response body consumed-and-discarded."""
     import socket
 
-    from k0.key_capture import https_probe_transport
+    from k0.key_capture import _https_probe_transport
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
     record: list[tuple] = []
     _patch_wire(monkeypatch, status=200, record=record)
     # _FakeResponse carries no request-id header -> server token "unknown"
-    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.evidence == "https-status:200:server:unknown" and out.failure is None
     assert ("request", HOST, "/v1/models", "sk-bearer-value") in record, (
         "the key rides the provider's auth header and nowhere else"
     )
 
     _patch_wire(monkeypatch, status=401)
-    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.evidence is None and out.failure == "http-401", "a refused key is its own class"
 
     _patch_wire(monkeypatch, error=socket.timeout())
-    out = https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-bearer-value")
     assert out.failure == "timeout", "an unreachable host says so — the operator's next move differs"
 
     _patch_wire(monkeypatch, error=ConnectionRefusedError())
-    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "connection-refused"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "connection-refused"
 
 
 def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -564,20 +564,20 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
     descriptor refuses bad shapes at construction."""
     import ssl
 
-    from k0.key_capture import failure_next_move, https_probe_transport
+    from k0.key_capture import failure_next_move, _https_probe_transport
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
-    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "tls-error"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "tls-error"
 
     _patch_wire(monkeypatch, error=OSError("reset"))
-    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "transport-error"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "transport-error"
 
     _patch_wire(monkeypatch, status=503)
-    assert https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "http-503"
+    assert _https_probe_transport(root, ANTHROPIC, b"sk-x").failure == "http-503"
 
-    assert https_probe_transport(root, ANTHROPIC, b"\xff\xfe").failure == "key-not-utf8"
+    assert _https_probe_transport(root, ANTHROPIC, b"\xff\xfe").failure == "key-not-utf8"
 
     with pytest.raises(ValueError, match="not a sanctioned provider"):
         validate_key(
@@ -596,12 +596,12 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
 def test_a_redirect_never_validates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3xx is not success (codex r7 critical): a redirect followed with a bearer token is the
     classic key-leak, and a login-page 302 would otherwise 'validate' any garbage."""
-    from k0.key_capture import failure_next_move, https_probe_transport
+    from k0.key_capture import failure_next_move, _https_probe_transport
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, status=302)
-    out = https_probe_transport(root, ANTHROPIC, b"sk-x")
+    out = _https_probe_transport(root, ANTHROPIC, b"sk-x")
     assert out.evidence is None and out.failure == "http-302-redirect"
     assert "do not follow" in failure_next_move(out.failure)
 
@@ -624,11 +624,11 @@ def test_the_tls_context_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             pass
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _CtxConn)
-    from k0.key_capture import https_probe_transport
+    from k0.key_capture import _https_probe_transport
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
-    https_probe_transport(root, ANTHROPIC, b"sk-x")
+    _https_probe_transport(root, ANTHROPIC, b"sk-x")
     ctx = captured.get("context")
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_REQUIRED
@@ -799,7 +799,7 @@ def test_a_blanket_403_control_proves_nothing(tmp_path: Path, monkeypatch: pytes
 def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The membership guard, tested (claude r17): a caller-minted endpoint — even one naming a
     consented host — is not a legal destination. Only registry data reaches the wire."""
-    from k0.key_capture import ProbeEndpoint, https_probe_transport
+    from k0.key_capture import ProbeEndpoint, _https_probe_transport
 
     root = _root(tmp_path)
     _consent_egress(root, _key(tmp_path))
@@ -814,7 +814,7 @@ def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: p
     assert forged in PROVIDER_PROBE_ENDPOINTS.values(), "equality holds — the guard admits it"
     custom = ProbeEndpoint("api.anthropic.com", "/v1/messages", "x-api-key", "sk-ant-", ())
     with pytest.raises(ValueError, match="registry"):
-        https_probe_transport(root, custom, b"sk-canary-value")
+        _https_probe_transport(root, custom, b"sk-canary-value")
     assert dialed == [], "a non-registry endpoint never reaches the wire"
 
 
@@ -822,7 +822,7 @@ def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monk
     """Branch coverage on the transport's scheme/header handling (codex r17)."""
     import http.client
 
-    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, https_probe_transport
+    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, _https_probe_transport
 
     root = _root(tmp_path)
     # consent both provider hosts
@@ -851,9 +851,9 @@ def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monk
             pass
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _Conn)
-    https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["openai"], b"sk-x")
+    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["openai"], b"sk-x")
     assert seen[0]["headers"].get("Authorization") == "Bearer sk-x"
-    https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["anthropic"], b"sk-ant-x")
+    _https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["anthropic"], b"sk-ant-x")
     assert seen[1]["headers"].get("x-api-key") == "sk-ant-x"
     assert seen[1]["headers"].get("anthropic-version") == "2023-06-01", (
         "the provider's extra headers ride the request"

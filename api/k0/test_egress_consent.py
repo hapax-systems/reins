@@ -325,3 +325,28 @@ def test_amendments_count_only_digest_pinning_rows(tmp_path: Path) -> None:
         "two artifact-pinning consents, one amendment — the pinning-nothing row counts for nothing"
     )
     assert set(got.allowlist.hosts) == set(amended.hosts)
+
+
+def test_the_signature_is_verified_when_the_materials_are_supplied(tmp_path: Path) -> None:
+    """Hash-pinning proves the artifact matches the row; only the signature proves the row is
+    the sovereign's (claude r18). With the materials supplied, an unverifying row refuses."""
+    from k0.ratifier import write_allowed_signers
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+
+    allowed = tmp_path / "allowed_signers"
+    write_allowed_signers(allowed, "ratifier@test", key.with_suffix(".pub").read_text().strip())
+
+    got = ratified_allowlist(
+        root, allowed_signers=allowed, principal="ratifier@test", scratch_dir=tmp_path
+    )
+    assert got is not None, "the genuine ratification verifies"
+
+    s2 = tmp_path / "s2"
+    s2.mkdir()
+    with pytest.raises(EgressConsentError, match="does not verify"):
+        ratified_allowlist(
+            root, allowed_signers=allowed, principal="somebody-else@test", scratch_dir=s2
+        )
