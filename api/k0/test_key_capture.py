@@ -668,3 +668,52 @@ def test_an_indiscriminate_endpoint_can_validate_nothing(tmp_path: Path, monkeyp
     rows = [r for r in _chain(root) if any("endpoint-indiscriminate" in ref for ref in r.payload_refs)]
     assert len(rows) == 1
     assert "requires authorization" in failure_next_move("endpoint-indiscriminate")
+
+
+def test_an_inconclusive_control_proves_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a clean 4xx on garbage proves discrimination (codex r12): a redirect, a timeout, a
+    5xx on the control leave the endpoint's behavior UNPROVEN — validation must not proceed,
+    and the row carries the control's own classified cause."""
+    import http.client
+    import socket
+
+    from k0.key_capture import failure_next_move
+
+    def run_case(error, status, expected_class):
+        sub = tmp_path / expected_class.replace(":", "_")
+        sub.mkdir()
+        root = _root(sub)
+        store = MemoryStore()
+        _consent_egress(root, _key(sub))
+        store.put(NAME, b"sk-real-key")
+
+        class _Conn:
+            def __init__(self, host, timeout=10, context=None):
+                self._auth = ""
+
+            def request(self, method, path, headers=None):
+                self._auth = (headers or {}).get("x-api-key", "")
+                if error is not None:
+                    raise error
+
+            def getresponse(self):
+                if self._auth.encode() not in (b"sk-real-key",):
+                    return _FakeResponse(401 if status is None else status)
+                return _FakeResponse(200)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(http.client, "HTTPSConnection", _Conn)
+        ok = validate_key(
+            root, store, NAME, provider="anthropic",
+            estate_id=ESTATE, kernel_version=KERNEL,
+        )
+        assert not ok
+        rows = [r for r in _chain(root) if any(expected_class in ref for ref in r.payload_refs)]
+        assert len(rows) == 1, f"{expected_class}: the inconclusive control must be durable"
+
+    run_case(None, 302, "control-inconclusive-http-302-redirect")
+    run_case(socket.timeout(), None, "control-inconclusive-timeout")
+    assert "discrimination is unproven" in failure_next_move("control-inconclusive-timeout")
+    assert "4xx" in failure_next_move("control-inconclusive-http-502")

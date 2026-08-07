@@ -285,6 +285,20 @@ def failure_next_move(failure_class: str) -> str:
     classes, which are per-status data, not prose to parse."""
     if failure_class in FAILURE_NEXT_MOVES:
         return FAILURE_NEXT_MOVES[failure_class]
+    if failure_class.startswith("control-inconclusive-"):
+        cause = failure_class.removeprefix("control-inconclusive-")
+        if cause.startswith("http-"):
+            return (
+                f"the negative control was answered {cause.removeprefix('http-')} rather than a "
+                "clean 4xx refusal — the endpoint's discrimination is unproven; inspect the "
+                "endpoint, then retry"
+            )
+        inner = FAILURE_NEXT_MOVES.get(cause, FAILURE_NEXT_MOVES["unknown"])
+        return (
+            f"the negative control did not produce a clean refusal ({cause}) — the endpoint's "
+            f"discrimination is unproven, so nothing about the real key is established; resolve "
+            f"the control's own failure first: {inner}"
+        )
     if failure_class == "endpoint-indiscriminate":
         return (
             "the endpoint answered success to a deliberately invalid key — this probe path "
@@ -529,6 +543,25 @@ def validate_key(
                 "key-validation-failed:endpoint-indiscriminate",
             ],
             receipt_id=f"key-validation-indiscriminate-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
+        return False
+    if not (control.failure or "").startswith("http-4"):
+        # Only a clean 4xx on garbage PROVES discrimination (codex r12): a timeout, 5xx, or
+        # redirect says nothing about whether the endpoint checks keys — the control's own
+        # failure is carried, classified, so the operator fixes the control path first.
+        cause = control.failure or "unknown"
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"egress-host:{endpoint.host}",
+                f"key-validation-failed:control-inconclusive-{cause}",
+            ],
+            receipt_id=f"key-validation-inconclusive-{name}-{len(_rows(root, name))}",
             observed_at=observed_at,
         )
         return False
