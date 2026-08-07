@@ -323,7 +323,7 @@ def test_substrate_accounting_is_honest_today() -> None:
     Updated at the tally act (2026-08-07): R2.3 (reins#12), R2.4 (reins#13), and the
     ratification/degradation machinery (reins#7) are ON MAIN, so key-capture and first-consent
     count built and first-stipulations advances to partial (R2.6 landed; R2.5 and
-    R2.7/R2.11–R2.13 have not). The accounting moves only when main does.
+    R2.7/R2.11-R2.13 have not). The accounting moves only when main does.
     """
     states = {m.id: m.substrate_state for m in SEGMENT_MEMBERS}
     assert states["key-capture"] == "built"
