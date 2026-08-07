@@ -19,7 +19,6 @@ from k0.egress_consent import EgressAllowlist
 from k0.egress_consent import accept as accept_egress
 from k0.egress_consent import elicit_allowlist
 from k0.key_capture import (
-    KeyProbe,
     MemoryStore,
     SecretSupply,
     decline_capture,
@@ -100,14 +99,17 @@ def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Ex
                 record.append(("connect", host))
 
         def request(self, method: str, path: str, headers: dict | None = None) -> None:
-            self._auth = (headers or {}).get("Authorization", "")
+            raw = (headers or {}).get("Authorization") or (headers or {}).get("x-api-key", "")
+            self._auth = raw.removeprefix("Bearer ")
             if record is not None:
                 record.append(("request", self._host, path, self._auth))
             if error is not None:
                 raise error
 
         def getresponse(self):
-            if "k0-negative-control-" in self._auth:
+            # The control key is unmarked random hex; the double's rule is the test-side
+            # mirror: real-looking test keys are sk-*, the control is not.
+            if not self._auth.startswith("sk-"):
                 return _FakeResponse(401)
             return _FakeResponse(status)
 
@@ -194,7 +196,7 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path, monkeypatch: pyte
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, path="/v1/models"),
+        provider="anthropic",
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -222,7 +224,7 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, m
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, path="/v1/models"),
+        provider="anthropic",
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -253,7 +255,7 @@ def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_pa
             root,
             store,
             NAME,
-            probe=KeyProbe(host=HOST, path="/v1/models"),
+            provider="anthropic",
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -278,7 +280,7 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             root,
             store,
             NAME,
-            probe=KeyProbe(host=HOST, path="/v1/models"),
+            provider="anthropic",
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -299,7 +301,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path, monkeypatch: pyt
         root,
         store,
         NAME,
-        probe=KeyProbe(host=HOST, path="/v1/models"),
+        provider="anthropic",
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -322,7 +324,7 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     _patch_wire(monkeypatch)
     store.put(NAME, b"sk-first-value")
     assert validate_key(
-        root, store, NAME, probe=KeyProbe(host=HOST, path="/v1/models"),
+        root, store, NAME, provider="anthropic",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert supply_state(root, store, NAME) is SecretSupply.VALIDATED
@@ -453,13 +455,13 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
     _patch_wire(monkeypatch, record=dialed)
     with pytest.raises(EgressConsentError, match="no egress allowlist is ratified"):
         validate_key(
-            root, store, NAME, probe=KeyProbe(host="api.never-consented.example", path="/v1/models"),
+            root, store, NAME, provider="openai",
             estate_id=ESTATE, kernel_version=KERNEL,
         )
     assert dialed == [], "the wire — the transmitting act — was never touched"
     refused = [
         r for r in _chain(root)
-        if r.act.value == "refused" and "egress-host:api.never-consented.example" in r.payload_refs
+        if r.act.value == "refused" and "egress-host:api.openai.com" in r.payload_refs
     ]
     assert len(refused) == 1, (
         "the refused attempt is durable (claude r7): the ledger shows something tried to "
@@ -483,18 +485,18 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
     _patch_wire(monkeypatch, record=dialed)
     ok = validate_key(
         root, store, NAME,
-        probe=KeyProbe(host=HOST, path="/v1/models"),
+        provider="anthropic",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert ok
-    assert ("connect", HOST) in dialed and ("request", HOST, "/v1/models", "Bearer sk-canary-value") in dialed, (
+    assert ("connect", HOST) in dialed and ("request", HOST, "/v1/models", "sk-canary-value") in dialed, (
         "the host the consent check evaluated is the host the kernel's transport dialed"
     )
     requests = [r for r in dialed if r[0] == "request"]
-    assert requests[0][3].startswith("Bearer k0-negative-control-") and requests[0][3] != f"Bearer sk-canary-value", (
-        "the negative control ran first, with an UNPREDICTABLE invalid key (codex r9)"
+    assert not requests[0][3].startswith("sk-"), (
+        "the negative control ran first, with an UNMARKED random invalid key (codex r9/r10)"
     )
-    assert requests[1][3] == "Bearer sk-canary-value"
+    assert requests[1][3] == "sk-canary-value"
 
 
 def test_the_wire_has_no_injection_seam() -> None:
@@ -510,10 +512,15 @@ def test_the_wire_has_no_injection_seam() -> None:
     assert callable(https_probe_transport)
     import dataclasses
 
-    probe_fields = {f.name for f in dataclasses.fields(KeyProbe)}
-    assert probe_fields == {"host", "path"}, (
-        "the probe is a descriptor — a callable field would be caller code on the wire"
+    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, ProbeEndpoint
+
+    assert set(PROVIDER_PROBE_ENDPOINTS) == {"anthropic", "openai"}, (
+        "the sanctioned-provider table changed — a deliberate act, not a drive-by"
     )
+    assert all(
+        {f.name for f in dataclasses.fields(e)} == {"host", "path", "auth_scheme", "extra_headers"}
+        for e in PROVIDER_PROBE_ENDPOINTS.values()
+    ), "endpoints are data — a callable field would be caller code on the wire"
 
 
 def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -528,8 +535,8 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch:
     # _FakeResponse carries no request-id header -> server token "unknown"
     out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
     assert out.evidence == "https-status:200:server:unknown" and out.failure is None
-    assert ("request", HOST, "/v1/models", "Bearer sk-bearer-value") in record, (
-        "the key rides the Authorization header and nowhere else"
+    assert ("request", HOST, "/v1/models", "sk-bearer-value") in record, (
+        "the key rides the provider's auth header and nowhere else"
     )
 
     out = https_probe_transport.__wrapped__ if hasattr(https_probe_transport, "__wrapped__") else None
@@ -545,7 +552,7 @@ def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch:
     assert https_probe_transport(HOST, "/v1/models", b"x").failure == "connection-refused"
 
 
-def test_remaining_transport_and_descriptor_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The rest of the wire vocabulary (codex r6): each failure class classifies, and the
     descriptor refuses bad shapes at construction."""
     import ssl
@@ -553,20 +560,21 @@ def test_remaining_transport_and_descriptor_branches(monkeypatch: pytest.MonkeyP
     from k0.key_capture import failure_next_move, https_probe_transport
 
     _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
-    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "tls-error"
+    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "tls-error"
 
     _patch_wire(monkeypatch, error=OSError("reset"))
-    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "transport-error"
+    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "transport-error"
 
     _patch_wire(monkeypatch, status=503)
-    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "http-503"
+    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "http-503"
 
     assert https_probe_transport(HOST, "/v1/models", b"\xff\xfe").failure == "key-not-utf8"
 
-    with pytest.raises(ValueError, match="not an exact hostname"):
-        KeyProbe(host="UPPER.example", path="/v1/models")
-    with pytest.raises(ValueError, match="absolute URL path"):
-        KeyProbe(host=HOST, path="no-leading-slash")
+    with pytest.raises(ValueError, match="not a sanctioned provider"):
+        validate_key(
+            _root(tmp_path), MemoryStore(), NAME, provider="some-random-provider",
+            estate_id=ESTATE, kernel_version=KERNEL,
+        )
 
     assert "expired" in failure_next_move("http-401")
     assert "theirs" in failure_next_move("http-503")
@@ -650,7 +658,7 @@ def test_an_indiscriminate_endpoint_can_validate_nothing(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(http.client, "HTTPSConnection", _LaxConn)
     ok = validate_key(
-        root, store, NAME, probe=KeyProbe(host=HOST, path="/v1/models"),
+        root, store, NAME, provider="anthropic",
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert not ok

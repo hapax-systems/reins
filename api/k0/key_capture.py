@@ -167,36 +167,40 @@ class PassStore:
 
 
 @dataclass(frozen=True)
-class KeyProbe:
-    """The validation probe as a DESCRIPTOR: host and path, nothing else (r3/r4 criticals).
-
-    A callable field can dial anywhere, so there is no callable here. The destination is data,
-    the consent check reads it, and the kernel's own transport dials it — the caller never
-    supplies code that touches the wire. Host grammar is the egress allowlist's own: what you
-    cannot name, you cannot consent to, and what is not consented is never dialed.
-    """
+class ProbeEndpoint:
+    """Where a provider's key is proven: host, path, auth shape — REGISTRY DATA, never caller
+    input (r9/r10 criticals: a caller-selected path or host can point at an endpoint that
+    cannot discriminate, and consent is then anchored to nothing)."""
 
     host: str
     path: str
-
-    def __post_init__(self) -> None:
-        if not _HOST_GRAMMAR.match(self.host):
-            raise ValueError(f"{self.host!r}: not an exact hostname — consent names hosts")
-        if not self.path.startswith("/") or " " in self.path:
-            raise ValueError(f"{self.path!r}: a probe path is an absolute URL path")
+    auth_scheme: str  # "bearer" | "x-api-key"
+    extra_headers: tuple[tuple[str, str], ...] = ()
 
 
-_HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
+#: The sanctioned providers and the endpoints that actually check authorization on them. A
+#: provider enters this table only when its validation endpoint is KNOWN to refuse invalid
+#: keys; the per-call negative control re-proves that property on every run.
+PROVIDER_PROBE_ENDPOINTS: dict[str, ProbeEndpoint] = {
+    "anthropic": ProbeEndpoint(
+        "api.anthropic.com",
+        "/v1/models",
+        "x-api-key",
+        (("anthropic-version", "2023-06-01"),),
+    ),
+    "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer"),
+}
+
 
 def _negative_control_key() -> bytes:
-    """The deliberately-invalid control key — UNPREDICTABLE per call (codex r9 critical).
+    """The deliberately-invalid control key — random and UNMARKED (codex r9/r10).
 
-    A fixed public constant can be hardcoded around: an endpoint that refuses exactly that
-    string and accepts everything else would 'validate' any garbage. A random per-call control
-    forces the endpoint to actually check authorization to pass. Prefixed so a ledger reader
-    can recognize the control for what it is.
+    A fixed or prefix-shaped control can be selector-bypassed: an endpoint that refuses exactly
+    the published shape and accepts all other garbage would 'validate' anything. An unmarked
+    random value is indistinguishable from a real key to the endpoint, so refusing it proves
+    the endpoint actually checks.
     """
-    return f"k0-negative-control-{secrets.token_hex(16)}".encode("ascii")
+    return __import__("secrets").token_hex(24).encode("ascii")
 
 
 @dataclass(frozen=True)
@@ -207,7 +211,9 @@ class ProbeOutcome:
     failure: str | None
 
 
-def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
+def https_probe_transport(
+    host: str, path: str, value: bytes, auth_scheme: str = "bearer", extra_headers: tuple[tuple[str, str], ...] = ()
+) -> ProbeOutcome:
     """THE KERNEL'S OWN WIRE. There is no injection seam: `validate_key` calls this, always.
     Tests patch the stdlib boundary (http.client.HTTPSConnection), not this module's surface.
 
@@ -226,7 +232,12 @@ def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
     # makes, visible to a reader and capturable by a test double.
     conn = http.client.HTTPSConnection(host, timeout=10, context=ssl.create_default_context())
     try:
-        conn.request("GET", path, headers={"Authorization": f"Bearer {value.decode('utf-8')}"})
+        if auth_scheme == "x-api-key":
+            auth_headers = {"x-api-key": value.decode("utf-8")}
+        else:
+            auth_headers = {"Authorization": f"Bearer {value.decode('utf-8')}"}
+        headers = {**auth_headers, **dict(extra_headers)}
+        conn.request("GET", path, headers=headers)
         response = conn.getresponse()
         response.read()
     except socket.timeout:
@@ -432,7 +443,7 @@ def validate_key(
     store: SecretStore,
     name: str,
     *,
-    probe: KeyProbe,
+    provider: str,
     estate_id: str,
     kernel_version: str,
     observed_at: datetime | None = None,
@@ -440,7 +451,7 @@ def validate_key(
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
     The probe TRANSMITS — a validation ping is the kernel's one real egress seam today — so it
-    is gated: `require_egress(root, probe.host)` runs before the probe is ever invoked, and a
+    is gated: `require_egress(root, endpoint.host)` runs before the probe is ever invoked, and a
     destination the operator has not consented to is refused, never dialed. The host is read
     FROM the probe (one object, one truth — no separate argument to disagree with it). The
     probe receives the value in memory; this module never transmits itself. The probe returns
@@ -451,7 +462,7 @@ def validate_key(
     silent failure would let a wrong key burn retries forever.
 
     THE WIRE IS THE KERNEL'S, WITH NO INJECTION SEAM (r4/r5/r6 rounds): the probe is a
-    descriptor (host, path — data, never code), consent is checked against `probe.host`, and
+    descriptor (host, path — data, never code), consent is checked against `endpoint.host`, and
     the dial is ALWAYS this module's own stdlib HTTPS transport with that same attribute.
     `validate_key` takes no transport argument — there is no caller-supplied code anywhere on
     the transmission path, so the consented destination is the dialed destination by
@@ -460,13 +471,19 @@ def validate_key(
     witness. This is descriptor-shaped and consent-sanctioned — the R3.12 doctrine forbids
     ad-hoc raw clients, not the kernel's own minimal one.
     """
+    endpoint = PROVIDER_PROBE_ENDPOINTS.get(provider)
+    if endpoint is None:
+        raise ValueError(
+            f"{provider!r}: not a sanctioned provider — the probe endpoint is registry data, "
+            "never caller input, and an unknown provider has none"
+        )
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
     try:
-        require_egress(root, probe.host)
+        require_egress(root, endpoint.host)
     except EgressConsentError:
         # A refused attempt is durable (claude r7): an operator who never ran the ceremony can
         # see that something TRIED to validate against an unconsented host. The row names the
@@ -478,7 +495,7 @@ def validate_key(
             estate_id=estate_id,
             kernel_version=kernel_version,
             payload_refs=[
-                f"egress-host:{probe.host}",
+                f"egress-host:{endpoint.host}",
                 "egress-attempt:validation-refused-by-consent-gate",
             ],
             receipt_id=f"egress-refused-{name}-{len(load_chain(root))}",
@@ -494,7 +511,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(probe.host, probe.path, _negative_control_key())
+    control = https_probe_transport(endpoint.host, endpoint.path, _negative_control_key(), endpoint.auth_scheme, endpoint.extra_headers)
     if control.evidence is not None:
         _append_row(
             root,
@@ -503,14 +520,14 @@ def validate_key(
             kernel_version=kernel_version,
             payload_refs=[
                 f"k0-secret:{name}",
-                f"egress-host:{probe.host}",
+                f"egress-host:{endpoint.host}",
                 "key-validation-failed:endpoint-indiscriminate",
             ],
             receipt_id=f"key-validation-indiscriminate-{name}-{len(_rows(root, name))}",
             observed_at=observed_at,
         )
         return False
-    outcome = https_probe_transport(probe.host, probe.path, value)
+    outcome = https_probe_transport(endpoint.host, endpoint.path, value, endpoint.auth_scheme, endpoint.extra_headers)
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout
         # and a 401 are different problems with different next moves), the consented host, and
@@ -522,7 +539,7 @@ def validate_key(
             kernel_version=kernel_version,
             payload_refs=[
                 f"k0-secret:{name}",
-                f"egress-host:{probe.host}",
+                f"egress-host:{endpoint.host}",
                 f"key-validation-failed:{outcome.failure or 'unknown'}",
             ],
             receipt_id=f"key-validation-failed-{name}-{len(_rows(root, name))}",
@@ -537,7 +554,7 @@ def validate_key(
         kernel_version=kernel_version,
         payload_refs=[
             f"k0-secret:{name}",
-            f"egress-host:{probe.host}",
+            f"egress-host:{endpoint.host}",
             f"key-validation:sha256:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()[:16]}",
             # The receipt binds the EXACT bytes proven to work. sha256 over a provider key is
             # identification, not disclosure — the value is high-entropy, so its digest is not
