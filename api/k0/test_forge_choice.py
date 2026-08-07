@@ -138,3 +138,79 @@ def test_amendment_surfaces_as_data(tmp_path: Path) -> None:
     got = ratified_forge(root, allow_unauthenticated=True)
     assert got.choice is ForgeChoice.FORGE_AGNOSTIC, "the latest consent governs"
     assert got.amendments == 1, "the override is visible, never silent"
+
+
+def test_the_refusal_branches(tmp_path: Path) -> None:
+    """Every loud path (codex/claude r1 majors): chain break, digest-less row, unreadable body,
+    and an unauthenticating signature each refuse with their own words."""
+    import json as _json
+
+    from bootstrap_receipt import (
+        BootstrapAct,
+        BootstrapPhase,
+        BootstrapReceipt,
+        EvidenceStatus,
+        RECEIPT_CHAIN_FILENAME,
+        load_chain,
+    )
+
+    # 1. chain break: forge a middle row so the next row's prev-link no longer matches
+    root = _root(tmp_path / "c1") if False else None
+    sub = tmp_path / "c1"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, GITHUB, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, GITHUB, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = chain_path.read_text(encoding="utf-8").splitlines()
+    forged = _json.loads(rows[1])
+    forged["payload_refs"] = ["stipulation:sha256:" + "f" * 64]
+    rows[1] = _json.dumps(forged)
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    with pytest.raises(ForgeConsentError, match="fails verification"):
+        ratified_forge(root, allow_unauthenticated=True)
+
+    # 2. digest-less row: a ratified forge row pinning nothing
+    sub = tmp_path / "c2"
+    sub.mkdir()
+    root = _root(sub)
+    chain = load_chain(root)
+    append_receipt(
+        root,
+        BootstrapReceipt(
+            receipt_id="forge-row-pinning-nothing",
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            phase=BootstrapPhase.STIPULATION_RATIFY,
+            act=BootstrapAct.RATIFIED,
+            payload_refs=["ratification-sig:forge-choice.github-only-ceiling.0000000000000000"],
+            evidence_status=EvidenceStatus.OBSERVED,
+            prev_receipt_hash=chain[-1].receipt_hash(),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    with pytest.raises(ForgeConsentError, match="pins NO artifact"):
+        ratified_forge(root, allow_unauthenticated=True)
+
+    # 3. unreadable body
+    sub = tmp_path / "c3"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, GITHUB, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, GITHUB, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    (root / SIGNATURE_DIRNAME / f"{GITHUB.stipulation_id()}.body").unlink()
+    with pytest.raises(ForgeConsentError, match="cannot be read"):
+        ratified_forge(root, allow_unauthenticated=True)
+
+    # 4. signature failure on the authenticated path
+    sub = tmp_path / "c4"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, GITHUB, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, GITHUB, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    bad = {**_materials(sub, key), "principal": "somebody-else@test"}
+    with pytest.raises(ForgeConsentError, match="does not verify"):
+        ratified_forge(root, **bad)

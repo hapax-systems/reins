@@ -17,7 +17,10 @@ recorded consolidation follow-up, not a third reinvention by silence):
     durable before the consent that pins it, verified against the chain at every read.
   * `ratified_forge(root, ...)` is the ONLY legal runtime source of the choice: unratified
     renders dark (never a default forge), authentication status is data, and the hash-only read
-    requires an explicit opt-in.
+    requires an explicit opt-in. HONESTY NOTE (codex r1): no consumer reads this yet — the
+    rail-bearing consumers arrive with the delivery work, and the "only legal source" claim is
+    this kernel's law, witnessed here only by the ceremony round-trip. When a consumer lands,
+    its read is the integration witness.
 """
 
 from __future__ import annotations
