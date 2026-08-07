@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -144,6 +145,11 @@ class Degradation:
         re-proposal of the identical body is still correctly refused as a duplicate.
         """
         stem = f"degradation.{self.subject}".lower().replace("_", "-")[:48]
+        # The id becomes a filename and a receipt ref, so every character the ref grammar
+        # forbids is folded to '-' HERE, at minting — a subject like "review floor" or
+        # "api/reviews" must not travel downstream to die inside Stipulation.__post_init__
+        # with an error that names the id instead of the subject that caused it.
+        stem = re.sub(r"[^a-z0-9.-]+", "-", stem).strip("-")
         return f"{stem}.{self.digest_short()}"
 
     def digest_short(self) -> str:

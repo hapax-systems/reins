@@ -633,3 +633,23 @@ def test_every_unreadable_body_refuses_and_carries_a_legal_next_move(
         # Restore read permission or tmp_path teardown fails on the 0o000 case.
         if body_path.exists():
             body_path.chmod(0o600)
+
+
+def test_a_subject_with_unfriendly_characters_still_mints_a_usable_id() -> None:
+    """The id is derived, so the DERIVATION must absorb what the ref grammar forbids.
+
+    `Stipulation.__post_init__` rejects ids outside ^[a-z][a-z0-9._-]{2,63}$ — correctly, the id
+    becomes a filename and a receipt ref. But a subject like "review floor" or "api/reviews" is
+    a legitimate thing to degrade, and sending it downstream to die on the grammar there surfaces
+    an error about the ID when the operator asked about a SUBJECT. Folding happens at minting.
+    """
+    for subject in ("review floor", "api/reviews", "déjà vu", "UPPER  case__mix"):
+        d = Degradation(
+            subject=subject,
+            level=Lifecycle.DEGRADED,
+            why="w",
+            tradeoff="t",
+            lift_condition="l",
+        )
+        stip = d.stipulation()  # must not raise: minting absorbs the subject
+        assert stip.stipulation_id.startswith("degradation."), stip.stipulation_id
