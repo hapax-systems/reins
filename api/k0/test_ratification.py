@@ -137,6 +137,36 @@ def test_a_ratification_cannot_be_invented_without_a_proposal(tmp_path: Path) ->
     assert exc.value.refusal.legal_next, "INV-3: every refusal leaves a legal next move"
 
 
+def test_ratifying_a_different_artifact_than_the_one_proposed_is_refused(tmp_path: Path) -> None:
+    """The id is not the consent — the BYTES are. Found in review (codex, round four).
+
+    `ratify` used to check only that the id appeared among the pending proposals. Proposing body A
+    and then ratifying body B under the same id would sail through: the signature verifies (it IS
+    over B), the pending row clears, and the chain presents B as the answer to A — consent the
+    sovereign never gave, witnessed as if given. The proposal pins a digest; the ratification must
+    sign that digest or nothing.
+    """
+    root = _root(tmp_path)
+    key, _, _ = _keypair(tmp_path)
+    asked = _stip(b"axiom: single_user\n")
+    swapped = _stip(b"axiom: single_user, except on tuesdays\n")
+    assert asked.stipulation_id == swapped.stipulation_id, (
+        "fixture premise: the substitution keeps the id and changes the bytes"
+    )
+    assert asked.ref() != swapped.ref(), "fixture premise: the pinned digests differ"
+
+    propose(root, asked, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(RatificationError, match="different artifact") as exc:
+        ratify(root, swapped, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
+
+    assert pending(root) == (asked.stipulation_id,), (
+        "a refused substitution must leave the genuine proposal pending"
+    )
+    ratify(root, asked, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert pending(root) == (), "the artifact that WAS proposed still ratifies cleanly"
+
+
 def test_consent_is_given_once(tmp_path: Path) -> None:
     """Two consents for one act make the ledger ambiguous about which one binds."""
     root = _root(tmp_path)

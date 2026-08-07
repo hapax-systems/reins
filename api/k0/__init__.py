@@ -36,8 +36,13 @@ each claim carries the command that re-establishes it, runnable from `api/`:
   ceremony progress really is DERIVED (no cursor field exists to desynchronise)
     uv run python -c "import k0.ratification as r; print(r.pending.__doc__)"
 
-  estate-independence, over the whole package, exempting nothing (ARMED — fails rather than
-  skipping if the token file is absent, so green is always evidence the scan ran)
+  estate-independence, over the whole package, exempting nothing, against the MATERIALIZED MERGE
+  RESULT with current main (the head tree alone proves nothing about integration; armed — fails
+  rather than skipping if the token file is absent, so green is always evidence the scan ran)
+    T=$(git merge-tree --write-tree origin/main HEAD) && D=$(mktemp -d) && \
+      git archive "$T" | tar -x -C "$D" && cp .estate-tokens "$D"/ && \
+      cd "$D"/api && K0_REQUIRE_ESTATE_SCAN=1 uv run --with pytest pytest k0/test_k0.py -q -k estate_independent
+  (the fast path, when main is already an ancestor of HEAD and the merge result IS the head tree)
     K0_REQUIRE_ESTATE_SCAN=1 uv run --with pytest pytest k0/test_k0.py -q -k estate_independent
 
   the export list agrees with the module in BOTH directions

@@ -333,7 +333,8 @@ def ratify(
                 teaches="k0.ratification-act: consent is given once, to exact bytes",
             ),
         )
-    if sid not in _proposed(chain):
+    proposed = _proposed(chain)
+    if sid not in proposed:
         raise RatificationError(
             f"{sid} was never proposed",
             Refusal(
@@ -345,6 +346,24 @@ def ratify(
                 ),
                 legal_next=f"propose({sid}) first, then ratify",
                 teaches="k0.ratification-act: an act is legible only against the request that prompted it",
+            ),
+        )
+    if proposed[sid] != stipulation.ref():
+        raise RatificationError(
+            f"{sid} was proposed under a different artifact",
+            Refusal(
+                gate="k0.ratification.ratify",
+                why=(
+                    f"the pending proposal pins {proposed[sid]} but this ratification signs "
+                    f"{stipulation.ref()} — the id matches and the bytes do not, so consent given "
+                    "to one artifact would be recorded against another: the chain would present B "
+                    "as the answer to A, with a signature that verifies cleanly."
+                ),
+                legal_next=(
+                    "ratify the stipulation whose digest the proposal pins, or supersede the "
+                    "pending row with the intended artifact and ratify that"
+                ),
+                teaches="k0.ratification-act: consent binds the exact proposed bytes, never the id alone",
             ),
         )
 
