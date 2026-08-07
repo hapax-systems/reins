@@ -1,4 +1,10 @@
-"""R2.2 — the deterministic pre-model segment, as DATA. DRAFT (spec is a ratification candidate).
+"""R2.2 — the deterministic pre-model segment, as DATA. RATIFIED by the operator-of-record.
+
+Ratification provenance: delegated by the operator on 2026-08-07 ("give me a firm rec on all
+rulings, then take them and proceed" — the R2.2 ratification was one of the rulings taken) and
+recorded in the task's session log (cc-task-first-init-r22-deterministic-pre-model-segment-20260806)
+the same day. The operator may amend or rescind with one word; the drift pin makes any such change
+diff-visible by construction.
 
 Lives beside the K0 manifest for the same reason the manifest lives inside the kernel: the segment
 must be able to attest itself. Before this module, "everything before the first legal model call is
@@ -32,8 +38,8 @@ HONESTY LAWS (review-hardened, 2026-08-06):
       to the chain-order receipt law and the ceremony driver, not to this file.
     * Substrate accounting counts only what is ON REINS MAIN. On-branch work is named as
       on_branch evidence and never licenses "partial".
-    * The mandatory-act tally is PENDING RATIFICATION (spec §8.3) and is therefore null, not a
-      guessed number frozen into a pin.
+    * The mandatory-act tally is pending the R2.3/R2.4 count act (spec §8.3; floor: 11 instances)
+      and is therefore null, not a guessed number frozen into a pin.
     * As of the declaration date: 3 members unbuilt, 2 partial, 3 built.
 """
 
@@ -440,7 +446,7 @@ def verify_minimality(segment: DeterministicSegment) -> None:
 assert set(EVIDENCE_LEGALITY) == set(SUBSTRATE_STATES)
 
 #: The canonical segment, verified at import. A drift pin that recomputes itself is not a pin,
-#: so R22_DRAFT_PIN is a literal; the suite recomputes and compares independently of import.
+#: so R22_RATIFIED_PIN is a literal; the suite recomputes and compares independently of import.
 DETERMINISTIC_SEGMENT = DeterministicSegment(
     version="r2.2-ratified-2026-08-07",
     members=SEGMENT_MEMBERS,
@@ -452,7 +458,7 @@ DETERMINISTIC_SEGMENT = DeterministicSegment(
     ratified=True,  # operator-of-record, 2026-08-07, recorded delegation
 )
 
-R22_DRAFT_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
+R22_RATIFIED_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
 
-SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN)
+SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_RATIFIED_PIN)
 verify_minimality(DETERMINISTIC_SEGMENT)

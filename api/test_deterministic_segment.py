@@ -18,7 +18,7 @@ import deterministic_segment as ds
 from deterministic_segment import (
     DETERMINISTIC_SEGMENT,
     EXCLUSIONS,
-    R22_DRAFT_PIN,
+    R22_RATIFIED_PIN,
     SEGMENT_MEMBERS,
     REQUIRED_MEMBER_IDS,
     SegmentViolation,
@@ -66,7 +66,7 @@ SCAN_FILE_FLOORS = {
 
 
 def test_canonical_segment_verifies() -> None:
-    assert verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN) == R22_DRAFT_PIN
+    assert verify(DETERMINISTIC_SEGMENT, expect_pin=R22_RATIFIED_PIN) == R22_RATIFIED_PIN
 
 
 #: The expected pin, anchored HERE as its own literal (review: claude PR#10 r2 blocker).
@@ -106,13 +106,13 @@ def test_pin_is_recomputed_independently_of_import() -> None:
     """Exec the module source with the import-time check neutralized and compare digests,
     so a coordinated data+pin edit cannot hide behind the import-time check."""
     source = (API_ROOT / "deterministic_segment.py").read_text(encoding="utf-8")
-    assert "expect_pin=R22_DRAFT_PIN" in source
-    neutralized = source.replace("expect_pin=R22_DRAFT_PIN", "expect_pin=None")
+    assert "expect_pin=R22_RATIFIED_PIN" in source
+    neutralized = source.replace("expect_pin=R22_RATIFIED_PIN", "expect_pin=None")
     namespace: dict[str, Any] = {}
     exec(compile(neutralized, "deterministic_segment.py", "exec"), namespace)
     recomputed = namespace["DETERMINISTIC_SEGMENT"].digest()
     assert recomputed == EXPECTED_PIN
-    assert R22_DRAFT_PIN == EXPECTED_PIN
+    assert R22_RATIFIED_PIN == EXPECTED_PIN
 
 
 def test_act_set_agrees_with_k0_manifest() -> None:
@@ -389,3 +389,34 @@ def test_scan_patterns_have_positive_controls(tmp_path: Path) -> None:
         http.read_text(),
         re.M,
     ), "bare HTTP-client import was not detected"
+
+
+def test_flipping_the_ratified_bit_moves_the_digest() -> None:
+    """Ratification is a deliberate, diff-visible act — so the bit must be PINNED, not decorative.
+
+    verify() never reads `ratified`; what governs the flag is the drift pin: flipping it changes
+    the canonical bytes, so an unauthorized flip fails the import-time check and the suite
+    (claude r1 major). The False arm is exercised here by construction.
+    """
+    flipped = replace(DETERMINISTIC_SEGMENT, ratified=False)
+    assert flipped.digest() != DETERMINISTIC_SEGMENT.digest()
+    with pytest.raises(SegmentViolation, match="drift pin mismatch"):
+        verify(flipped, expect_pin=R22_RATIFIED_PIN)
+
+
+def test_verify_rejects_an_empty_member_set() -> None:
+    with pytest.raises(SegmentViolation, match="no members"):
+        verify(replace(DETERMINISTIC_SEGMENT, members=()))
+
+
+def test_verify_rejects_a_member_without_graph_coverage() -> None:
+    uncovered = replace(SEGMENT_MEMBERS[0], r_nodes=())
+    members = (uncovered,) + SEGMENT_MEMBERS[1:]
+    with pytest.raises(SegmentViolation, match="no requirements-graph coverage"):
+        verify(replace(DETERMINISTIC_SEGMENT, members=members))
+
+
+def test_verify_rejects_an_exclusion_without_a_reason() -> None:
+    unreasonable = replace(EXCLUSIONS[0], reason="")
+    with pytest.raises(SegmentViolation, match="carries no reason"):
+        verify(replace(DETERMINISTIC_SEGMENT, exclusions=(unreasonable,) + EXCLUSIONS[1:]))
