@@ -71,7 +71,7 @@ def test_canonical_segment_verifies() -> None:
 
 #: The expected pin, anchored HERE as its own literal (review: claude PR#10 r2 blocker).
 #: A coordinated data edit must now also edit this file — two files, both diff-visible.
-EXPECTED_PIN = "f90a85643c46a9052b4c6adb72d2f026ea8a00bab25bb5ef009ba8adbf11a895"
+EXPECTED_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
 
 
 def test_canonical_content_matches_pinned_shape() -> None:
@@ -98,7 +98,7 @@ def test_canonical_content_matches_pinned_shape() -> None:
         "first-stipulations": "unbuilt",
     }
     assert seg.terminal_r_node == "R2.15"
-    assert seg.ratified is False
+    assert seg.ratified is True
     assert seg.mandatory_act_count is None
 
 
@@ -219,8 +219,8 @@ def test_tally_is_pending_ratification_today() -> None:
     assert DETERMINISTIC_SEGMENT.mandatory_act_count is None
 
 
-def test_ratified_flag_is_false_and_pinned() -> None:
-    assert DETERMINISTIC_SEGMENT.ratified is False
+def test_ratified_flag_is_true_and_pinned() -> None:
+    assert DETERMINISTIC_SEGMENT.ratified is True
     assert "ratified" in DETERMINISTIC_SEGMENT.canonical()
 
 

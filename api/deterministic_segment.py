@@ -442,17 +442,17 @@ assert set(EVIDENCE_LEGALITY) == set(SUBSTRATE_STATES)
 #: The canonical segment, verified at import. A drift pin that recomputes itself is not a pin,
 #: so R22_DRAFT_PIN is a literal; the suite recomputes and compares independently of import.
 DETERMINISTIC_SEGMENT = DeterministicSegment(
-    version="r2.2-draft-2026-08-06-r3",
+    version="r2.2-ratified-2026-08-07",
     members=SEGMENT_MEMBERS,
     exclusions=EXCLUSIONS,
     terminal_act_id=TERMINAL_ACT_ID,
     terminal_r_node=TERMINAL_R_NODE,
     transmit_class_law=TRANSMIT_CLASS_LAW,
-    mandatory_act_count=None,  # pending ratification (spec §8.3)
-    ratified=False,
+    mandatory_act_count=None,  # pending the R2.3/R2.4 act (floor: 11 instances)
+    ratified=True,  # operator-of-record, 2026-08-07, recorded delegation
 )
 
-R22_DRAFT_PIN = "f90a85643c46a9052b4c6adb72d2f026ea8a00bab25bb5ef009ba8adbf11a895"
+R22_DRAFT_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
 
 SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_DRAFT_PIN)
 verify_minimality(DETERMINISTIC_SEGMENT)
