@@ -236,7 +236,10 @@ def ratified_allowlist(root: Path) -> RatifiedEgress | None:
             raise TypeError("hosts is not a list of hostnames")
         return RatifiedEgress(
             allowlist=EgressAllowlist(hosts=tuple(hosts)),
-            amendments=len(_ratified_rows(root)) - 1,
+            # Count only rows that actually pin a consent artifact: a ratified egress row with
+            # no parseable digest claims nothing, and must not inflate the amendment count
+            # (claude r8).
+            amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
         )
     except (UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise EgressConsentError(
@@ -274,17 +277,31 @@ def require_egress(root: Path, host: str) -> None:
     but the only way to reach the wire (r2 criticals: a gate that is never invoked gates
     nothing).
     """
-    if egress_decision(root, host):
+    ratified = ratified_allowlist(root)
+    if ratified is None:
+        raise EgressConsentError(
+            f"{host}: no egress allowlist is ratified at all — the estate is dark, not broken",
+            Refusal(
+                gate="egress.default-deny",
+                why="nothing is consented, so everything is denied — darkness is the honest "
+                "state, and it is not the same answer as a corrupted artifact",
+                legal_next=(
+                    "elicit_allowlist + accept an allowlist naming the hosts the estate may "
+                    "reach (the consent ceremony), then retry"
+                ),
+            ),
+        )
+    if host in ratified.allowlist.hosts:
         return
     raise EgressConsentError(
-        f"{host}: no ratified egress allowlist names this host",
+        f"{host}: the ratified egress allowlist does not name this host",
         Refusal(
             gate="egress.default-deny",
-            why="the estate may not transmit where the operator has not consented — an absent "
-            "or unlisted host is a denial, never a guess",
+            why="the estate may not transmit where the operator has not consented — an "
+            "unlisted host is a denial, never a guess",
             legal_next=(
-                f"elicit_allowlist + accept an allowlist naming {host} (the consent ceremony), "
-                "then retry — or hold the act; dark is a legal state"
+                f"elicit_allowlist + accept a fresh allowlist adding {host} (an amendment is a "
+                "new consent), or hold the act; dark is a legal state"
             ),
         ),
     )

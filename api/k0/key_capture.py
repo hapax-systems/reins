@@ -187,6 +187,11 @@ class KeyProbe:
 
 _HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
 
+#: The deliberately-invalid key for the negative control. Constant, never derived from the real
+#: value: the control asks "does this endpoint refuse garbage?" and a garbage answer derived
+#: from the real key would leak structure about it.
+NEGATIVE_CONTROL_KEY = b"k0-negative-control-deliberately-invalid"
+
 
 @dataclass(frozen=True)
 class ProbeOutcome:
@@ -258,6 +263,11 @@ def failure_next_move(failure_class: str) -> str:
     classes, which are per-status data, not prose to parse."""
     if failure_class in FAILURE_NEXT_MOVES:
         return FAILURE_NEXT_MOVES[failure_class]
+    if failure_class == "endpoint-indiscriminate":
+        return (
+            "the endpoint answered success to a deliberately invalid key — this probe path "
+            "cannot validate anything; choose an endpoint that requires authorization"
+        )
     if failure_class.endswith("-redirect"):
         return (
             "the endpoint answered a redirect — do not follow it with a bearer token; establish "
@@ -475,6 +485,25 @@ def validate_key(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
+    # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
+    # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
+    # success to garbage can validate nothing, and the real probe must not run against it.
+    control = https_probe_transport(probe.host, probe.path, NEGATIVE_CONTROL_KEY)
+    if control.evidence is not None:
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"egress-host:{probe.host}",
+                "key-validation-failed:endpoint-indiscriminate",
+            ],
+            receipt_id=f"key-validation-indiscriminate-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
+        return False
     outcome = https_probe_transport(probe.host, probe.path, value)
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout

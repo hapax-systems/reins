@@ -90,18 +90,25 @@ def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Ex
     import http.client
 
     class _FakeConn:
+        """A DISCRIMINATING endpoint: the negative-control key is refused, everything else gets
+        the canned status — so the control actually controls."""
+
         def __init__(self, host: str, timeout: int = 10, context=None) -> None:
             self._host = host
+            self._auth = ""
             if record is not None:
                 record.append(("connect", host))
 
         def request(self, method: str, path: str, headers: dict | None = None) -> None:
+            self._auth = (headers or {}).get("Authorization", "")
             if record is not None:
-                record.append(("request", self._host, path, (headers or {}).get("Authorization", "")))
+                record.append(("request", self._host, path, self._auth))
             if error is not None:
                 raise error
 
         def getresponse(self):
+            if self._auth == "Bearer k0-negative-control-deliberately-invalid":
+                return _FakeResponse(401)
             return _FakeResponse(status)
 
         def close(self) -> None:
@@ -444,7 +451,7 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
 
     dialed: list[tuple] = []
     _patch_wire(monkeypatch, record=dialed)
-    with pytest.raises(EgressConsentError, match="no ratified egress allowlist"):
+    with pytest.raises(EgressConsentError, match="no egress allowlist is ratified"):
         validate_key(
             root, store, NAME, probe=KeyProbe(host="api.never-consented.example", path="/v1/models"),
             estate_id=ESTATE, kernel_version=KERNEL,
@@ -482,6 +489,10 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
     assert ok
     assert ("connect", HOST) in dialed and ("request", HOST, "/v1/models", "Bearer sk-canary-value") in dialed, (
         "the host the consent check evaluated is the host the kernel's transport dialed"
+    )
+    assert ("request", HOST, "/v1/models", "Bearer k0-negative-control-deliberately-invalid") in dialed, (
+        "the negative control ran first — a 2xx only proves anything against an endpoint that "
+        "refuses garbage (codex r8)"
     )
 
 
@@ -600,3 +611,49 @@ def test_the_tls_context_verifies(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_REQUIRED
     assert ctx.check_hostname
+
+
+def test_an_indiscriminate_endpoint_can_validate_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If garbage gets 2xx, the real key's 2xx is noise (codex r8 critical): the validation
+    fails as endpoint-indiscriminate, the row is durable, and the name stays unvalidated."""
+    import http.client
+
+    from k0.key_capture import failure_next_move
+
+    root = _root(tmp_path)
+    store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
+    store.put(NAME, b"sk-real-key")
+
+    class _LaxResponse:
+        status = 200
+
+        def read(self) -> bytes:
+            return b"{}"
+
+        def getheader(self, name: str):
+            return None
+
+    class _LaxConn:
+        def __init__(self, host: str, timeout: int = 10, context=None) -> None:
+            pass
+
+        def request(self, *a, **k) -> None:
+            pass
+
+        def getresponse(self):
+            return _LaxResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _LaxConn)
+    ok = validate_key(
+        root, store, NAME, probe=KeyProbe(host=HOST, path="/v1/models"),
+        estate_id=ESTATE, kernel_version=KERNEL,
+    )
+    assert not ok
+    assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED
+    rows = [r for r in _chain(root) if any("endpoint-indiscriminate" in ref for ref in r.payload_refs)]
+    assert len(rows) == 1
+    assert "requires authorization" in failure_next_move("endpoint-indiscriminate")
