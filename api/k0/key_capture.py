@@ -583,6 +583,12 @@ def validate_key(
         # 429 is a rate limit, a timeout is the network. Anything but the authentication
         # refusal is inconclusive, and the control's own classified cause is carried so the
         # operator fixes that first.
+        #
+        # SEAT SPLIT, recorded: glm r17 would also accept 403. The disagreement is real; the
+        # safe direction is never-false-validate — a provider whose only refusal is 403 reads
+        # INCONCLUSIVE here, and inconclusive never mints supply. Tightening later (if a
+        # sanctioned provider proves 403-only) is one line; loosening after a false validation
+        # is a credential leak.
         cause = control.failure or "unknown"
         _append_row(
             root,

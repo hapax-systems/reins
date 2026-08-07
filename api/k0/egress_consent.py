@@ -97,7 +97,10 @@ class EgressAllowlist:
         ).encode("utf-8")
 
     def digest_short(self) -> str:
-        return hashlib.sha256(self.body()).hexdigest()[:8]
+        # 64 bits, not 32 (codex r17 major): a consent-artifact identifier collides by birthday
+        # at ~2^16 with 8 hex chars — too thin for a governance id. (degradation.py's [:8]
+        # predates this and is a recorded follow-up, not a precedent to copy.)
+        return hashlib.sha256(self.body()).hexdigest()[:16]
 
     def stipulation_id(self) -> str:
         return f"egress-allowlist.{self.digest_short()}"

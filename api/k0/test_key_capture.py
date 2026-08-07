@@ -794,3 +794,67 @@ def test_a_blanket_403_control_proves_nothing(tmp_path: Path, monkeypatch: pytes
     assert not ok
     rows = [r for r in _chain(root) if any("control-inconclusive-http-403" in ref for ref in r.payload_refs)]
     assert len(rows) == 1, "a blanket 403 is inconclusive, durable, classified"
+
+
+def test_the_wire_refuses_a_non_registry_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The membership guard, tested (claude r17): a caller-minted endpoint — even one naming a
+    consented host — is not a legal destination. Only registry data reaches the wire."""
+    from k0.key_capture import ProbeEndpoint, https_probe_transport
+
+    root = _root(tmp_path)
+    _consent_egress(root, _key(tmp_path))
+    dialed: list[tuple] = []
+    _patch_wire(monkeypatch, record=dialed)
+
+    forged = ProbeEndpoint("api.anthropic.com", "/v1/models", "x-api-key", "sk-ant-", (("anthropic-version", "2023-06-01"),))
+    # identical FIELDS, but not the registry object —
+    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS
+
+    assert forged == PROVIDER_PROBE_ENDPOINTS["anthropic"], "fixture premise: fields match"
+    assert forged in PROVIDER_PROBE_ENDPOINTS.values(), "equality holds — the guard admits it"
+    custom = ProbeEndpoint("api.anthropic.com", "/v1/messages", "x-api-key", "sk-ant-", ())
+    with pytest.raises(ValueError, match="registry"):
+        https_probe_transport(root, custom, b"sk-canary-value")
+    assert dialed == [], "a non-registry endpoint never reaches the wire"
+
+
+def test_the_bearer_scheme_and_extra_headers_reach_the_wire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Branch coverage on the transport's scheme/header handling (codex r17)."""
+    import http.client
+
+    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, https_probe_transport
+
+    root = _root(tmp_path)
+    # consent both provider hosts
+    from k0.egress_consent import EgressAllowlist
+    from k0.egress_consent import accept as accept_egress
+    from k0.egress_consent import elicit_allowlist
+
+    key = _key(tmp_path)
+    both = EgressAllowlist(hosts=("api.anthropic.com", "api.openai.com"))
+    elicit_allowlist(root, both, estate_id=ESTATE, kernel_version=KERNEL)
+    accept_egress(root, both, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    seen: list[dict] = []
+
+    class _Conn:
+        def __init__(self, host, timeout=10, context=None):
+            self._host = host
+
+        def request(self, method, path, headers=None) -> None:
+            seen.append({"host": self._host, "path": path, "headers": dict(headers or {})})
+
+        def getresponse(self):
+            return _FakeResponse(401)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _Conn)
+    https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["openai"], b"sk-x")
+    assert seen[0]["headers"].get("Authorization") == "Bearer sk-x"
+    https_probe_transport(root, PROVIDER_PROBE_ENDPOINTS["anthropic"], b"sk-ant-x")
+    assert seen[1]["headers"].get("x-api-key") == "sk-ant-x"
+    assert seen[1]["headers"].get("anthropic-version") == "2023-06-01", (
+        "the provider's extra headers ride the request"
+    )
