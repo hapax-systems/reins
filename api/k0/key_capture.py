@@ -140,12 +140,21 @@ class PassStore:
                 f"{name}: pass entries here are single-line — a multiline value would be "
                 "silently truncated by insert --echo, and a truncated key is a wrong key"
             )
-        subprocess.run(
-            ["pass", "insert", "--echo", "--force", self._path(name)],
-            input=value + b"\n",
-            capture_output=True,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                ["pass", "insert", "--echo", "--force", self._path(name)],
+                input=value + b"\n",
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            # CalledProcessError RETAINS the captured stdout/stderr, and a backend error can
+            # quote what it was fed. The failure surfaces as an exit code and nothing else
+            # (codex r3 major — the docstring's "no output attached" claim is now true).
+            raise RuntimeError(
+                f"pass insert {self._path(name)!r} failed (rc={exc.returncode}); "
+                "backend output deliberately suppressed"
+            ) from None
 
 
 def required_secrets(root: Path) -> tuple[str, ...]:
