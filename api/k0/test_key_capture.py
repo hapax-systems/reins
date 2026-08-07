@@ -750,3 +750,36 @@ def test_a_non_auth_4xx_control_proves_nothing_either(tmp_path: Path, monkeypatc
     assert not ok
     rows = [r for r in _chain(root) if any("control-inconclusive-http-404" in ref for ref in r.payload_refs)]
     assert len(rows) == 1, "a 404 on the control is inconclusive, durable, and classified"
+
+
+def test_a_blanket_403_control_proves_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 403 can be a WAF answering before the credential is even read (codex r14): only 401 is
+    the unambiguous authentication refusal."""
+    import http.client
+
+    root = _root(tmp_path)
+    store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
+    store.put(NAME, b"sk-real-key")
+
+    class _FourOhThree:
+        def __init__(self, host, timeout=10, context=None):
+            pass
+
+        def request(self, *a, **k) -> None:
+            pass
+
+        def getresponse(self):
+            return _FakeResponse(403)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _FourOhThree)
+    ok = validate_key(
+        root, store, NAME, provider="anthropic",
+        estate_id=ESTATE, kernel_version=KERNEL,
+    )
+    assert not ok
+    rows = [r for r in _chain(root) if any("control-inconclusive-http-403" in ref for ref in r.payload_refs)]
+    assert len(rows) == 1, "a blanket 403 is inconclusive, durable, classified"

@@ -320,10 +320,20 @@ def failure_next_move(failure_class: str) -> str:
         )
     if failure_class.startswith("http-"):
         status = failure_class.removeprefix("http-")
-        if status.startswith("4"):
+        if status in ("401", "403"):
             return (
                 f"the provider answered {status} — the key does not work (wrong, expired, or "
                 "revoked); capture a working key, then validate again"
+            )
+        if status == "404":
+            return "the provider answered 404 — the probe path is wrong; confirm the provider's validation endpoint"
+        if status == "429":
+            return "the provider answered 429 — rate-limited; wait, then retry — the key is unproven, not condemned"
+        if status.startswith("4"):
+            return (
+                f"the provider answered {status} — a request-level rejection, not necessarily "
+                "the key; inspect before recapturing (codex r14: 4xx is not automatically "
+                "'bad credential')"
             )
         if status.startswith("5"):
             return (
@@ -555,11 +565,12 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    if control.failure not in ("http-401", "http-403"):
-        # Only 401/403 on garbage PROVES discrimination (codex r12/r13): a 404 is a wrong
-        # path, a 429 is a rate limit, a timeout is the network — none of them is the endpoint
-        # checking the credential. Anything short of an authentication refusal is inconclusive,
-        # and the control's own classified cause is carried so the operator fixes that first.
+    if control.failure != "http-401":
+        # Only 401 on garbage PROVES discrimination (codex r14): a blanket 403 can be a WAF or
+        # an IP block answering without ever seeing the credential, a 404 is a wrong path, a
+        # 429 is a rate limit, a timeout is the network. Anything but the authentication
+        # refusal is inconclusive, and the control's own classified cause is carried so the
+        # operator fixes that first.
         cause = control.failure or "unknown"
         _append_row(
             root,
