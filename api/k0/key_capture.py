@@ -48,16 +48,13 @@ from bootstrap_receipt import (
     load_chain,
 )
 
+from .boot_profile import PROFILES, ratified_profile
+
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
 
-#: What each ratified boot profile requires of the secret store. The harness profile needs
-#: NOTHING captured — the sanctioned harness holds its own provider sign-in, and the kit never
-#: touches it. The hosted profile needs exactly one frontier key. Adding a profile without
-#: extending this table fails closed in `required_secrets`.
-PROFILE_SECRET_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "existing-agent-harness": (),
-    "hosted-model-kit-minimal": ("frontier-provider-key",),
-}
+#: AUTH_MATERIALIZE rows live here; the requirement DATA lives in the ratified boot profile's
+#: consented bytes (boot_profile.BootProfile.secret_requirements) — the secret set is generated
+#: from the ratified capability set literally, not by a config table in this module.
 
 
 class SecretSupply(StrEnum):
@@ -151,14 +148,27 @@ class PassStore:
         )
 
 
-def required_secrets(profile_id: str) -> tuple[str, ...]:
-    """The secret set GENERATED from a ratified boot profile. Unknown profiles fail closed."""
-    if profile_id not in PROFILE_SECRET_REQUIREMENTS:
+def required_secrets(root: Path) -> tuple[str, ...]:
+    """The secret set GENERATED from the ratified capability set — read off the chain.
+
+    The requirement is a field of the ratified boot profile's consented bytes, so this is not a
+    config lookup: it is the operator's signed answer to "what must be captured". No ratified
+    profile — or a ratified definition that is not the current one — fails closed: requirements
+    cannot be generated from a capability set whose current terms were never consented to.
+    """
+    ratified = ratified_profile(root)
+    if ratified is None:
         raise KeyError(
-            f"{profile_id}: no ratified profile by this id — a secret requirement cannot be "
-            "generated for a capability set that was never consented to"
+            "no ratified boot profile: there is no consented capability set to generate "
+            "secret requirements from"
         )
-    return PROFILE_SECRET_REQUIREMENTS[profile_id]
+    if not ratified.current:
+        raise KeyError(
+            f"{ratified.profile_id}: the ratified definition is not the current one — the "
+            "operator consented to older terms; re-ratify the current definition, then generate"
+        )
+    profile = PROFILES[ratified.profile_id]
+    return profile.secret_requirements
 
 
 def _append_row(

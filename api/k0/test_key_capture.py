@@ -31,6 +31,16 @@ KERNEL = "k0-test"
 NAME = "frontier-provider-key"
 
 
+def _key(tmp_path: Path) -> Path:
+    key = tmp_path / "ratifier_ed25519"
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "ratifier@test", "-f", str(key)],
+        check=True,
+        capture_output=True,
+    )
+    return key
+
+
 def _root(tmp_path: Path) -> Path:
     root = tmp_path / "root"
     root.mkdir()
@@ -46,17 +56,54 @@ def _root(tmp_path: Path) -> Path:
     return root
 
 
-def test_the_secret_set_is_generated_from_the_ratified_profile() -> None:
-    """The harness profile needs NOTHING captured — the sanctioned harness is the secret store
-    (access-bootstrap amendment). The hosted profile needs exactly one frontier key. An unknown
-    profile fails closed: no consented capability set, no requirements."""
-    assert required_secrets("existing-agent-harness") == ()
-    assert required_secrets("hosted-model-kit-minimal") == ("frontier-provider-key",)
-    with pytest.raises(KeyError, match="never consented to"):
-        required_secrets("a-profile-nobody-ratified")
-    assert set(PROFILES) == {"existing-agent-harness", "hosted-model-kit-minimal"}, (
-        "a profile was added without its secret-requirement row — extend the table deliberately"
+def test_the_secret_set_is_generated_from_the_ratified_profile(tmp_path: Path) -> None:
+    """The requirement is IN the ratified artifact, not in a config table (codex r2 critical).
+
+    The harness profile needs NOTHING captured — the sanctioned harness is the secret store
+    (access-bootstrap amendment). The hosted profile needs exactly one frontier key. No ratified
+    profile — or a stale one — fails closed: there is no consented capability set to read.
+    """
+    from dataclasses import replace
+
+    from k0.boot_profile import present
+    from k0.ratification import ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+
+    with pytest.raises(KeyError, match="no consented capability set"):
+        required_secrets(root)
+
+    harness = PROFILES["existing-agent-harness"]
+    present(root, harness, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, harness.stipulation(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert required_secrets(root) == (), (
+        "the harness IS the secret store for entitlement auth — nothing to capture"
     )
+
+    hosted = PROFILES["hosted-model-kit-minimal"]
+    present(root, hosted, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, hosted.stipulation(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert required_secrets(root) == ("frontier-provider-key",), (
+        "supersession by recency: the hosted floor's one frontier key is the requirement now"
+    )
+
+    stale = replace(hosted, tradeoffs=hosted.tradeoffs + ("a new term",))
+    present(root, stale, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stale.stipulation(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(KeyError, match="not the current one"):
+        required_secrets(root)
+
+
+def test_the_requirement_rides_inside_the_consented_bytes() -> None:
+    """The generation claim is literal: the secret set is a field of the ratified body."""
+    import json
+
+    for profile in PROFILES.values():
+        body = json.loads(profile.body())
+        assert body["secret_requirements"] == sorted(profile.secret_requirements), (
+            f"{profile.profile_id}: the requirement must be inside the bytes the operator signs"
+        )
 
 
 def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:

@@ -101,6 +101,7 @@ def test_the_stipulation_body_is_deterministic_and_digest_stable() -> None:
         fallback_policy=HARNESS.fallback_policy,
         freshness=HARNESS.freshness,
         tradeoffs=tuple(HARNESS.tradeoffs),
+        secret_requirements=tuple(HARNESS.secret_requirements),
     )
     assert again.body() == HARNESS.body(), "canonical JSON must be byte-stable across constructions"
     assert again.stipulation_id() == HARNESS.stipulation_id()
@@ -114,12 +115,12 @@ def test_the_stipulation_body_is_deterministic_and_digest_stable() -> None:
 #: red. If a profile's terms are amended ON PURPOSE, the amendment mints a new id and this pin
 #: moves with it, diff-visible, in the same commit — the review trail is the audit.
 EXPECTED_STIPULATION_IDS = {
-    "existing-agent-harness": "boot-profile.existing-agent-harness.7d3458d4",
-    "hosted-model-kit-minimal": "boot-profile.hosted-model-kit-minimal.5b7f97b8",
+    "existing-agent-harness": "boot-profile.existing-agent-harness.89baf6f9",
+    "hosted-model-kit-minimal": "boot-profile.hosted-model-kit-minimal.e422ed95",
 }
 EXPECTED_BODY_DIGESTS = {
-    "existing-agent-harness": "7d3458d47389f85843383bdef2c7bd67895b788fbd587ea12381b96efcb0df1e",
-    "hosted-model-kit-minimal": "5b7f97b80384039c7f63ffaf2b39f1db44bcc31fc23c13954b64c135cccc11be",
+    "existing-agent-harness": "89baf6f986af7b2b3cbbfca0ce5f20d91b98630299d0f3ab8b95e8236e1acbd9",
+    "hosted-model-kit-minimal": "e422ed9536f22319f7ae6ab2ae1688e1b57e83d42136cdfed053afcb7dde045e",
 }
 
 
