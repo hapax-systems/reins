@@ -373,3 +373,16 @@ def test_the_signature_is_verified_when_the_materials_are_supplied(tmp_path: Pat
         ratified_allowlist(
             root, allowed_signers=allowed, principal="somebody-else@test", scratch_dir=s2
         )
+
+
+def test_the_authentication_status_of_the_answer_is_data(tmp_path: Path) -> None:
+    """claude r21: the hash-only read must SAY it is unauthenticated — never silently skip."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    materials = _materials(tmp_path, key)
+    _consented(root, key)
+
+    unauthenticated = ratified_allowlist(root)
+    assert unauthenticated is not None and unauthenticated.signature_verified is False
+    authenticated = ratified_allowlist(root, **materials)
+    assert authenticated is not None and authenticated.signature_verified is True

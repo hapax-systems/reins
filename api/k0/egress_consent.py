@@ -183,6 +183,10 @@ class RatifiedEgress:
 
     allowlist: EgressAllowlist
     amendments: int
+    #: Whether the consent row was authenticated against the sovereign's key at read time.
+    #: False is not silent skipping — it is the answer's authentication status, as data, and
+    #: anything driving a decision from this object can see it (claude r21).
+    signature_verified: bool
 
 
 def ratified_allowlist(
@@ -216,7 +220,8 @@ def ratified_allowlist(
     if found is None:
         return None
     sid, receipt = found
-    if allowed_signers is not None and principal is not None and scratch_dir is not None:
+    materials_supplied = allowed_signers is not None and principal is not None and scratch_dir is not None
+    if materials_supplied:
         from .ratification import verify_ratifications
         from .refusal import RefusalError
 
@@ -228,7 +233,8 @@ def ratified_allowlist(
             why = dict(verdict.unverified).get(sid, "not present among the verified ratifications")
         except RefusalError as exc:
             ok = False
-            why = str(exc)
+            gate = getattr(getattr(exc, "refusal", None), "gate", None) or "ratifier"
+            why = f"the ratifier REFUSED ({gate}): {exc}"  # preserved, never collapsed (claude r21)
         if not ok:
             raise EgressConsentError(
                 f"{sid}: the ratification does not verify against the sovereign's key: {why}",
@@ -294,6 +300,7 @@ def ratified_allowlist(
         # no parseable digest claims nothing, and must not inflate the amendment count
         # (claude r8).
         amendments=sum(1 for r in _ratified_rows(root) if artifact_digest(r) is not None) - 1,
+        signature_verified=materials_supplied,
     )
 
 

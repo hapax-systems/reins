@@ -196,6 +196,13 @@ PROVIDER_PROBE_ENDPOINTS: Mapping[str, ProbeEndpoint] = MappingProxyType({
     "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer", "sk-"),
 })
 
+#: Captured AT IMPORT (codex r21): the guard reads this, never the public name — rebinding
+#: `PROVIDER_PROBE_ENDPOINTS` on the module would redirect readers but cannot redirect the
+#: wire. THE THREAT BOUNDARY, STATED: a hostile IN-PROCESS caller can monkeypatch anything,
+#: including require_egress itself; no Python structure prevents that, and none is claimed.
+#: These controls make the legal path the only natural one and every divergence deliberate.
+_SANCTIONED_ENDPOINTS: tuple[ProbeEndpoint, ...] = tuple(PROVIDER_PROBE_ENDPOINTS.values())
+
 
 def _negative_control_key(endpoint: ProbeEndpoint) -> bytes:
     """The deliberately-invalid control key — provider-SHAPED and random (r9/r10/r11).
@@ -232,7 +239,7 @@ def _https_probe_transport(
     # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
     # headers are caller-controlled content on the wire. Registry membership is verified here,
     # so the consented destination is the only reachable one.
-    if all(endpoint is not registered for registered in PROVIDER_PROBE_ENDPOINTS.values()):
+    if all(endpoint is not registered for registered in _SANCTIONED_ENDPOINTS):
         # IDENTITY, not equality (claude r20): with the registry immutable, the endpoint must BE
         # the registry's object — a caller rebuilding an equal one is shaping their own
         # destination, and that is not consent.
