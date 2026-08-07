@@ -167,11 +167,7 @@ def detect(
     if harnesses:
         out.append(Detection("existing-agent-harness", harnesses))
     keys = tuple(
-        f"env:{name} present (value unread)"
-        if environ.get(name)
-        else f"env:{name} present but EMPTY (not supply — a configured intent, not a working key)"
-        for name in KEY_MARKERS
-        if name in environ
+        f"env:{name} present (value unread)" for name in KEY_MARKERS if name in environ
     )
     if keys:
         out.append(Detection("hosted-model-kit-minimal", keys))

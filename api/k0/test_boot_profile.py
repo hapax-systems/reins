@@ -162,16 +162,18 @@ def test_a_redefined_profile_supersedes_and_the_stale_consent_is_reported(tmp_pa
     )
 
 
-def test_an_empty_valued_key_marker_is_present_but_honestly_not_supply() -> None:
-    """Presence semantics: a SET-but-empty variable is a configured intent, not a working key.
+def test_an_empty_valued_key_marker_still_counts_as_present() -> None:
+    """Presence semantics: membership in the environment is the observation — never the value.
 
-    Treating it as absent hides the operator's intent from the ceremony; treating it as supply
-    would ratify a floor that cannot stand. The evidence names the difference (codex r1 major).
+    A set-but-empty variable is a configured intent and must not be hidden from the ceremony
+    (codex r1 major); reading the value to qualify it would break the marker-presence-only
+    predicate (codex r2 major). `name in environ` satisfies both, and R2.3's working-key
+    validation receipt — not detection — is where "is this supply" gets answered.
     """
     found = detect(which=lambda name: None, environ={"ANTHROPIC_API_KEY": ""})
     assert len(found) == 1
     assert found[0].profile_id == "hosted-model-kit-minimal"
-    assert "EMPTY" in found[0].evidence[0], "an empty value must be rendered as not-supply"
+    assert found[0].evidence == ("env:ANTHROPIC_API_KEY present (value unread)",)
 
 
 def test_a_ratified_row_naming_an_unknown_profile_reads_uncurrent(tmp_path: Path) -> None:
