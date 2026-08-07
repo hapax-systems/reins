@@ -38,9 +38,10 @@ HONESTY LAWS (review-hardened, 2026-08-06):
       to the chain-order receipt law and the ceremony driver, not to this file.
     * Substrate accounting counts only what is ON REINS MAIN. On-branch work is named as
       on_branch evidence and never licenses "partial".
-    * The mandatory-act tally is pending the R2.3/R2.4 count act (spec §8.3; floor: 11 instances)
-      and is therefore null, not a guessed number frozen into a pin.
-    * As of the declaration date: 3 members unbuilt, 2 partial, 3 built.
+    * The mandatory-act tally is PERFORMED (spec §8.3; floor: 11 instances): 11, the exact
+      count of the membership's governed act instances, set 2026-08-07 with R2.3/R2.4 on main.
+    * As of the tally act (2026-08-07): 5 built, 2 partial (host-reconcile, first-stipulations),
+      1 unbuilt (install-verify).
 """
 
 from __future__ import annotations
@@ -188,27 +189,27 @@ SEGMENT_MEMBERS: tuple[SegmentElement, ...] = (
         phase="AUTH_MATERIALIZE",
         acts=("elicit", "mint"),
         r_nodes=("R2.3",),
-        substrate_state="unbuilt",
-        evidence_class="absent",
-        evidence="absent: portable store, guided capture, working-key validation receipt, decline path",
+        substrate_state="built",
+        evidence_class="landed",
+        evidence="landed: api/k0/key_capture.py on main (R2.3, reins#12) — backends, generated secret set, validation receipts, decline path",
     ),
     SegmentElement(
         id="first-consent",
         phase="AUTH_MATERIALIZE",
         acts=("elicit", "ratify"),
         r_nodes=("R2.4",),
-        substrate_state="partial",
+        substrate_state="built",
         evidence_class="landed",
-        evidence="AIR default-deny renderer landed and estate-free; ceremony step + consent receipt unbuilt",
+        evidence="landed: api/k0/egress_consent.py on main (R2.4, reins#13) — elicitation row, consent receipt, signature-verified default-deny gate on the wire",
     ),
     SegmentElement(
         id="first-stipulations",
         phase="STIPULATION_RATIFY",
         acts=("elicit", "ratify"),
         r_nodes=("R2.5", "R2.6", "R2.7", "R2.11", "R2.12", "R2.13"),
-        substrate_state="unbuilt",
-        evidence_class="on_branch",
-        evidence="on_branch: R2.8 ratification act + R2.6 degradation ledger on reins PR #7 (2026-08-06); not substrate until merged",
+        substrate_state="partial",
+        evidence_class="landed",
+        evidence="landed: ratification ceremony + R2.6 degradation ledger on main (reins#7, 2026-08-07); R2.5 axiom elicitation and R2.7/R2.11-R2.13 remain unbuilt",
     ),
 )
 
@@ -454,11 +455,14 @@ DETERMINISTIC_SEGMENT = DeterministicSegment(
     terminal_act_id=TERMINAL_ACT_ID,
     terminal_r_node=TERMINAL_R_NODE,
     transmit_class_law=TRANSMIT_CLASS_LAW,
-    mandatory_act_count=None,  # pending the R2.3/R2.4 act (floor: 11 instances)
+    # The tally act, performed 2026-08-07 after R2.3/R2.4 landed (spec §8.3): the membership
+    # executes exactly 11 governed act instances — the floor, met exactly. verify() refuses a
+    # count BELOW the membership's own instances, so this number cannot drift under the data.
+    mandatory_act_count=11,
     ratified=True,  # operator-of-record, 2026-08-07, recorded delegation
 )
 
-R22_RATIFIED_PIN = "157db7031f0e407f20e635db0aedd48218c5c9236c9a95bb81fb81cc7dba77ae"
+R22_RATIFIED_PIN = "2be6b5a018fce1d92655b6931382a5b3ae1a283007bab856b700b798834322da"
 
 SEGMENT_DRIFT_PIN = verify(DETERMINISTIC_SEGMENT, expect_pin=R22_RATIFIED_PIN)
 verify_minimality(DETERMINISTIC_SEGMENT)
