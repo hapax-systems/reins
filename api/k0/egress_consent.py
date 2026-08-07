@@ -169,7 +169,19 @@ def _ratified_row(root: Path) -> tuple[str, BootstrapReceipt] | None:
     return _id_of(receipt), receipt
 
 
-def ratified_allowlist(root: Path) -> EgressAllowlist | None:
+@dataclass(frozen=True)
+class RatifiedEgress:
+    """The consent in effect, WITH its amendment count. Supersession is surfaced, never silent:
+    a second ratified allowlist inside the pre-probe window is legal (phases only regress after
+    it), so the latest row governs — and `amendments` tells any renderer how many earlier
+    consents it overrode (claude r2 major). An operator who never amended and reads 1 knows the
+    ledger is saying something they did not do."""
+
+    allowlist: EgressAllowlist
+    amendments: int
+
+
+def ratified_allowlist(root: Path) -> RatifiedEgress | None:
     """The consented allowlist, verified against the chain pin at read time. None renders
     dark — but a CORRUPTED consent artifact refuses, because silent-deny would hide tampering
     inside the safe-looking answer. The chain itself is verified first: load_chain does not
@@ -222,7 +234,10 @@ def ratified_allowlist(root: Path) -> EgressAllowlist | None:
         hosts = parsed["hosts"] if isinstance(parsed, dict) else None
         if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
             raise TypeError("hosts is not a list of hostnames")
-        return EgressAllowlist(hosts=tuple(hosts))
+        return RatifiedEgress(
+            allowlist=EgressAllowlist(hosts=tuple(hosts)),
+            amendments=len(_ratified_rows(root)) - 1,
+        )
     except (UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise EgressConsentError(
             f"{sid}: the consented allowlist is not decodable as an allowlist",
@@ -244,10 +259,10 @@ def egress_decision(root: Path, host: str) -> bool:
     verifies the chain before trusting a row in it. A ceremony that probed before consenting
     fails verification, and this gate is loud through exactly that path.
     """
-    allowlist = ratified_allowlist(root)
-    if allowlist is None:
+    ratified = ratified_allowlist(root)
+    if ratified is None:
         return False
-    return host in allowlist.hosts
+    return host in ratified.allowlist.hosts
 
 
 def require_egress(root: Path, host: str) -> None:

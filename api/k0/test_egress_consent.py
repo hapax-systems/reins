@@ -68,7 +68,8 @@ def test_the_allowlist_is_a_stipulation_through_the_ceremony(tmp_path: Path) -> 
     _consented(root, key)
 
     got = ratified_allowlist(root)
-    assert got is not None and set(got.hosts) == set(ALLOWED.hosts)
+    assert got is not None and set(got.allowlist.hosts) == set(ALLOWED.hosts)
+    assert got.amendments == 0
     assert egress_decision(root, "api.anthropic.com")
     assert egress_decision(root, "api.z.ai")
     assert not egress_decision(root, "api.anthropic.com.evil.example"), (
@@ -252,3 +253,23 @@ def test_a_structurally_wrong_body_is_a_refusal_not_a_crash(tmp_path: Path) -> N
 
         with pytest.raises(EgressConsentError, match="not decodable"):
             ratified_allowlist(root)
+
+
+def test_supersession_is_surfaced_never_silent(tmp_path: Path) -> None:
+    """A second consent inside the pre-probe window is legal (phases regress only after the
+    probe wall), so the latest governs — and the amendment count says so (claude r2 major).
+    An operator who never amended and reads amendments=1 knows the ledger disagrees with them."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+
+    amended = EgressAllowlist(hosts=("api.anthropic.com", "api.openai.com"))
+    elicit_allowlist(root, amended, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, amended, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    got = ratified_allowlist(root)
+    assert got is not None
+    assert got.amendments == 1, "the first consent was overridden — that fact must be visible"
+    assert set(got.allowlist.hosts) == set(amended.hosts), "the latest consent governs"
+    assert egress_decision(root, "api.openai.com")
+    assert not egress_decision(root, "api.z.ai")

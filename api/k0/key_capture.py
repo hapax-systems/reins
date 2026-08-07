@@ -98,6 +98,19 @@ class MemoryStore:
 
 
 @dataclass(frozen=True)
+class KeyProbe:
+    """A transmitting validator WITH its destination, as one object (codex r3 critical).
+
+    A separate `host` argument can say anything; binding host and check into one frozen value
+    makes the consent name the thing that runs. The binding is structural, not cryptographic —
+    the wire truth is the probe's own behavior, witnessed by the evidence ref it returns.
+    """
+
+    host: str
+    check: Callable[[bytes], str | None]
+
+
+@dataclass(frozen=True)
 class PassStore:
     """The estate-pattern backend: `pass`, values via stdin/stdout pipes, never argv.
 
@@ -302,36 +315,36 @@ def validate_key(
     store: SecretStore,
     name: str,
     *,
-    host: str,
-    validator: Callable[[bytes], str | None],
+    probe: KeyProbe,
     estate_id: str,
     kernel_version: str,
     observed_at: datetime | None = None,
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
-    The validator TRANSMITS — a validation ping is the kernel's one real egress seam today —
-    so it is gated: `require_egress(root, host)` runs before the validator is ever invoked, and a
-    host the operator has not consented to is refused, never dialed. The validator is injected and
-    receives the value in memory; this module never transmits itself. It returns an evidence
-    string on success (a probe-receipt ref, a response id — something a stranger could
-    re-check), which is DIGESTED into the row: the chain pins that validation happened against
-    this evidence without carrying the evidence itself. Failure writes no row: a failed
-    validation is not a disposition, and the name stays CAPTURED_UNVALIDATED.
+    The probe TRANSMITS — a validation ping is the kernel's one real egress seam today — so it
+    is gated: `require_egress(root, probe.host)` runs before the probe is ever invoked, and a
+    destination the operator has not consented to is refused, never dialed. The host is read
+    FROM the probe (one object, one truth — no separate argument to disagree with it). The
+    probe receives the value in memory; this module never transmits itself. The probe returns
+    an evidence string on success (a response id — something a stranger could re-check), which
+    is DIGESTED into the row: the chain pins that validation happened against this evidence
+    without carrying the evidence itself. Failure writes no row: a failed validation is not a
+    disposition, and the name stays CAPTURED_UNVALIDATED.
     """
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
-    require_egress(root, host)  # consent is evaluated before the validator is ever invoked
+    require_egress(root, probe.host)  # consent before the probe is ever invoked
     value = store.get(name)
     if value is None:
         raise ValueError(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
-    evidence = validator(value)
+    evidence = probe.check(value)
     if evidence is None:
         return False
     _append_row(

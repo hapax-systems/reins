@@ -19,6 +19,7 @@ from k0.egress_consent import EgressAllowlist
 from k0.egress_consent import accept as accept_egress
 from k0.egress_consent import elicit_allowlist
 from k0.key_capture import (
+    KeyProbe,
     MemoryStore,
     SecretSupply,
     decline_capture,
@@ -147,8 +148,7 @@ def test_the_supply_ladder_absent_to_validated(tmp_path: Path) -> None:
         root,
         store,
         NAME,
-        host=HOST,
-        validator=lambda value: "probe-receipt:ok-1",
+        probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -175,8 +175,7 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
         root,
         store,
         NAME,
-        host=HOST,
-        validator=lambda value: None,
+        probe=KeyProbe(host=HOST, check=lambda value: None),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -195,8 +194,7 @@ def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_pa
             root,
             store,
             NAME,
-            host=HOST,
-            validator=lambda value: "x",
+            probe=KeyProbe(host=HOST, check=lambda value: "x"),
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -221,8 +219,7 @@ def test_the_decline_path_is_dark_and_never_nags(tmp_path: Path) -> None:
             root,
             store,
             NAME,
-            host=HOST,
-            validator=lambda value: "probe-receipt:ok-1",
+            probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
             estate_id=ESTATE,
             kernel_version=KERNEL,
         )
@@ -242,8 +239,7 @@ def test_no_secret_value_ever_touches_the_chain(tmp_path: Path) -> None:
         root,
         store,
         NAME,
-        host=HOST,
-        validator=lambda value: "probe-receipt:ok-1",
+        probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -265,8 +261,7 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     _consent_egress(root, _key(tmp_path))
     store.put(NAME, b"sk-first-value")
     assert validate_key(
-        root, store, NAME, host=HOST,
-        validator=lambda value: "probe-receipt:ok-1",
+        root, store, NAME, probe=KeyProbe(host=HOST, check=lambda value: "probe-receipt:ok-1"),
         estate_id=ESTATE, kernel_version=KERNEL,
     )
     assert supply_state(root, store, NAME) is SecretSupply.VALIDATED
@@ -396,8 +391,7 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
     calls: list[bytes] = []
     with pytest.raises(EgressConsentError, match="no ratified egress allowlist"):
         validate_key(
-            root, store, NAME, host="api.never-consented.example",
-            validator=lambda value: calls.append(value) or "ok",
+            root, store, NAME, probe=KeyProbe(host="api.never-consented.example", check=lambda value: calls.append(value) or "ok"),
             estate_id=ESTATE, kernel_version=KERNEL,
         )
     assert calls == [], "the validator — the transmitting act — was never invoked"
