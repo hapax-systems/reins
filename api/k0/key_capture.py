@@ -40,7 +40,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Protocol
+from types import MappingProxyType
+from typing import Callable, Mapping, Protocol
 
 from bootstrap_receipt import (
     BootstrapAct,
@@ -181,8 +182,10 @@ class ProbeEndpoint:
 
 #: The sanctioned providers and the endpoints that actually check authorization on them. A
 #: provider enters this table only when its validation endpoint is KNOWN to refuse invalid
-#: keys; the per-call negative control re-proves that property on every run.
-PROVIDER_PROBE_ENDPOINTS: dict[str, ProbeEndpoint] = {
+#: keys; the per-call negative control re-proves that property on every run. IMMUTABLE
+#: (MappingProxyType, codex r20): a mutable registry would let a caller register its own
+#: endpoint and pass the membership guard with a destination nobody sanctioned.
+PROVIDER_PROBE_ENDPOINTS: Mapping[str, ProbeEndpoint] = MappingProxyType({
     "anthropic": ProbeEndpoint(
         "api.anthropic.com",
         "/v1/models",
@@ -191,7 +194,7 @@ PROVIDER_PROBE_ENDPOINTS: dict[str, ProbeEndpoint] = {
         (("anthropic-version", "2023-06-01"),),
     ),
     "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer", "sk-"),
-}
+})
 
 
 def _negative_control_key(endpoint: ProbeEndpoint) -> bytes:

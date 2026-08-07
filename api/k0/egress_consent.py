@@ -295,18 +295,31 @@ def ratified_allowlist(
         ) from None
 
 
-def egress_decision(root: Path, host: str) -> bool:
+def egress_decision(
+    root: Path,
+    host: str,
+    *,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
+) -> bool:
     """May the estate transmit to `host`? Default-DENY, and the well-ordering is INHERITED law.
 
     False when no allowlist is ratified (dark, not an error) or the host is not named. The
-    ordering guarantee has two layers, stated exactly (claude r16): ACTUAL TRANSMISSIONS are
+    signing materials are mandatory on anything named like a gate (claude r20): a public
+    hash-only decision function is a gate that skips the sovereign's signature, and readers
+    who genuinely lack the materials can say so by calling `ratified_allowlist` directly —
+    which returns data, never a transmit-shaped answer. The ordering guarantee has two layers,
+    stated exactly (claude r16): ACTUAL TRANSMISSIONS are
     ordered at the wire — the kernel's one transport self-gates through `require_egress`, so no
     dial can precede consent regardless of what rows exist. RECEIPT ROWS are ordered by the
     spine's phase-legality law (a MEASURED_PROBE row before a later STIPULATION_RATIFY row is
     chain-illegal), and `ratified_allowlist` verifies the chain before trusting a row in it.
     The wire is the enforcement; the chain is the audit.
     """
-    ratified = ratified_allowlist(root)
+    ratified = ratified_allowlist(
+        root, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
     if ratified is None:
         return False
     return host in ratified.allowlist.hosts

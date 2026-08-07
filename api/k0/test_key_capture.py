@@ -927,3 +927,16 @@ def test_the_wire_gate_authenticates_the_consent_row(tmp_path: Path, monkeypatch
             estate_id=ESTATE, kernel_version=KERNEL,
         )
     assert dialed == [], "an unauthenticated consent row closes the wire before any dial"
+
+
+def test_the_registry_cannot_be_amended_by_a_caller() -> None:
+    """codex r20: a mutable registry would let a caller register its own endpoint and pass the
+    membership guard. The proxy must refuse every write."""
+    from k0.key_capture import PROVIDER_PROBE_ENDPOINTS, ProbeEndpoint
+
+    with pytest.raises(TypeError):
+        PROVIDER_PROBE_ENDPOINTS["evil"] = ProbeEndpoint("api.anthropic.com", "/x", "bearer", "sk-")
+    with pytest.raises(AttributeError):
+        PROVIDER_PROBE_ENDPOINTS.pop("openai")
+    with pytest.raises(AttributeError):
+        PROVIDER_PROBE_ENDPOINTS.clear()
