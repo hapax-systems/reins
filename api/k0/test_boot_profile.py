@@ -108,6 +108,36 @@ def test_the_stipulation_body_is_deterministic_and_digest_stable() -> None:
     assert " " not in HARNESS.stipulation_id()
 
 
+#: Durable expected-value witnesses (codex r3 major). Comparing two constructions of the CURRENT
+#: definition proves only self-agreement — a canonicalization change moves both sides and passes
+#: while every previously ratified consent id silently turns stale. These pins make that change
+#: red. If a profile's terms are amended ON PURPOSE, the amendment mints a new id and this pin
+#: moves with it, diff-visible, in the same commit — the review trail is the audit.
+EXPECTED_STIPULATION_IDS = {
+    "existing-agent-harness": "boot-profile.existing-agent-harness.7d3458d4",
+    "hosted-model-kit-minimal": "boot-profile.hosted-model-kit-minimal.5b7f97b8",
+}
+EXPECTED_BODY_DIGESTS = {
+    "existing-agent-harness": "7d3458d47389f85843383bdef2c7bd67895b788fbd587ea12381b96efcb0df1e",
+    "hosted-model-kit-minimal": "5b7f97b80384039c7f63ffaf2b39f1db44bcc31fc23c13954b64c135cccc11be",
+}
+
+
+def test_ratified_consent_identifiers_are_pinned_against_silent_canonicalization_drift() -> None:
+    import hashlib
+
+    assert set(PROFILES) == set(EXPECTED_STIPULATION_IDS), (
+        "a profile was added or retired without updating the consent-id pins"
+    )
+    for profile_id, profile in PROFILES.items():
+        assert profile.stipulation_id() == EXPECTED_STIPULATION_IDS[profile_id], (
+            f"{profile_id}: the stipulation id moved — every ratification of the old id now "
+            "reads stale. If this was an intentional redefinition, update the pin in the same "
+            "commit so the change is diff-visible."
+        )
+        assert hashlib.sha256(profile.body()).hexdigest() == EXPECTED_BODY_DIGESTS[profile_id]
+
+
 def test_present_then_ratify_then_read_back(tmp_path: Path) -> None:
     """The whole point: the floor the estate stands on is a consented artifact."""
     root = _root(tmp_path)
