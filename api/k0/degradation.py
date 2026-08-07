@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -56,6 +57,7 @@ from bootstrap_receipt import BootstrapAct, load_chain
 
 from .ratification import (
     RatificationError,
+    SIGNATURE_DIRNAME,
     Stipulation,
     _id_of,
     artifact_digest,
@@ -230,8 +232,21 @@ def _accept_body(
         raise DegradationError(
             "refusing to store a body that is not the artifact the stipulation pins"
         )
+    # THE ARTIFACT IS PERSISTED BEFORE THE CONSENT THAT POINTS AT IT.
+    #
+    # The original order was ratify-then-write, which leaves a window: the chain says `ratified`
+    # and the body does not exist. That was survivable only while a missing body was silently
+    # tolerated on read — and tolerating it is the critical this module was just fixed for. So
+    # hardening the reader converts this window from "a degradation quietly disappears" into "the
+    # ledger can never be read again", with no lift available because `lift` reads `state` first.
+    # Fixing the read side alone would have deepened the defect on the write side.
+    #
+    # Reversed, a crash anywhere leaves at worst an orphan body with no ratified row. `state()`
+    # only reads bodies for rows that exist, so an orphan is invisible — and a retry rewrites the
+    # identical bytes, since the digest is what names the file's content in the first place.
+    _write_body_durably(root / SIGNATURE_DIRNAME / f"{stip.stipulation_id}.body", body)
     try:
-        path = ratify(
+        return ratify(
             root,
             stip,
             key_path=key_path,
@@ -241,8 +256,29 @@ def _accept_body(
         )
     except RatificationError as exc:
         raise DegradationError(str(exc), exc.refusal) from exc
-    (root / "ratifications" / f"{stip.stipulation_id}.body").write_bytes(body)
-    return path
+
+
+def _write_body_durably(path: Path, body: bytes) -> None:
+    """Write and fsync via a temp file and an atomic rename, then fsync the directory.
+
+    A partial `write_bytes` would leave bytes that do not hash to the pinned digest, which the
+    reader correctly refuses — turning a truncated write into an unreadable ledger. `os.replace`
+    is atomic within a filesystem, so a reader sees either no file or the whole file. The parent
+    directory is fsynced too: without that, the rename itself can be lost across a power cut and
+    the file would vanish after appearing to land.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.partial")
+    with open(tmp, "wb") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def lift(
@@ -352,9 +388,12 @@ def state(root: Path) -> dict[str, Degradation]:
             continue
         # The digest comes from the CHAIN, not from the body's neighbourhood on disk. Reading it
         # from a file beside the body would let whoever edited one edit the other.
+        #
+        # NO `if body is None: continue` GUARD. That line was the critical: every way of failing to
+        # read a consented degradation arrived here as None and was skipped, and a skipped subject
+        # is an ABSENT subject, which this function reports as FULL. `_body_for` now refuses
+        # instead of returning, so the omission is unrepresentable rather than merely unlikely.
         body = _body_for(root, sid, digest=artifact_digest(receipt))
-        if body is None:
-            continue
         subject = body["subject"]
         if body.get("lifted"):
             out.pop(subject, None)
@@ -369,7 +408,7 @@ def state(root: Path) -> dict[str, Degradation]:
     return out
 
 
-def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict | None:
+def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict:
     """Recover the consented body, VERIFYING it against the digest the chain pins.
 
     The payload is `id\\nsubject\\ndigest\\n`; the BODY is the artifact that digest is over, stored
@@ -385,34 +424,42 @@ def _body_for(root: Path, stipulation_id: str, *, digest: str | None) -> dict | 
     the subject, and a degradation deleted from disk read as FULL — the same absence-into-zero this
     function was written to close, one cell over in the matrix. Both found in review.
 
-      digest is None, no body   -> None. Nothing was claimed and nothing is here; a ledger
-                                   predating this module has nothing to verify.
-      digest is None, body      -> REFUSES. "The row names no artifact" is not "the artifact
-                                   is fine": what was consented to cannot be established.
+      digest is None            -> REFUSES, whether or not a body is present. "The row names no
+                                   artifact" is not "the artifact is fine".
       digest pinned, no body    -> REFUSES. The row claims an artifact that is gone.
       digest pinned, unreadable -> REFUSES. Claimed, present, and unverifiable is not "absent".
       digest mismatch           -> REFUSES. The tampering case.
       digest matches, not JSON  -> REFUSES. The consented bytes are themselves unusable; the
                                    deficit is real and cannot be rendered.
 
+    THERE IS NO LONGER A ROUTE THAT RETURNS "nothing here" — hence the non-optional return. A
+    second review round found the hole the first fix left: the no-digest-and-no-body case still
+    returned None, and the ONLY caller is `state()`, which skips a `None` body. So stripping the
+    stipulation ref from a chain row and deleting its body made the degradation vanish and the
+    estate report FULL, by a different door than the one that had just been shut. `load_chain`
+    does not verify hashes — `verify_chain` is a separate act — so an edited row is not caught on
+    the way in.
+
+    The "an old chain has nothing to verify" defence never applied here at all: `state()` calls
+    this only for ids beginning `degradation.`, a prefix THIS MODULE invented. No ledger predating
+    the module can contain one. The exemption was written for a caller that does not exist.
+
     EVERY REFUSAL HERE IS A DEFICIT THAT CANNOT BE READ, AND NONE OF THEM MAY RESOLVE TO "no
     deficit". A corrupted degradation must never resolve to FULL, because that is the one wrong
     answer the operator cannot detect by looking.
     """
-    path = root / "ratifications" / f"{stipulation_id}.body"
+    path = root / SIGNATURE_DIRNAME / f"{stipulation_id}.body"
     gate = "degradation.body-integrity"
     if digest is None:
-        if not path.is_file():
-            return None
         raise DegradationError(
-            f"{stipulation_id}: a body is stored but the ratified row pins no artifact digest, so "
-            f"what was consented to cannot be established.",
+            f"{stipulation_id}: the ratified row pins no artifact digest, so what was consented to "
+            f"cannot be established.",
             Refusal(
                 gate=gate,
-                why="a stored body with no pinned digest cannot be tied to what was consented to",
+                why="a ratified degradation whose row names no artifact cannot be read at all",
                 legal_next=(
-                    "re-ratify the subject so the chain pins the digest of the body it consents "
-                    "to, or remove the unpinned body if it was never consented to"
+                    "run verify_chain to find where the row lost its stipulation ref, restore the "
+                    "chain from backup, or re-ratify the subject so the artifact is pinned again"
                 ),
             ),
         )

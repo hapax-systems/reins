@@ -140,10 +140,29 @@ def test_the_kernel_package_is_estate_independent():
     and is supplied from outside the tree (see api/conftest.py). With the tokens external, the
     scan can now cover every file in the package including this one.
     """
+    import os
     import pathlib
 
     tokens = estate_tokens()
     if tokens is None:
+        # A SKIP IS NOT A PASS, AND EVIDENCE THAT CANNOT TELL THEM APART IS NOT EVIDENCE.
+        #
+        # The scan needs the estate's token file, which is gitignored — so on a stranger's checkout
+        # this SKIPS, and `pytest -q` renders a skip and a pass identically enough that a release
+        # note saying "the suite is green" carries no information about whether the guard ran. That
+        # is the review finding, and a docstring warning does not fix it: the caveat lived in prose
+        # while the mechanism kept quietly permitting the thing the prose warned about.
+        #
+        # So the requirement is declarable. Anything asserting the scan as evidence sets
+        # K0_REQUIRE_ESTATE_SCAN=1, and an unarmed run then FAILS instead of skipping. The default
+        # stays a skip because a stranger cloning this repo has no tokens and must not be handed a
+        # red suite for it — the scan is about THIS estate's fingerprints, and a stranger has none.
+        if os.environ.get("K0_REQUIRE_ESTATE_SCAN") == "1":
+            pytest.fail(
+                f"K0_REQUIRE_ESTATE_SCAN=1 demands an ARMED estate-independence scan, and the "
+                f"token file was not found. {UNARMED} Refusing to report a skip as evidence that "
+                f"the kernel carries no estate fingerprints."
+            )
         pytest.skip(UNARMED)
 
     hits = scan_tree_for_tokens(pathlib.Path(__file__).parent, tokens)

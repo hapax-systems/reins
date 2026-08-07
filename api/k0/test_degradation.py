@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from bootstrap_receipt import append_receipt, genesis_self_attest
+from bootstrap_receipt import RECEIPT_CHAIN_FILENAME, append_receipt, genesis_self_attest
 from k0 import degradation as deg
 from k0.degradation import (
     Degradation,
@@ -376,6 +376,122 @@ def test_a_ratified_row_that_pins_no_artifact_is_refused(tmp_path: Path) -> None
 
     with pytest.raises(DegradationError, match="pins no artifact digest"):
         deg._body_for(root, REVIEW_FLOOR.stipulation_id(), digest=None)
+
+
+def test_stripping_the_artifact_ref_from_the_chain_does_not_clear_the_deficit(
+    tmp_path: Path,
+) -> None:
+    """THE SECOND DOOR TO THE SAME ROOM, found in review round three.
+
+    The first fix made a missing body fatal WHEN THE ROW PINS A DIGEST, and left "no digest and no
+    body" returning None — which `state()` skipped, so the subject vanished and the estate read
+    FULL. Shutting one route into a wrong answer while leaving its neighbour open is the half-a-pair
+    error, and it recurred here inside the very fix written to close the first half.
+
+    This is the attack in full: edit the ratified row to drop its `stipulation:` ref and delete the
+    body. `load_chain` does NOT verify hashes — `verify_chain` is a separate act nobody is obliged
+    to perform first — so the edited row is read as authentic, and the degradation had no remaining
+    trace to recover. Nothing about the result looked wrong: the chain still said `ratified`.
+
+    The defence is not "detect the edit" (that is verify_chain's job) but "never resolve an
+    unreadable deficit to no deficit".
+    """
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    assert "review-floor" in state(root), "fixture precondition: it must be in effect first"
+
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = []
+    stripped = 0
+    for line in chain_path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        refs = record.get("payload_refs") or []
+        kept = [ref for ref in refs if not ref.startswith("stipulation:")]
+        stripped += len(refs) - len(kept)
+        record["payload_refs"] = kept
+        rows.append(json.dumps(record))
+    assert stripped, (
+        "fixture premise: the chain must have carried a stipulation ref to strip, or this test "
+        "would assert the refusal of a condition it never created"
+    )
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    (root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body").unlink()
+
+    with pytest.raises(DegradationError, match="pins no artifact digest") as exc:
+        state(root)
+    assert exc.value.refusal is not None and exc.value.refusal.legal_next.strip()
+
+
+def test_the_body_is_on_disk_before_the_ratification_that_points_at_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WRITE ORDER, ASSERTED AS ORDER. A ratified row must never exist without its artifact.
+
+    `_accept_body` used to ratify first and write the body second, leaving a window in which the
+    chain said `ratified` and no body existed. That was survivable only while a missing body was
+    silently tolerated — the very thing now (correctly) fatal. So hardening the READER converted a
+    crash in that window from "a degradation quietly disappears" into "the ledger can never be read
+    again", with no way out: `lift` calls `state` first, so the estate could not even lift its way
+    clear. A fix on one side deepened the defect on the other, and only fixing both is a fix.
+
+    THE FIRST VERSION OF THIS TEST WAS VACUOUS. It drove a ratification failure and asserted the
+    ledger survived — which passes under BOTH orderings, because a `ratify` that raises writes no
+    body either way. It tested a true statement that has nothing to do with the change. The order
+    is the property, so the order is what gets observed: this intercepts `ratify` and records
+    whether the artifact was already durable at the moment it was called.
+    """
+    from k0 import degradation as deg
+
+    observed: dict[str, bool] = {}
+    real_ratify = deg.ratify
+
+    def watching_ratify(root: Path, stip, **kwargs):  # type: ignore[no-untyped-def]
+        body = root / "ratifications" / f"{stip.stipulation_id}.body"
+        observed["body_already_durable"] = body.is_file()
+        return real_ratify(root, stip, **kwargs)
+
+    monkeypatch.setattr(deg, "ratify", watching_ratify)
+
+    root = _root(tmp_path)
+    key = _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, REVIEW_FLOOR, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    assert observed.get("body_already_durable"), (
+        "the ratification was recorded BEFORE its artifact reached disk. A crash in that window "
+        "leaves a ratified row whose body never existed — which the reader now refuses forever, "
+        "and `lift` cannot clear because it reads `state` first."
+    )
+    assert "review-floor" in state(root), "the ordering must not change the outcome on success"
+
+
+def test_a_failed_ratification_leaves_a_readable_ledger(tmp_path: Path) -> None:
+    """The other half of the reordering: an orphan body must be inert, not poisonous.
+
+    Writing the artifact first means a failure during ratification can leave a body with no row
+    pointing at it. `state()` reads bodies only for rows that exist, so it must be invisible — and
+    a retry rewrites identical bytes, since the digest is what names the content.
+    """
+    root = _root(tmp_path)
+    _keypair(tmp_path)
+    declare(root, REVIEW_FLOOR, estate_id=ESTATE, kernel_version=KERNEL)
+
+    not_a_key = tmp_path / "not_a_key"
+    not_a_key.write_text("this cannot sign anything", encoding="utf-8")
+    with pytest.raises(DegradationError):
+        accept(root, REVIEW_FLOOR, key_path=not_a_key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    assert state(root) == {}, (
+        "a failed ratification left the ledger unreadable. Nothing was consented to, so nothing "
+        "may be reported — and nothing may raise either."
+    )
+    body_path = root / "ratifications" / f"{REVIEW_FLOOR.stipulation_id()}.body"
+    if body_path.exists():
+        assert body_path.read_bytes() == REVIEW_FLOOR.body(), (
+            "an orphan body must be the whole artifact, never a partial write"
+        )
 
 
 def test_deleting_a_ratified_body_does_not_clear_the_deficit(tmp_path: Path) -> None:
