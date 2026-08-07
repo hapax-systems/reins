@@ -18,9 +18,11 @@ The shape here is the K0 form applied to egress:
     reads as "deny everything" would hide tampering inside the safe-looking answer.
   * THE GATE IS DEFAULT-DENY. `egress_decision` allows only an exact host in the ratified
     allowlist. No wildcards: a pattern language is a way to consent to more than was named.
-  * THE WELL-ORDERING IS CHECKED, not assumed: if any MEASURED_PROBE-phase row predates the
-    ratified allowlist row, the first model call happened before consent and the gate refuses —
-    the violation is loud, because the chain itself is telling on the ceremony.
+  * THE WELL-ORDERING IS INHERITED LAW. The receipt spine's phase-legality already forbids a
+    MEASURED_PROBE row ahead of any later STIPULATION_RATIFY row (phases never regress), so a
+    ceremony that probed before consenting fails chain verification — and this gate verifies
+    the chain before trusting any row in it. Post-probe rotation is chain-illegal for the same
+    reason; egress consent is exactly-once per ceremony, which is what "first consent" means.
 
 Identity note: the graph's third clause ("ceremony-elicited identity lands AIR-classed") belongs
 to the identity-elicitation node; k0 has no operator-identity elicitation surface yet, and this
@@ -36,7 +38,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from bootstrap_receipt import BootstrapAct, BootstrapPhase, BootstrapReceipt, load_chain
+from bootstrap_receipt import (
+    BootstrapAct,
+    BootstrapPhase,
+    BootstrapReceipt,
+    load_chain,
+    verify_chain_at,
+)
 
 from .degradation import _write_body_durably
 from .ratification import (
@@ -142,14 +150,19 @@ def accept(
     )
 
 
-def _ratified_row(root: Path) -> tuple[str, BootstrapReceipt] | None:
-    """The latest ratified egress-allowlist row, as (stipulation_id, receipt), or None."""
-    found = [
+def _ratified_rows(root: Path) -> list[BootstrapReceipt]:
+    """Every ratified egress-allowlist row, in chain order."""
+    return [
         receipt
         for receipt in load_chain(root)
         if receipt.act is BootstrapAct.RATIFIED
         and _id_of(receipt).startswith("egress-allowlist.")
     ]
+
+
+def _ratified_row(root: Path) -> tuple[str, BootstrapReceipt] | None:
+    """The latest ratified egress-allowlist row, as (stipulation_id, receipt), or None."""
+    found = _ratified_rows(root)
     if not found:
         return None
     receipt = found[-1]
@@ -159,7 +172,17 @@ def _ratified_row(root: Path) -> tuple[str, BootstrapReceipt] | None:
 def ratified_allowlist(root: Path) -> EgressAllowlist | None:
     """The consented allowlist, verified against the chain pin at read time. None renders
     dark — but a CORRUPTED consent artifact refuses, because silent-deny would hide tampering
-    inside the safe-looking answer."""
+    inside the safe-looking answer. The chain itself is verified first: load_chain does not
+    check hashes, and a gate that trusts an unverified chain is a gate over nothing."""
+    if not verify_chain_at(root).ok:
+        raise EgressConsentError(
+            "the bootstrap chain fails verification — no row in it may ground an egress decision",
+            Refusal(
+                gate="egress.chain-integrity",
+                why="an unverifiable chain cannot prove what was consented to",
+                legal_next="run verify_chain to find the break, restore from backup, then re-run",
+            ),
+        )
     found = _ratified_row(root)
     if found is None:
         return None
@@ -195,7 +218,11 @@ def ratified_allowlist(root: Path) -> EgressAllowlist | None:
             ),
         )
     try:
-        hosts = json.loads(raw.decode("utf-8"))["hosts"]
+        parsed = json.loads(raw.decode("utf-8"))
+        hosts = parsed["hosts"] if isinstance(parsed, dict) else None
+        if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
+            raise TypeError("hosts is not a list of hostnames")
+        return EgressAllowlist(hosts=tuple(hosts))
     except (UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise EgressConsentError(
             f"{sid}: the consented allowlist is not decodable as an allowlist",
@@ -205,38 +232,18 @@ def ratified_allowlist(root: Path) -> EgressAllowlist | None:
                 legal_next="restore the body from backup, or elicit and accept a fresh allowlist",
             ),
         ) from None
-    return EgressAllowlist(hosts=tuple(hosts))
 
 
 def egress_decision(root: Path, host: str) -> bool:
-    """May the estate transmit to `host`? Default-DENY, and the well-ordering is law.
+    """May the estate transmit to `host`? Default-DENY, and the well-ordering is INHERITED law.
 
-    False when no allowlist is ratified (dark, not an error) or the host is not named. LOUD when
-    the consent artifact is corrupted, and loud when a MEASURED_PROBE-phase row predates the
-    ratification — the first model call happened before consent, and the chain is telling on
-    the ceremony.
+    False when no allowlist is ratified (dark, not an error) or the host is not named. The
+    ordering guarantee — no model call before egress consent — is not re-implemented here: the
+    receipt spine's phase-legality law already makes a MEASURED_PROBE row before any later
+    STIPULATION_RATIFY row chain-illegal (phases never regress), and `ratified_allowlist`
+    verifies the chain before trusting a row in it. A ceremony that probed before consenting
+    fails verification, and this gate is loud through exactly that path.
     """
-    found = _ratified_row(root)
-    if found is None:
-        return False
-    sid, receipt = found
-    chain = load_chain(root)
-    ratified_index = max(i for i, r in enumerate(chain) if r.receipt_id == receipt.receipt_id)
-    for earlier in chain[:ratified_index]:
-        if earlier.phase == BootstrapPhase.MEASURED_PROBE:
-            raise EgressConsentError(
-                "a MEASURED_PROBE-phase receipt predates the ratified egress allowlist — the "
-                "first model call happened before consent",
-                Refusal(
-                    gate="egress.well-ordering",
-                    why="consent after the fact is not consent",
-                    legal_next=(
-                        "the ceremony order was violated on this host; verify_chain, establish "
-                        "what transmitted, and re-run the ceremony cleanly — do not ratify over "
-                        "the gap"
-                    ),
-                ),
-            )
     allowlist = ratified_allowlist(root)
     if allowlist is None:
         return False

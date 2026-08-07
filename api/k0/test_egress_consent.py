@@ -110,9 +110,10 @@ def test_a_tampered_allowlist_body_refuses_loudly(tmp_path: Path) -> None:
 
 
 def test_the_well_ordering_law_a_probe_before_consent_closes_the_gate(tmp_path: Path) -> None:
-    """The first model call may not precede the consent that governs it. If the chain carries a
-    MEASURED_PROBE-phase row before the ratified allowlist, the ceremony was violated and the
-    gate says so — consent after the fact is not consent."""
+    """The first model call may not precede the consent that governs it. The receipt spine makes
+    such a chain ILLEGAL outright (phases never regress: a probe row before the ratification is
+    'MEASURED_PROBE before AUTH_MATERIALIZE' or a phase regression), and the gate verifies the
+    chain before trusting it — so the violation surfaces as a verification refusal, loud."""
     root = _root(tmp_path)
     key = _key(tmp_path)
 
@@ -134,11 +135,8 @@ def test_the_well_ordering_law_a_probe_before_consent_closes_the_gate(tmp_path: 
     )
 
     _consented(root, key)
-    with pytest.raises(EgressConsentError, match="before consent"):
+    with pytest.raises(EgressConsentError, match="fails verification"):
         egress_decision(root, "api.anthropic.com")
-    assert ratified_allowlist(root) is not None, (
-        "the consent ARTIFACT is still readable — what is refused is pretending the order held"
-    )
 
 
 def test_bad_allowlist_shapes_are_refused_at_construction() -> None:
@@ -148,3 +146,109 @@ def test_bad_allowlist_shapes_are_refused_at_construction() -> None:
         EgressAllowlist(hosts=("*.anthropic.com",))
     with pytest.raises(ValueError, match="never patterns"):
         EgressAllowlist(hosts=("API.Anthropic.com",))  # case is data; lowercase or refuse
+
+
+def _probe_row(root: Path, receipt_id: str) -> None:
+    chain = load_chain(root)
+    append_receipt(
+        root,
+        BootstrapReceipt(
+            receipt_id=receipt_id,
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            phase=BootstrapPhase.MEASURED_PROBE,
+            act=BootstrapAct.PROBED,
+            payload_refs=["probe:sha256:" + "0" * 16],
+            evidence_status=EvidenceStatus.OBSERVED,
+            prev_receipt_hash=chain[-1].receipt_hash(),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+
+
+def test_rotation_after_a_probe_is_chain_illegal(tmp_path: Path) -> None:
+    """Egress consent is EXACTLY-ONCE per ceremony (codex/claude r1 majors, resolved by the spine
+    rather than by this module): a second ratification after a MEASURED_PROBE row is a phase
+    regression, the chain fails verification, and the gate is loud — it never answers from an
+    illegal chain, in either direction."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+    # A chain-legal probe needs AUTH_MATERIALIZE first (spine law).
+    chain = load_chain(root)
+    append_receipt(
+        root,
+        BootstrapReceipt(
+            receipt_id="auth-materialize-0",
+            estate_id=ESTATE,
+            kernel_version=KERNEL,
+            phase=BootstrapPhase.AUTH_MATERIALIZE,
+            act=BootstrapAct.ELICITED,
+            payload_refs=["k0-secret:frontier-provider-key"],
+            evidence_status=EvidenceStatus.OBSERVED,
+            prev_receipt_hash=chain[-1].receipt_hash(),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    _probe_row(root, "probe-after-consent-0")
+    assert egress_decision(root, "api.anthropic.com"), "the consented gate still answers"
+
+    rotated = EgressAllowlist(hosts=("api.anthropic.com", "api.openai.com"))
+    elicit_allowlist(root, rotated, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, rotated, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    with pytest.raises(EgressConsentError, match="fails verification"):
+        egress_decision(root, "api.openai.com")
+
+
+def test_a_broken_chain_closes_the_gate_loudly(tmp_path: Path) -> None:
+    """load_chain does not verify hashes; the GATE must (claude r1 major)."""
+    import json as _json
+
+    from bootstrap_receipt import RECEIPT_CHAIN_FILENAME
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    _consented(root, key)
+
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = chain_path.read_text(encoding="utf-8").splitlines()
+    # Forge a MIDDLE row: the next row's prev_receipt_hash no longer matches, and the hash
+    # link — not any content check — is what must catch it.
+    forged = _json.loads(rows[1])
+    forged["payload_refs"] = ["stipulation:sha256:" + "f" * 64]
+    rows[1] = _json.dumps(forged)
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(EgressConsentError, match="fails verification"):
+        ratified_allowlist(root)
+
+
+def test_a_structurally_wrong_body_is_a_refusal_not_a_crash(tmp_path: Path) -> None:
+    """The pinned body could decode to the wrong SHAPE (codex r1 major): a hosts string, a
+    list of non-strings, a non-dict. The digest check passes (the bytes ARE the consented ones);
+    only the shape validation keeps the gate from crashing or reading garbage."""
+    from k0.ratification import Stipulation, propose, ratify
+
+    for i, bad in enumerate(
+        (
+            b'{"hosts":"api.anthropic.com"}',
+            b'{"hosts":[1,2]}',
+            b'["api.anthropic.com"]',
+        )
+    ):
+        sub = tmp_path / f"case{i}"
+        sub.mkdir()
+        root = _root(sub)
+        key = _key(sub)
+        import hashlib as _hashlib
+
+        sid = f"egress-allowlist.{_hashlib.sha256(bad).hexdigest()[:8]}"
+        stip = Stipulation.over(sid, "EGRESS CONSENT: shape test", bad)
+        (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+        (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+        propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+        ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+        with pytest.raises(EgressConsentError, match="not decodable"):
+            ratified_allowlist(root)
