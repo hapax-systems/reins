@@ -181,8 +181,16 @@ def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path) -
     )
     assert not ok
     assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED, (
-        "a failed validation is not a disposition — the name stays unvalidated, and retry is legal"
+        "a failed validation is not supply — the name stays unvalidated, and retry is legal"
     )
+    failures = [
+        r for r in _chain(root) if any(ref.startswith("key-validation-failed:") for ref in r.payload_refs)
+    ]
+    assert len(failures) == 1, (
+        "but the failure is DURABLE: silent retries would let a wrong key burn quota forever "
+        "(codex r4). The row carries no value and no response body."
+    )
+    assert b"sk-canary-value" not in (root / RECEIPT_CHAIN_FILENAME).read_bytes()
 
 
 def test_validation_without_capture_and_validation_of_nothing_are_refused(tmp_path: Path) -> None:

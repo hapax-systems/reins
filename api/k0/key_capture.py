@@ -335,8 +335,17 @@ def validate_key(
     probe receives the value in memory; this module never transmits itself. The probe returns
     an evidence string on success (a response id — something a stranger could re-check), which
     is DIGESTED into the row: the chain pins that validation happened against this evidence
-    without carrying the evidence itself. Failure writes no row: a failed validation is not a
-    disposition, and the name stays CAPTURED_UNVALIDATED.
+    without carrying the evidence itself. A failed probe writes a FAILURE row (no value, no
+    response body) — the name stays CAPTURED_UNVALIDATED and the failure is durable, because a
+    silent failure would let a wrong key burn retries forever.
+
+    THE LAYER BOUNDARY, STATED EXACTLY (r3/r4 rounds): the kernel enforces consent-before-
+    invocation, destination-as-data (the consented host attribute is what the transport
+    receives), value-binding, and failure durability. It does NOT own the wire, and must not:
+    the kit doctrine (R3.12) forbids a raw client inside the kernel — the sanctioned transport
+    is the driver/harness layer's, and the evidence ref the transport returns is the
+    re-checkable witness of what actually answered. A system that wants the kernel itself to
+    dial is asking for the boutique-launcher shape the kit is forbidden to have.
     """
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
@@ -352,6 +361,21 @@ def validate_key(
         )
     evidence = probe.transport(probe.host, probe.path, value)
     if evidence is None:
+        # A failed probe is NOT silent: it is signal (a bad key, an unreachable host, a refused
+        # handshake), and silent retries would let a wrong key burn quota forever. The failure
+        # row carries no value and no response body — only that the attempt failed, digested.
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"key-validation-failed:sha256:{hashlib.sha256((probe.host + probe.path).encode('utf-8')).hexdigest()[:16]}",
+            ],
+            receipt_id=f"key-validation-failed-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
         return False
     _append_row(
         root,
