@@ -118,8 +118,10 @@ class PassStore:
         return f"{self.prefix}{name}"
 
     def has(self, name: str) -> bool:
+        # `pass ls` lists without DECRYPTING — `pass show` would read the value just to answer
+        # presence, and a presence check has no business holding the secret (codex r4 major).
         return subprocess.run(
-            ["pass", "show", self._path(name)],
+            ["pass", "ls", self._path(name)],
             capture_output=True,
             check=False,
         ).returncode == 0

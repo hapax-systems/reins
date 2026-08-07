@@ -477,9 +477,9 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
     )
 
 
-def test_the_default_transport_is_the_kernels_own_wire() -> None:
-    """The test double must never become the production default (r4/r5 criticals): validate_key
-    defaults to the module's own HTTPS transport, and the probe descriptor carries no code."""
+def test_the_wire_has_no_injection_seam() -> None:
+    """There is no transport parameter to substitute and no callable on the probe (r4/r5
+    criticals): validate_key always runs the module's own HTTPS transport."""
     import inspect
 
     from k0.key_capture import https_probe_transport
