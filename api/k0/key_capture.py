@@ -217,10 +217,19 @@ class ProbeOutcome:
 
 
 def https_probe_transport(
-    host: str, path: str, value: bytes, auth_scheme: str = "bearer", extra_headers: tuple[tuple[str, str], ...] = ()
+    root: Path,
+    host: str,
+    path: str,
+    value: bytes,
+    auth_scheme: str = "bearer",
+    extra_headers: tuple[tuple[str, str], ...] = (),
 ) -> ProbeOutcome:
-    """THE KERNEL'S OWN WIRE. There is no injection seam: `validate_key` calls this, always.
-    Tests patch the stdlib boundary (http.client.HTTPSConnection), not this module's surface.
+    """THE KERNEL'S OWN WIRE — AND IT IS SELF-GATING (codex r15). A public transport that does
+    not check consent would be the bypass around the gate: any caller could import it and dial
+    without a ratified allowlist. So the transport takes the root and runs `require_egress`
+    itself. Every dial this kernel can make passes through consent; the seam is exclusive by
+    construction. Tests patch the stdlib boundary (http.client.HTTPSConnection), never this
+    module's surface.
 
     Deliberately narrow: GET with the key as a bearer token, 10s timeout, no request body, the
     response body consumed and DISCARDED (never logged, stored, or returned). Failures are
@@ -228,6 +237,7 @@ def https_probe_transport(
     and a 401 are different problems with different next moves — without ever quoting the
     wire. Evidence on success: status plus the provider's request id, when it sends one.
     """
+    require_egress(root, host)
     import http.client
     import socket
     import ssl
@@ -549,7 +559,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(endpoint.host, endpoint.path, _negative_control_key(endpoint), endpoint.auth_scheme, endpoint.extra_headers)
+    control = https_probe_transport(root, endpoint.host, endpoint.path, _negative_control_key(endpoint), endpoint.auth_scheme, endpoint.extra_headers)
     if control.evidence is not None:
         _append_row(
             root,
@@ -586,7 +596,7 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    outcome = https_probe_transport(endpoint.host, endpoint.path, value, endpoint.auth_scheme, endpoint.extra_headers)
+    outcome = https_probe_transport(root, endpoint.host, endpoint.path, value, endpoint.auth_scheme, endpoint.extra_headers)
     if outcome.evidence is None:
         # A failed probe is NOT silent: the failure row carries the classified cause (timeout
         # and a 401 are different problems with different next moves), the consented host, and

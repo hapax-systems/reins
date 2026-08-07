@@ -525,33 +525,34 @@ def test_the_wire_has_no_injection_seam() -> None:
     ), "endpoints are data — a callable field would be caller code on the wire"
 
 
-def test_the_kernels_transport_behavior_against_the_stdlib_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_kernels_transport_behavior_against_the_stdlib_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The production wire code, exercised (codex r5): header shape, evidence format, classified
     failures, and the response body consumed-and-discarded."""
     import socket
 
     from k0.key_capture import https_probe_transport
 
+    root = _root(tmp_path)
+    _consent_egress(root, _key(tmp_path))
     record: list[tuple] = []
     _patch_wire(monkeypatch, status=200, record=record)
     # _FakeResponse carries no request-id header -> server token "unknown"
-    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
     assert out.evidence == "https-status:200:server:unknown" and out.failure is None
     assert ("request", HOST, "/v1/models", "sk-bearer-value") in record, (
         "the key rides the provider's auth header and nowhere else"
     )
 
-    out = https_probe_transport.__wrapped__ if hasattr(https_probe_transport, "__wrapped__") else None
     _patch_wire(monkeypatch, status=401)
-    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
     assert out.evidence is None and out.failure == "http-401", "a refused key is its own class"
 
     _patch_wire(monkeypatch, error=socket.timeout())
-    out = https_probe_transport(HOST, "/v1/models", b"sk-bearer-value")
+    out = https_probe_transport(root, HOST, "/v1/models", b"sk-bearer-value")
     assert out.failure == "timeout", "an unreachable host says so — the operator's next move differs"
 
     _patch_wire(monkeypatch, error=ConnectionRefusedError())
-    assert https_probe_transport(HOST, "/v1/models", b"x").failure == "connection-refused"
+    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "connection-refused"
 
 
 def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -561,20 +562,22 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
 
     from k0.key_capture import failure_next_move, https_probe_transport
 
+    root = _root(tmp_path)
+    _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, error=ssl.SSLError("handshake"))
-    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "tls-error"
+    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "tls-error"
 
     _patch_wire(monkeypatch, error=OSError("reset"))
-    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "transport-error"
+    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "transport-error"
 
     _patch_wire(monkeypatch, status=503)
-    assert https_probe_transport(HOST, "/v1/models", b"sk-x").failure == "http-503"
+    assert https_probe_transport(root, HOST, "/v1/models", b"sk-x").failure == "http-503"
 
-    assert https_probe_transport(HOST, "/v1/models", b"\xff\xfe").failure == "key-not-utf8"
+    assert https_probe_transport(root, HOST, "/v1/models", b"\xff\xfe").failure == "key-not-utf8"
 
     with pytest.raises(ValueError, match="not a sanctioned provider"):
         validate_key(
-            _root(tmp_path), MemoryStore(), NAME, provider="some-random-provider",
+            root, MemoryStore(), NAME, provider="some-random-provider",
             estate_id=ESTATE, kernel_version=KERNEL,
         )
 
@@ -586,18 +589,20 @@ def test_remaining_transport_and_descriptor_branches(tmp_path: Path, monkeypatch
     )
 
 
-def test_a_redirect_never_validates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_redirect_never_validates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3xx is not success (codex r7 critical): a redirect followed with a bearer token is the
     classic key-leak, and a login-page 302 would otherwise 'validate' any garbage."""
     from k0.key_capture import failure_next_move, https_probe_transport
 
+    root = _root(tmp_path)
+    _consent_egress(root, _key(tmp_path))
     _patch_wire(monkeypatch, status=302)
-    out = https_probe_transport(HOST, "/v1/models", b"sk-x")
+    out = https_probe_transport(root, HOST, "/v1/models", b"sk-x")
     assert out.evidence is None and out.failure == "http-302-redirect"
     assert "do not follow" in failure_next_move(out.failure)
 
 
-def test_the_tls_context_verifies(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_tls_context_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """glm r7: certificate verification is explicit and capturable, not assumed."""
     import http.client
     import ssl
@@ -617,7 +622,9 @@ def test_the_tls_context_verifies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http.client, "HTTPSConnection", _CtxConn)
     from k0.key_capture import https_probe_transport
 
-    https_probe_transport(HOST, "/v1/models", b"x")
+    root = _root(tmp_path)
+    _consent_egress(root, _key(tmp_path))
+    https_probe_transport(root, HOST, "/v1/models", b"sk-x")
     ctx = captured.get("context")
     assert isinstance(ctx, ssl.SSLContext)
     assert ctx.verify_mode == ssl.CERT_REQUIRED
