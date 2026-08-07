@@ -20,7 +20,12 @@ The answers, as machinery:
     ceremony's number is locked, and the refusal says so rather than promising a chain-illegal
     act. The latest ratified number governs within the window, and supersession is visible.
   * THE METRICS ARE DERIVED. `budget_state` recomputes spent/remaining from the chain on every
-    call — identical before and after a crash, and impossible to desynchronise.
+    call — identical before and after a crash, and impossible to desynchronise. HONESTY NOTE
+    (codex r1): the graph asks for these metrics IN RUN RECEIPTS, and the run-receipt container
+    is the ceremony runner's layer, not this kernel's — what exists here is the derivation the
+    runner reads, not the receipt itself.
+  * THE GUARD IS WIRED: `key_capture.elicit_capture` calls `require_budget` before any row is
+    written, so an exhausted budget refuses the ask itself.
 """
 
 from __future__ import annotations
@@ -32,7 +37,13 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from bootstrap_receipt import BootstrapAct, BootstrapPhase, load_chain, verify_chain_at
+from bootstrap_receipt import (
+    PHASE_LADDER,
+    BootstrapAct,
+    BootstrapPhase,
+    load_chain,
+    verify_chain_at,
+)
 
 from .degradation import _write_body_durably
 from .ratification import (
@@ -96,6 +107,28 @@ class BudgetStipulation:
         )
 
 
+def _require_stipulation_window(root: Path) -> None:
+    """Refuse BEFORE writing a row the ladder would make illegal (claude r1 critical): a
+    budget row is STIPULATION_RATIFY-phase, and once the chain has moved past that phase,
+    appending one corrupts the ledger instead of amending anything. The locked window is a
+    refusal with the legal paths named — never a mutation."""
+    chain = load_chain(root)
+    if chain and PHASE_LADDER.index(chain[-1].phase) > PHASE_LADDER.index(BootstrapPhase.STIPULATION_RATIFY):
+        raise FatigueBudgetError(
+            f"the ceremony has moved past the stipulation phase (tail: {chain[-1].phase.value}) "
+            "— this ceremony's budget is locked; writing here would corrupt the chain",
+            Refusal(
+                gate="budget.window-locked",
+                why="the phase ladder never regresses; a late amendment is chain-illegal, so it "
+                "is refused before it mutates anything",
+                legal_next=(
+                    "conclude this ceremony with the ratified number, or re-run with the "
+                    "amendment ratified before elicitation begins"
+                ),
+            ),
+        )
+
+
 def present(
     root: Path,
     budget: BudgetStipulation,
@@ -105,6 +138,7 @@ def present(
     observed_at: datetime | None = None,
 ) -> Path:
     """Put the budget number to the sovereign."""
+    _require_stipulation_window(root)
     return propose(
         root,
         budget.stipulation(),
@@ -124,6 +158,7 @@ def accept(
     observed_at: datetime | None = None,
 ) -> Path:
     """The sovereign consents to the number. The body is durable BEFORE the row that pins it."""
+    _require_stipulation_window(root)
     stip = budget.stipulation()
     _write_body_durably(root / SIGNATURE_DIRNAME / f"{stip.stipulation_id}.body", budget.body())
     return ratify(
