@@ -287,11 +287,20 @@ def failure_next_move(failure_class: str) -> str:
         return FAILURE_NEXT_MOVES[failure_class]
     if failure_class.startswith("control-inconclusive-"):
         cause = failure_class.removeprefix("control-inconclusive-")
+        if cause in ("http-404", "http-429"):
+            return (
+                f"the negative control was answered {cause.removeprefix('http-')} — "
+                + (
+                    "the probe path is wrong; confirm the provider's validation endpoint"
+                    if cause == "http-404"
+                    else "the endpoint is rate-limiting; wait, then retry"
+                )
+            )
         if cause.startswith("http-"):
             return (
-                f"the negative control was answered {cause.removeprefix('http-')} rather than a "
-                "clean 4xx refusal — the endpoint's discrimination is unproven; inspect the "
-                "endpoint, then retry"
+                f"the negative control was answered {cause.removeprefix('http-')} rather than "
+                "401/403 — the endpoint's discrimination is unproven; inspect the endpoint, "
+                "then retry"
             )
         inner = FAILURE_NEXT_MOVES.get(cause, FAILURE_NEXT_MOVES["unknown"])
         return (
@@ -546,10 +555,11 @@ def validate_key(
             observed_at=observed_at,
         )
         return False
-    if not (control.failure or "").startswith("http-4"):
-        # Only a clean 4xx on garbage PROVES discrimination (codex r12): a timeout, 5xx, or
-        # redirect says nothing about whether the endpoint checks keys — the control's own
-        # failure is carried, classified, so the operator fixes the control path first.
+    if control.failure not in ("http-401", "http-403"):
+        # Only 401/403 on garbage PROVES discrimination (codex r12/r13): a 404 is a wrong
+        # path, a 429 is a rate limit, a timeout is the network — none of them is the endpoint
+        # checking the credential. Anything short of an authentication refusal is inconclusive,
+        # and the control's own classified cause is carried so the operator fixes that first.
         cause = control.failure or "unknown"
         _append_row(
             root,

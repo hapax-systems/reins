@@ -716,4 +716,37 @@ def test_an_inconclusive_control_proves_nothing(tmp_path: Path, monkeypatch: pyt
     run_case(None, 302, "control-inconclusive-http-302-redirect")
     run_case(socket.timeout(), None, "control-inconclusive-timeout")
     assert "discrimination is unproven" in failure_next_move("control-inconclusive-timeout")
-    assert "4xx" in failure_next_move("control-inconclusive-http-502")
+    assert "401/403" in failure_next_move("control-inconclusive-http-502")
+
+
+def test_a_non_auth_4xx_control_proves_nothing_either(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404/429 on garbage is not an authentication refusal (codex r13): the endpoint may not
+    be checking keys at all — wrong path, rate limiter fronting it, anything."""
+    import http.client
+
+    root = _root(tmp_path)
+    store = MemoryStore()
+    _consent_egress(root, _key(tmp_path))
+    store.put(NAME, b"sk-real-key")
+
+    class _FourOhFour:
+        def __init__(self, host, timeout=10, context=None):
+            pass
+
+        def request(self, *a, **k) -> None:
+            pass
+
+        def getresponse(self):
+            return _FakeResponse(404)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _FourOhFour)
+    ok = validate_key(
+        root, store, NAME, provider="anthropic",
+        estate_id=ESTATE, kernel_version=KERNEL,
+    )
+    assert not ok
+    rows = [r for r in _chain(root) if any("control-inconclusive-http-404" in ref for ref in r.payload_refs)]
+    assert len(rows) == 1, "a 404 on the control is inconclusive, durable, and classified"
