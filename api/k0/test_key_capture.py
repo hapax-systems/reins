@@ -264,6 +264,10 @@ case "$cmd" in
     f="$store/$1"
     if [ -f "$f" ]; then cat "$f"; exit 0; else exit 1; fi
     ;;
+  ls)
+    # presence without decryption: prints the name, never the value
+    if [ -f "$store/$1" ]; then echo "$1"; exit 0; else exit 1; fi
+    ;;
   insert)
     p=""
     while [ $# -gt 0 ]; do
@@ -317,6 +321,7 @@ FAILING_PASS = """#!/bin/sh
 cmd="$1"; shift
 case "$cmd" in
   show) exit 1 ;;
+  ls) exit 1 ;;
   insert)
     IFS= read -r line
     echo "gpg: cannot encrypt for $line: no key" >&2
