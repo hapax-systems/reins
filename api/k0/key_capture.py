@@ -51,7 +51,7 @@ from bootstrap_receipt import (
 )
 
 from .boot_profile import PROFILES, ratified_profile
-from .egress_consent import require_egress
+from .egress_consent import EgressConsentError, require_egress
 
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
 
@@ -210,7 +210,10 @@ def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
     import socket
     import ssl
 
-    conn = http.client.HTTPSConnection(host, timeout=10)
+    # Explicit, not assumed: the default context verifies certificates and hostnames
+    # (CERT_REQUIRED, check_hostname). Passing it makes the verification a choice this code
+    # makes, visible to a reader and capturable by a test double.
+    conn = http.client.HTTPSConnection(host, timeout=10, context=ssl.create_default_context())
     try:
         conn.request("GET", path, headers={"Authorization": f"Bearer {value.decode('utf-8')}"})
         response = conn.getresponse()
@@ -227,9 +230,13 @@ def https_probe_transport(host: str, path: str, value: bytes) -> ProbeOutcome:
         return ProbeOutcome(None, "transport-error")
     finally:
         conn.close()
-    if 200 <= response.status < 400:
+    if 200 <= response.status < 300:
         request_id = response.getheader("x-request-id") or response.getheader("server") or "unknown"
         return ProbeOutcome(f"https-status:{response.status}:server:{request_id}", None)
+    if 300 <= response.status < 400:
+        # A redirect is NOT a validation: the endpoint moved, and following it with a bearer
+        # token is how keys leak to hosts nobody consented to (codex r7 critical).
+        return ProbeOutcome(None, f"http-{response.status}-redirect")
     return ProbeOutcome(None, f"http-{response.status}")
 
 
@@ -251,6 +258,11 @@ def failure_next_move(failure_class: str) -> str:
     classes, which are per-status data, not prose to parse."""
     if failure_class in FAILURE_NEXT_MOVES:
         return FAILURE_NEXT_MOVES[failure_class]
+    if failure_class.endswith("-redirect"):
+        return (
+            "the endpoint answered a redirect — do not follow it with a bearer token; establish "
+            "the provider's real validation endpoint and update the probe path"
+        )
     if failure_class.startswith("http-"):
         status = failure_class.removeprefix("http-")
         if status.startswith("4"):
@@ -437,7 +449,26 @@ def validate_key(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
-    require_egress(root, probe.host)  # the SAME attribute that reaches the transport below
+    try:
+        require_egress(root, probe.host)
+    except EgressConsentError:
+        # A refused attempt is durable (claude r7): an operator who never ran the ceremony can
+        # see that something TRIED to validate against an unconsented host. The row names the
+        # host and deliberately NOT the k0-secret ref — supply_state must never read an egress
+        # refusal as a capture decline.
+        _append_row(
+            root,
+            act=BootstrapAct.REFUSED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"egress-host:{probe.host}",
+                "egress-attempt:validation-refused-by-consent-gate",
+            ],
+            receipt_id=f"egress-refused-{name}-{len(load_chain(root))}",
+            observed_at=observed_at,
+        )
+        raise
     value = store.get(name)
     if value is None:
         raise ValueError(

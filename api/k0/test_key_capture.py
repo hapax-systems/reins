@@ -90,7 +90,7 @@ def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Ex
     import http.client
 
     class _FakeConn:
-        def __init__(self, host: str, timeout: int = 10) -> None:
+        def __init__(self, host: str, timeout: int = 10, context=None) -> None:
             self._host = host
             if record is not None:
                 record.append(("connect", host))
@@ -450,6 +450,14 @@ def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_
             estate_id=ESTATE, kernel_version=KERNEL,
         )
     assert dialed == [], "the wire — the transmitting act — was never touched"
+    refused = [
+        r for r in _chain(root)
+        if r.act.value == "refused" and "egress-host:api.never-consented.example" in r.payload_refs
+    ]
+    assert len(refused) == 1, (
+        "the refused attempt is durable (claude r7): the ledger shows something tried to "
+        "validate against an unconsented host"
+    )
     assert supply_state(root, store, NAME) is SecretSupply.CAPTURED_UNVALIDATED, (
         "a refused validation is not a disposition; the name stays unvalidated"
     )
@@ -554,3 +562,41 @@ def test_remaining_transport_and_descriptor_branches(monkeypatch: pytest.MonkeyP
         "each class carries its own next move — one generic string would be the dead end "
         "executive_function forbids"
     )
+
+
+def test_a_redirect_never_validates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """3xx is not success (codex r7 critical): a redirect followed with a bearer token is the
+    classic key-leak, and a login-page 302 would otherwise 'validate' any garbage."""
+    from k0.key_capture import failure_next_move, https_probe_transport
+
+    _patch_wire(monkeypatch, status=302)
+    out = https_probe_transport(HOST, "/v1/models", b"sk-anything")
+    assert out.evidence is None and out.failure == "http-302-redirect"
+    assert "do not follow" in failure_next_move(out.failure)
+
+
+def test_the_tls_context_verifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """glm r7: certificate verification is explicit and capturable, not assumed."""
+    import http.client
+    import ssl
+
+    captured: dict = {}
+
+    class _CtxConn:
+        def __init__(self, host: str, timeout: int = 10, context=None) -> None:
+            captured["context"] = context
+
+        def request(self, *a, **k) -> None:
+            raise OSError("stop here — the context is what is under test")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _CtxConn)
+    from k0.key_capture import https_probe_transport
+
+    https_probe_transport(HOST, "/v1/models", b"x")
+    ctx = captured.get("context")
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname
