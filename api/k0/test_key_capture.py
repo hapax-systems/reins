@@ -231,7 +231,7 @@ def _chain(root: Path):
     return load_chain(root)
 
 
-def test_a_failed_validation_writes_no_row_and_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_validation_writes_a_classified_row_and_is_not_supply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     store = MemoryStore()
     key = _key(tmp_path)

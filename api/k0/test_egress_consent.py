@@ -402,3 +402,32 @@ def test_the_hash_only_read_requires_an_explicit_opt_in(tmp_path: Path) -> None:
         ratified_allowlist(root)
     got = ratified_allowlist(root, allow_unauthenticated=True)
     assert got is not None and got.signature_verified is False
+
+
+def test_one_canonical_form_per_host_set(tmp_path: Path) -> None:
+    """CodeRabbit major: extra fields, duplicate JSON keys, and duplicate hosts would let two
+    byte forms carry the same effective consent. All three are unrepresentable."""
+    with pytest.raises(ValueError, match="duplicate hosts"):
+        EgressAllowlist(hosts=("api.anthropic.com", "api.anthropic.com"))
+
+    import hashlib as _hashlib
+
+    from k0.ratification import Stipulation, propose, ratify
+
+    for bad in (
+        b'{"hosts":["api.anthropic.com"],"extra":1}',
+        b'{"hosts":["api.anthropic.com"],"hosts":["api.z.ai"]}',
+        b'{"hosts":["api.z.ai","api.z.ai"]}',
+    ):
+        sub = tmp_path / str(abs(hash(bad)))
+        sub.mkdir()
+        root = _root(sub)
+        key = _key(sub)
+        sid = f"egress-allowlist.{_hashlib.sha256(bad).hexdigest()[:16]}"
+        stip = Stipulation.over(sid, "EGRESS CONSENT: canonical-form test", bad)
+        (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+        (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+        propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+        ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+        with pytest.raises(EgressConsentError, match="not decodable"):
+            ratified_allowlist(root, allow_unauthenticated=True)

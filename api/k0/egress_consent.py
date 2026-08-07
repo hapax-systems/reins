@@ -84,6 +84,11 @@ class EgressAllowlist:
                 "an empty allowlist consents to nothing — decline egress instead of signing "
                 "an artifact that says nothing"
             )
+        if len(set(self.hosts)) != len(self.hosts):
+            raise ValueError(
+                "duplicate hosts: one canonical form per host set (CodeRabbit major) — "
+                "duplicate entries would let two byte forms carry the same consent"
+            )
         for host in self.hosts:
             if not HOST_GRAMMAR.match(host):
                 raise ValueError(
@@ -190,6 +195,17 @@ class RatifiedEgress:
     #: False is not silent skipping — it is the answer's authentication status, as data, and
     #: anything driving a decision from this object can see it (claude r21).
     signature_verified: bool
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """json.loads silently keeps the LAST of duplicate keys — parser-dependent meaning is the
+    enemy of a byte-pinned consent artifact, so duplicates are unrepresentable here."""
+    out: dict[str, object] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate JSON key {key!r} in a consent artifact")
+        out[key] = value
+    return out
 
 
 def ratified_allowlist(
@@ -329,10 +345,14 @@ def ratified_allowlist(
             ),
         )
     try:
-        parsed = json.loads(raw.decode("utf-8"))
-        hosts = parsed["hosts"] if isinstance(parsed, dict) else None
+        parsed = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+        if not isinstance(parsed, dict) or set(parsed) != {"hosts"}:
+            raise TypeError("an allowlist body is exactly {'hosts': [...]} — no extra fields")
+        hosts = parsed["hosts"]
         if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
             raise TypeError("hosts is not a list of hostnames")
+        if len(set(hosts)) != len(hosts):
+            raise TypeError("duplicate hosts")
     except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
         raise EgressConsentError(
             f"{sid}: the consented allowlist is not decodable as an allowlist",
