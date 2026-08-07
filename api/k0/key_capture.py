@@ -32,13 +32,16 @@ BootstrapReceipt's ref grammar refuses bare-secret shapes on top of that.
 from __future__ import annotations
 
 import hashlib
+import re
+import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Protocol
+from types import MappingProxyType
+from typing import Callable, Mapping, Protocol
 
 from bootstrap_receipt import (
     BootstrapAct,
@@ -50,6 +53,7 @@ from bootstrap_receipt import (
 )
 
 from .boot_profile import PROFILES, ratified_profile
+from .egress_consent import EgressConsentError, require_egress
 
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
 
@@ -163,6 +167,220 @@ class PassStore:
             )
 
 
+@dataclass(frozen=True)
+class ProbeEndpoint:
+    """Where a provider's key is proven: host, path, auth shape — REGISTRY DATA, never caller
+    input (r9/r10 criticals: a caller-selected path or host can point at an endpoint that
+    cannot discriminate, and consent is then anchored to nothing)."""
+
+    host: str
+    path: str
+    auth_scheme: str  # "bearer" | "x-api-key"
+    key_prefix: str  # the provider's key shape — the negative control must match it
+    extra_headers: tuple[tuple[str, str], ...] = ()
+
+
+#: The sanctioned providers and the endpoints that actually check authorization on them. A
+#: provider enters this table only when its validation endpoint is KNOWN to refuse invalid
+#: keys; the per-call negative control re-proves that property on every run. IMMUTABLE
+#: (MappingProxyType, codex r20): a mutable registry would let a caller register its own
+#: endpoint and pass the membership guard with a destination nobody sanctioned.
+PROVIDER_PROBE_ENDPOINTS: Mapping[str, ProbeEndpoint] = MappingProxyType({
+    "anthropic": ProbeEndpoint(
+        "api.anthropic.com",
+        "/v1/models",
+        "x-api-key",
+        "sk-ant-",
+        (("anthropic-version", "2023-06-01"),),
+    ),
+    "openai": ProbeEndpoint("api.openai.com", "/v1/models", "bearer", "sk-"),
+})
+
+#: Captured AT IMPORT (codex r21): the guard reads this, never the public name — rebinding
+#: `PROVIDER_PROBE_ENDPOINTS` on the module would redirect readers but cannot redirect the
+#: wire. THE THREAT BOUNDARY, STATED: a hostile IN-PROCESS caller can monkeypatch anything,
+#: including require_egress itself; no Python structure prevents that, and none is claimed.
+#: These controls make the legal path the only natural one and every divergence deliberate.
+_SANCTIONED_ENDPOINTS: tuple[ProbeEndpoint, ...] = tuple(PROVIDER_PROBE_ENDPOINTS.values())
+
+
+def _negative_control_key(endpoint: ProbeEndpoint) -> bytes:
+    """The deliberately-invalid control key — provider-SHAPED and random (r9/r10/r11).
+
+    The bypass ladder ends here: a fixed control can be hardcoded around; an unmarked random
+    one can be shape-selected around (accept sk-*, refuse the rest — and the control is 'the
+    rest'). The terminal form is a key in the provider's own shape with a random payload: to
+    the endpoint it is indistinguishable from a real key, so an endpoint that accepts it is
+    caught by the indiscriminate check, and an endpoint that refuses it actually checked.
+    """
+    import secrets
+
+    return (endpoint.key_prefix + secrets.token_hex(24)).encode("ascii")
+
+
+@dataclass(frozen=True)
+class ProbeOutcome:
+    """What the wire said: evidence on success, a classified cause on failure — never both."""
+
+    evidence: str | None
+    failure: str | None
+
+
+def _https_probe_transport(
+    root: Path,
+    endpoint: ProbeEndpoint,
+    value: bytes,
+    *,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
+) -> ProbeOutcome:
+    # The wire dials ONLY registry endpoints (codex r16): a transport taking free host/path/
+    # header arguments is a dial-anything primitive wearing a consent check, and caller-shaped
+    # headers are caller-controlled content on the wire. Registry membership is verified here,
+    # so the consented destination is the only reachable one.
+    if all(endpoint is not registered for registered in _SANCTIONED_ENDPOINTS):
+        # IDENTITY, not equality (claude r20): with the registry immutable, the endpoint must BE
+        # the registry's object — a caller rebuilding an equal one is shaping their own
+        # destination, and that is not consent.
+        # SEAT SPLIT, recorded: glm r23 holds that `is` is the wrong comparison for dataclass
+        # instances. Identity is the point: equality proves only that the caller can construct
+        # a lookalike, and the guard exists to make that insufficient.
+        raise ValueError(
+            "the kernel's wire dials the registry's own endpoint objects only — an endpoint "
+            "that is not the registry's is not a legal destination"
+        )
+    """THE KERNEL'S OWN WIRE — AND IT IS SELF-GATING (codex r15). A public transport that does
+    not check consent would be the bypass around the gate: any caller could import it and dial
+    without a ratified allowlist. So the transport takes the root and runs `require_egress`
+    itself. Every dial this kernel can make passes through consent; the seam is exclusive by
+    construction. Tests patch the stdlib boundary (http.client.HTTPSConnection), never this
+    module's surface.
+
+    Deliberately narrow: GET with the key as a bearer token, 10s timeout, no request body, the
+    response body consumed and DISCARDED (never logged, stored, or returned). Failures are
+    classified into a fixed vocabulary so the operator's ledger says WHAT failed — a timeout
+    and a 401 are different problems with different next moves — without ever quoting the
+    wire. Evidence on success: status plus the provider's request id, when it sends one.
+    """
+    require_egress(
+        root, endpoint.host, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
+    import http.client
+    import socket
+    import ssl
+
+    # Explicit, not assumed: the default context verifies certificates and hostnames
+    # (CERT_REQUIRED, check_hostname). Passing it makes the verification a choice this code
+    # makes, visible to a reader and capturable by a test double.
+    conn = http.client.HTTPSConnection(endpoint.host, timeout=10, context=ssl.create_default_context())
+    try:
+        if endpoint.auth_scheme == "x-api-key":
+            auth_headers = {"x-api-key": value.decode("utf-8")}
+        else:
+            auth_headers = {"Authorization": f"Bearer {value.decode('utf-8')}"}
+        headers = {**auth_headers, **dict(endpoint.extra_headers)}
+        conn.request("GET", endpoint.path, headers=headers)
+        response = conn.getresponse()
+        response.read()
+    except socket.timeout:
+        return ProbeOutcome(None, "timeout")
+    except ConnectionRefusedError:
+        return ProbeOutcome(None, "connection-refused")
+    except ssl.SSLError:
+        return ProbeOutcome(None, "tls-error")
+    except UnicodeDecodeError:
+        return ProbeOutcome(None, "key-not-utf8")
+    except (OSError, http.client.HTTPException):
+        return ProbeOutcome(None, "transport-error")
+    finally:
+        conn.close()
+    if 200 <= response.status < 300:
+        request_id = response.getheader("x-request-id") or response.getheader("server") or "unknown"
+        return ProbeOutcome(f"https-status:{response.status}:server:{request_id}", None)
+    if 300 <= response.status < 400:
+        # A redirect is NOT a validation: the endpoint moved, and following it with a bearer
+        # token is how keys leak to hosts nobody consented to (codex r7 critical).
+        return ProbeOutcome(None, f"http-{response.status}-redirect")
+    return ProbeOutcome(None, f"http-{response.status}")
+
+
+#: Every failure class the wire can report, with the operator's next move (executive_function:
+#: an error without a next action is a dead end). Renderers look the class up here; the ledger
+#: row carries the class itself.
+FAILURE_NEXT_MOVES: dict[str, str] = {
+    "timeout": "the host did not answer in 10s — check reachability, then retry; the key is unproven, not condemned",
+    "connection-refused": "the host refused the connection — check the host name and egress path, then retry",
+    "tls-error": "the TLS handshake failed — do not retry blindly; establish whether the endpoint is the real one before offering the key again",
+    "key-not-utf8": "the stored value is not UTF-8 — it cannot ride an Authorization header; re-capture the key",
+    "transport-error": "an unclassified transport failure — inspect locally, then retry",
+    "unknown": "the probe failed without a classified cause — inspect locally, then retry",
+}
+
+
+def failure_next_move(failure_class: str) -> str:
+    """The operator's next move for a failed validation class — including the http-<status>
+    classes, which are per-status data, not prose to parse."""
+    if failure_class in FAILURE_NEXT_MOVES:
+        return FAILURE_NEXT_MOVES[failure_class]
+    if failure_class.startswith("control-inconclusive-"):
+        cause = failure_class.removeprefix("control-inconclusive-")
+        if cause in ("http-404", "http-429"):
+            return (
+                f"the negative control was answered {cause.removeprefix('http-')} — "
+                + (
+                    "the probe path is wrong; confirm the provider's validation endpoint"
+                    if cause == "http-404"
+                    else "the endpoint is rate-limiting; wait, then retry"
+                )
+            )
+        if cause.startswith("http-"):
+            return (
+                f"the negative control was answered {cause.removeprefix('http-')} rather than "
+                "401/403 — the endpoint's discrimination is unproven; inspect the endpoint, "
+                "then retry"
+            )
+        inner = FAILURE_NEXT_MOVES.get(cause, FAILURE_NEXT_MOVES["unknown"])
+        return (
+            f"the negative control did not produce a clean refusal ({cause}) — the endpoint's "
+            f"discrimination is unproven, so nothing about the real key is established; resolve "
+            f"the control's own failure first: {inner}"
+        )
+    if failure_class == "endpoint-indiscriminate":
+        return (
+            "the endpoint answered success to a deliberately invalid key — this probe path "
+            "cannot validate anything; choose an endpoint that requires authorization"
+        )
+    if failure_class.endswith("-redirect"):
+        return (
+            "the endpoint answered a redirect — do not follow it with a bearer token; establish "
+            "the provider's real validation endpoint and update the probe path"
+        )
+    if failure_class.startswith("http-"):
+        status = failure_class.removeprefix("http-")
+        if status in ("401", "403"):
+            return (
+                f"the provider answered {status} — the key does not work (wrong, expired, or "
+                "revoked); capture a working key, then validate again"
+            )
+        if status == "404":
+            return "the provider answered 404 — the probe path is wrong; confirm the provider's validation endpoint"
+        if status == "429":
+            return "the provider answered 429 — rate-limited; wait, then retry — the key is unproven, not condemned"
+        if status.startswith("4"):
+            return (
+                f"the provider answered {status} — a request-level rejection, not necessarily "
+                "the key; inspect before recapturing (codex r14: 4xx is not automatically "
+                "'bad credential')"
+            )
+        if status.startswith("5"):
+            return (
+                f"the provider answered {status} — the failure is theirs; retry later, the key "
+                "is unproven, not condemned"
+            )
+    return FAILURE_NEXT_MOVES["unknown"]
+
+
 def required_secrets(root: Path) -> tuple[str, ...]:
     """The secret set GENERATED from the ratified capability set — read off the chain.
 
@@ -184,6 +402,34 @@ def required_secrets(root: Path) -> tuple[str, ...]:
         )
     profile = PROFILES[ratified.profile_id]
     return profile.secret_requirements
+
+
+def _append_row_phased(
+    root: Path,
+    *,
+    act: BootstrapAct,
+    phase: BootstrapPhase,
+    estate_id: str,
+    kernel_version: str,
+    payload_refs: list[str],
+    receipt_id: str,
+    observed_at: datetime | None,
+) -> Path:
+    chain = load_chain(root)
+    if not chain:
+        raise ValueError("no genesis self-attest: there is no ceremony to record within")
+    receipt = BootstrapReceipt(
+        receipt_id=receipt_id,
+        estate_id=estate_id,
+        kernel_version=kernel_version,
+        phase=phase,
+        act=act,
+        payload_refs=payload_refs,
+        evidence_status=EvidenceStatus.OBSERVED,
+        prev_receipt_hash=chain[-1].receipt_hash(),
+        observed_at=observed_at or datetime.now(UTC),
+    )
+    return append_receipt(root, receipt)
 
 
 def _append_row(
@@ -301,33 +547,151 @@ def validate_key(
     store: SecretStore,
     name: str,
     *,
-    validator: Callable[[bytes], str | None],
+    provider: str,
     estate_id: str,
     kernel_version: str,
+    allowed_signers: Path,
+    principal: str,
+    scratch_dir: Path,
     observed_at: datetime | None = None,
 ) -> bool:
     """The working-key validation receipt. UNVALIDATED IS NOT SUPPLY, as a machine check.
 
-    The validator is injected and receives the value in memory; this module never transmits.
-    It returns an evidence string on success (a probe-receipt ref, a response id — something a
-    stranger could re-check), which is DIGESTED into the row: the chain pins that validation
-    happened against this evidence without carrying the evidence itself. Failure writes no row:
-    a failed validation is not a disposition, and the name stays CAPTURED_UNVALIDATED.
+    The probe TRANSMITS — a validation ping is the kernel's one real egress seam today — so it
+    is gated: `require_egress(root, endpoint.host)` runs before the probe is ever invoked, and a
+    destination the operator has not consented to is refused, never dialed. The host is read
+    FROM the probe (one object, one truth — no separate argument to disagree with it). The
+    probe receives the value in memory; this module never transmits itself. The probe returns
+    an evidence string on success (a response id — something a stranger could re-check), which
+    is DIGESTED into the row: the chain pins that validation happened against this evidence
+    without carrying the evidence itself. A failed probe writes a FAILURE row (no value, no
+    response body) — the name stays CAPTURED_UNVALIDATED and the failure is durable, because a
+    silent failure would let a wrong key burn retries forever.
+
+    THE WIRE IS THE KERNEL'S, WITH NO INJECTION SEAM (r4/r5/r6 rounds): the probe is a
+    descriptor (host, path — data, never code), consent is checked against `endpoint.host`, and
+    the dial is ALWAYS this module's own stdlib HTTPS transport with that same attribute. The transport is PRIVATE — validate_key is the only public transmitting surface, so the validation discipline (negative control, value-binding, durable classified failures) cannot be stepped around by importing the wire directly (glm/claude r18).
+    `validate_key` takes no transport argument — there is no caller-supplied code anywhere on
+    the transmission path, so the consented destination is the dialed destination by
+    construction. Tests patch the stdlib boundary, not this module's surface. Failures land on
+    the ledger with a classified cause; the evidence the wire returns remains the re-checkable
+    witness. This is descriptor-shaped and consent-sanctioned — the R3.12 doctrine forbids
+    ad-hoc raw clients, not the kernel's own minimal one.
     """
+    endpoint = PROVIDER_PROBE_ENDPOINTS.get(provider)
+    if endpoint is None:
+        raise ValueError(
+            f"{provider!r}: not a sanctioned provider — the probe endpoint is registry data, "
+            "never caller input, and an unknown provider has none"
+        )
     if supply_state(root, store, name) is SecretSupply.CREDENTIAL_GATED:
         raise ValueError(
             f"{name}: declined by the operator — validating a refused secret would be nagging "
             "by another door"
         )
+    try:
+        require_egress(
+            root, endpoint.host, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+        )
+    except EgressConsentError as refusal:
+        # A refused attempt is durable (claude r7) — but only a CLEAN denial is recorded, and
+        # never into a suspect chain (codex r23): an integrity or signature refusal means the
+        # ledger itself is in question, and writing to it would mutate state we just declared
+        # untrustworthy. The row rides at the chain's CURRENT tail phase: planting it at
+        # AUTH_MATERIALIZE would make any later STIPULATION_RATIFY consent a phase regression
+        # and brick the documented recovery path.
+        if getattr(refusal.refusal, "gate", None) == "egress.default-deny":
+            chain = load_chain(root)
+            _append_row_phased(
+                root,
+                act=BootstrapAct.REFUSED,
+                phase=chain[-1].phase,
+                estate_id=estate_id,
+                kernel_version=kernel_version,
+                payload_refs=[
+                    f"egress-host:{endpoint.host}",
+                    "egress-attempt:validation-refused-by-consent-gate",
+                ],
+                receipt_id=f"egress-refused-{name}-{len(chain)}",
+                observed_at=observed_at,
+            )
+        raise
     value = store.get(name)
     if value is None:
         raise ValueError(
             f"{name}: nothing captured to validate — capture first, then prove; an unvalidated "
             "key is not supply, and an absent one is not even that"
         )
-    evidence = validator(value)
-    if evidence is None:
+    # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
+    # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
+    # success to garbage can validate nothing, and the real probe must not run against it.
+    control = _https_probe_transport(
+        root, endpoint, _negative_control_key(endpoint), allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
+    if control.evidence is not None:
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"egress-host:{endpoint.host}",
+                "key-validation-failed:endpoint-indiscriminate",
+            ],
+            receipt_id=f"key-validation-indiscriminate-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
         return False
+    if control.failure != "http-401":
+        # Only 401 on garbage PROVES discrimination (codex r14): a blanket 403 can be a WAF or
+        # an IP block answering without ever seeing the credential, a 404 is a wrong path, a
+        # 429 is a rate limit, a timeout is the network. Anything but the authentication
+        # refusal is inconclusive, and the control's own classified cause is carried so the
+        # operator fixes that first.
+        #
+        # SEAT SPLIT, recorded: glm r17 would also accept 403. The disagreement is real; the
+        # safe direction is never-false-validate — a provider whose only refusal is 403 reads
+        # INCONCLUSIVE here, and inconclusive never mints supply. Tightening later (if a
+        # sanctioned provider proves 403-only) is one line; loosening after a false validation
+        # is a credential leak.
+        cause = control.failure or "unknown"
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"egress-host:{endpoint.host}",
+                f"key-validation-failed:control-inconclusive-{cause}",
+            ],
+            receipt_id=f"key-validation-inconclusive-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
+        return False
+    outcome = _https_probe_transport(
+        root, endpoint, value, allowed_signers=allowed_signers, principal=principal, scratch_dir=scratch_dir
+    )
+    if outcome.evidence is None:
+        # A failed probe is NOT silent: the failure row carries the classified cause (timeout
+        # and a 401 are different problems with different next moves), the consented host, and
+        # never a value or a response body.
+        _append_row(
+            root,
+            act=BootstrapAct.PROBED,
+            estate_id=estate_id,
+            kernel_version=kernel_version,
+            payload_refs=[
+                f"k0-secret:{name}",
+                f"egress-host:{endpoint.host}",
+                f"key-validation-failed:{outcome.failure or 'unknown'}",
+            ],
+            receipt_id=f"key-validation-failed-{name}-{len(_rows(root, name))}",
+            observed_at=observed_at,
+        )
+        return False
+    evidence = outcome.evidence
     _append_row(
         root,
         act=BootstrapAct.PROBED,
@@ -335,6 +699,7 @@ def validate_key(
         kernel_version=kernel_version,
         payload_refs=[
             f"k0-secret:{name}",
+            f"egress-host:{endpoint.host}",
             f"key-validation:sha256:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()[:16]}",
             # The receipt binds the EXACT bytes proven to work. sha256 over a provider key is
             # identification, not disclosure — the value is high-entropy, so its digest is not
