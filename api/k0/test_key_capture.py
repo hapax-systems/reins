@@ -107,7 +107,7 @@ def _patch_wire(monkeypatch: pytest.MonkeyPatch, *, status: int = 200, error: Ex
                 raise error
 
         def getresponse(self):
-            if self._auth == "Bearer k0-negative-control-deliberately-invalid":
+            if "k0-negative-control-" in self._auth:
                 return _FakeResponse(401)
             return _FakeResponse(status)
 
@@ -490,10 +490,11 @@ def test_the_consented_host_is_what_REACHES_the_transport(tmp_path: Path, monkey
     assert ("connect", HOST) in dialed and ("request", HOST, "/v1/models", "Bearer sk-canary-value") in dialed, (
         "the host the consent check evaluated is the host the kernel's transport dialed"
     )
-    assert ("request", HOST, "/v1/models", "Bearer k0-negative-control-deliberately-invalid") in dialed, (
-        "the negative control ran first — a 2xx only proves anything against an endpoint that "
-        "refuses garbage (codex r8)"
+    requests = [r for r in dialed if r[0] == "request"]
+    assert requests[0][3].startswith("Bearer k0-negative-control-") and requests[0][3] != f"Bearer sk-canary-value", (
+        "the negative control ran first, with an UNPREDICTABLE invalid key (codex r9)"
     )
+    assert requests[1][3] == "Bearer sk-canary-value"
 
 
 def test_the_wire_has_no_injection_seam() -> None:

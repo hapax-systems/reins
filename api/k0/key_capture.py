@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -187,10 +188,15 @@ class KeyProbe:
 
 _HOST_GRAMMAR = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$")
 
-#: The deliberately-invalid key for the negative control. Constant, never derived from the real
-#: value: the control asks "does this endpoint refuse garbage?" and a garbage answer derived
-#: from the real key would leak structure about it.
-NEGATIVE_CONTROL_KEY = b"k0-negative-control-deliberately-invalid"
+def _negative_control_key() -> bytes:
+    """The deliberately-invalid control key — UNPREDICTABLE per call (codex r9 critical).
+
+    A fixed public constant can be hardcoded around: an endpoint that refuses exactly that
+    string and accepts everything else would 'validate' any garbage. A random per-call control
+    forces the endpoint to actually check authorization to pass. Prefixed so a ledger reader
+    can recognize the control for what it is.
+    """
+    return f"k0-negative-control-{secrets.token_hex(16)}".encode("ascii")
 
 
 @dataclass(frozen=True)
@@ -488,7 +494,7 @@ def validate_key(
     # NEGATIVE CONTROL (codex r8 critical): a 2xx proves the key works ONLY if the endpoint
     # discriminates. A deliberately invalid key must fail here first; an endpoint that answers
     # success to garbage can validate nothing, and the real probe must not run against it.
-    control = https_probe_transport(probe.host, probe.path, NEGATIVE_CONTROL_KEY)
+    control = https_probe_transport(probe.host, probe.path, _negative_control_key())
     if control.evidence is not None:
         _append_row(
             root,
