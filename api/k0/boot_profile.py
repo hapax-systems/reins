@@ -39,12 +39,11 @@ from bootstrap_receipt import BootstrapAct, load_chain
 
 from .ratification import Stipulation, _id_of, artifact_digest, propose
 
-#: The authority-ceiling vocabulary's home. The graph pins the harness profile at
-#: repo_mutation or below; OBSERVE_ONLY exists so a future profile can be BELOW it without
-#: re-minting the vocabulary.
+#: The authority-ceiling vocabulary's home. The graph pins both sanctioned profiles at
+#: repo_mutation; a profile below that ceiling would add its member here when it is designed,
+#: never before.
 class AuthorityCeiling(StrEnum):
     REPO_MUTATION = "repo_mutation"
-    OBSERVE_ONLY = "observe_only"
 
 
 #: What the ceremony knows a boot profile to be. Keyed by profile_id; `stipulation_id()`
@@ -168,7 +167,11 @@ def detect(
     if harnesses:
         out.append(Detection("existing-agent-harness", harnesses))
     keys = tuple(
-        f"env:{name} present (value unread)" for name in KEY_MARKERS if environ.get(name)
+        f"env:{name} present (value unread)"
+        if environ.get(name)
+        else f"env:{name} present but EMPTY (not supply — a configured intent, not a working key)"
+        for name in KEY_MARKERS
+        if name in environ
     )
     if keys:
         out.append(Detection("hosted-model-kit-minimal", keys))

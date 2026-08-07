@@ -160,3 +160,29 @@ def test_a_redefined_profile_supersedes_and_the_stale_consent_is_reported(tmp_pa
     assert not got.current, (
         "the ratified bytes are not what the current definition mints — say so, never repair it"
     )
+
+
+def test_an_empty_valued_key_marker_is_present_but_honestly_not_supply() -> None:
+    """Presence semantics: a SET-but-empty variable is a configured intent, not a working key.
+
+    Treating it as absent hides the operator's intent from the ceremony; treating it as supply
+    would ratify a floor that cannot stand. The evidence names the difference (codex r1 major).
+    """
+    found = detect(which=lambda name: None, environ={"ANTHROPIC_API_KEY": ""})
+    assert len(found) == 1
+    assert found[0].profile_id == "hosted-model-kit-minimal"
+    assert "EMPTY" in found[0].evidence[0], "an empty value must be rendered as not-supply"
+
+
+def test_a_ratified_row_naming_an_unknown_profile_reads_uncurrent(tmp_path: Path) -> None:
+    """The registry can shrink too: a ratified profile_id the code no longer knows is reported,
+    never defaulted into a known one."""
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    ghost = replace(HARNESS, profile_id="retired-profile")
+    present(root, ghost, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, ghost.stipulation(), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+
+    got = ratified_profile(root)
+    assert got is not None and got.profile_id == "retired-profile"
+    assert not got.current, "an unknown profile_id cannot be current — there is nothing to compare"
