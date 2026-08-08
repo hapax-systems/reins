@@ -55,6 +55,7 @@ from bootstrap_receipt import (
 from .boot_profile import PROFILES, ratified_profile
 from . import provider_legality as _legality
 from .egress_consent import EgressConsentError, require_egress
+from .fatigue_budget import require_budget
 
 AUTH_PHASE = BootstrapPhase.AUTH_MATERIALIZE
 
@@ -479,7 +480,10 @@ def elicit_capture(
     kernel_version: str,
     observed_at: datetime | None = None,
 ) -> Path:
-    """Record the ask. An elicitation is not supply and changes no supply state."""
+    """Record the ask. An elicitation is not supply and changes no supply state — and it is
+    never free: the ratified fatigue budget guards this path (R2.11), so an exhausted budget
+    refuses the ask before any row is written."""
+    require_budget(root)
     return _append_row(
         root,
         act=BootstrapAct.ELICITED,
