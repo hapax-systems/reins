@@ -244,8 +244,21 @@ def effective_budget(root: Path) -> EffectiveBudget:
                 legal_next="restore the body from backup, or ratify a fresh budget",
             ),
         )
+    try:
+        # Re-run the construction law on the read-back (codex r2): a parses-but-illegal number
+        # (zero, negative, a string) is not a budget, however it got signed.
+        validated = BudgetStipulation(parsed["max_elicitations"])
+    except ValueError as exc:
+        raise FatigueBudgetError(
+            f"{sid}: the consented budget violates the construction law: {exc}",
+            Refusal(
+                gate=gate,
+                why="parses but is not a legal budget",
+                legal_next="restore the body from backup, or ratify a legal number",
+            ),
+        ) from None
     return EffectiveBudget(
-        parsed["max_elicitations"],
+        validated.max_elicitations,
         BudgetTier.RATIFIED,
         f"ratified as {sid}",
     )
@@ -277,6 +290,21 @@ def budget_state(root: Path) -> BudgetState:
         tier=budget.tier,
         exhausted=remaining == 0,
     )
+
+
+def run_receipt_metrics(root: Path) -> dict[str, object]:
+    """The fatigue metrics as the run-receipt block (R2.11's 'metrics in run receipts'; codex
+    r2): a shaped, JSON-safe mapping the ceremony runner embeds in its run receipts. Derived
+    from the chain at call time — the receipt can never disagree with the ledger."""
+    state = budget_state(root)
+    return {
+        "fatigue": {
+            "spent": state.spent,
+            "remaining": state.remaining,
+            "exhausted": state.exhausted,
+            "tier": state.tier.value,
+        }
+    }
 
 
 def require_budget(root: Path) -> None:

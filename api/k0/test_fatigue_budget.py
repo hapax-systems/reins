@@ -249,3 +249,42 @@ def test_the_effective_budget_refusal_branches(tmp_path: Path) -> None:
     ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     with pytest.raises(FatigueBudgetError, match="unexpected fields"):
         effective_budget(root)
+
+
+def test_an_illegal_number_on_readback_is_refused(tmp_path: Path) -> None:
+    """codex r2: parses-but-illegal is not a budget, even signed."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b'{"max_elicitations":-5}'
+    sid = f"fatigue-budget.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "FATIGUE BUDGET: illegal value test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(FatigueBudgetError, match="construction law"):
+        effective_budget(root)
+
+
+def test_the_run_receipt_block_is_shaped_and_derived(tmp_path: Path) -> None:
+    """codex r2: the metrics exist AS a run-receipt block — shaped, JSON-safe, derived."""
+    import json as _json
+
+    from k0.fatigue_budget import run_receipt_metrics
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    budget = BudgetStipulation(2)
+    present(root, budget, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, budget, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    elicit_capture(root, "alpha-secret", estate_id=ESTATE, kernel_version=KERNEL)
+
+    block = run_receipt_metrics(root)
+    _json.dumps(block), "the block must serialize into any receipt format"
+    assert block == {
+        "fatigue": {"spent": 1, "remaining": 1, "exhausted": False, "tier": "ratified"}
+    }
