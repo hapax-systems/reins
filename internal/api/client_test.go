@@ -1,10 +1,18 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hapax-systems/reins/internal/grammar"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -25,6 +33,175 @@ func withReadAPI(t *testing.T, handler http.HandlerFunc) string {
 	}
 	t.Cleanup(func() { newReadHTTPClient = old })
 	return "http://reins.test"
+}
+
+func TestConsumeReadErrorUsesClosedVocabulary(t *testing.T) {
+	tests := []struct {
+		name string
+		wire string
+		want string
+	}{
+		{
+			name: "approved",
+			wire: "turn_replay_fixture_only",
+			want: "turn_replay_fixture_only",
+		},
+		{name: "version skew", wire: "events_read_error_v2", want: "read_contract_error"},
+		{
+			name: "sentinel",
+			wire: "SENTINEL:/private/operator/path:stack-frame",
+			want: "read_contract_error",
+		},
+		{
+			name: "oversized",
+			wire: strings.Repeat("x", maxReadErrorCodeBytes+1),
+			want: "read_contract_error",
+		},
+		{name: "malformed", wire: string([]byte{0xff}), want: "read_contract_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wire := tt.wire
+			err := consumeReadError(&wire)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("consumeReadError() = %v, want %q", err, tt.want)
+			}
+			if wire != "" {
+				t.Fatalf("wire error bytes retained: %q", wire)
+			}
+			if strings.Contains(err.Error(), "SENTINEL") {
+				t.Fatalf("returned error retained remote detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestFetchEventsRejectsUnknownRemoteErrorDetail(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path:stack-frame"
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"dark":true,"error":%q,"events":[]}`, sentinel)
+	})
+
+	_, dark, err := FetchEvents(apiURL)
+	if !dark || err == nil || err.Error() != "read_contract_error" {
+		t.Fatalf("FetchEvents() dark=%v err=%v", dark, err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("FetchEvents retained remote detail: %q", err)
+	}
+}
+
+func TestFetchEventsCollapsesHostileWrapperDecode(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path:stack-frame"
+	invalidUTF8 := append(
+		[]byte(`{"dark":true,"error":"`),
+		append([]byte{0xff}, []byte(`","events":[]}`)...)...,
+	)
+	tests := []struct {
+		name string
+		wire []byte
+	}{
+		{
+			name: "wrong type error",
+			wire: []byte(`{"dark":true,"error":{"detail":"` + sentinel + `"},"events":[]}`),
+		},
+		{
+			name: "oversized error",
+			wire: []byte(fmt.Sprintf(
+				`{"dark":true,"error":%q,"events":[]}`,
+				strings.Repeat("x", maxReadErrorCodeBytes+1),
+			)),
+		},
+		{
+			name: "malformed error",
+			wire: []byte(`{"dark":true,"error":"` + sentinel + `\q","events":[]}`),
+		},
+		{name: "invalid utf8 error", wire: invalidUTF8},
+		{
+			name: "trailing value",
+			wire: []byte(`{"dark":true,"error":"","events":[]} "` + sentinel + `"`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(tt.wire)
+			})
+
+			events, dark, err := FetchEvents(apiURL)
+			if !dark || err != errReadContract {
+				t.Fatalf("FetchEvents() events=%+v dark=%v err=%v", events, dark, err)
+			}
+			if events != nil {
+				t.Fatalf("contract failure released partially decoded events: %+v", events)
+			}
+			if err.Error() != "read_contract_error" || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("contract failure exposed producer detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestFetchMetaSanitizesRemoteStatusDetail(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	meta := FetchMeta(apiURL)
+	if !meta.Reachable || !meta.Foreign || meta.Detail != "foreign_http_status" {
+		t.Fatalf("FetchMeta() = %+v", meta)
+	}
+}
+
+func TestContextProjectionHashStreamingPreservesFrozenDigests(t *testing.T) {
+	payload, err := os.ReadFile("../../api/fixtures/context-canon-gate0-carriers.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		OperatorProjection json.RawMessage `json:"operator_projection"`
+	}
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	var projection struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(fixture.OperatorProjection, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Events) == 0 {
+		t.Fatal("frozen operator projection has no events")
+	}
+
+	projectionHash, err := grammar.ContextProjectionContentHash(fixture.OperatorProjection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantProjection = "f7b1cae2d3ca1d3f5bfe97a51e298dc3ae71a62af73ce2aabfd97241eb397ccd"
+	if projectionHash != wantProjection {
+		t.Fatalf(
+			"ContextProjectionContentHash() = %s, want %s",
+			projectionHash,
+			wantProjection,
+		)
+	}
+
+	eventHash, err := grammar.ContextProjectionEventContentHash(projection.Events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantEvent = "a403416c626ef0892f842f145fac577773a7fb2cd3c901e0f4155edc52a1f1e9"
+	if eventHash != wantEvent {
+		t.Fatalf(
+			"ContextProjectionEventContentHash() = %s, want %s",
+			eventHash,
+			wantEvent,
+		)
+	}
 }
 
 func TestFetchIntakeTreatsHTTP404AsDark(t *testing.T) {
@@ -116,6 +293,97 @@ func TestFetchRouteDecodesMeasuredVsAbsent(t *testing.T) {
 	}
 	if by["absent_str"] {
 		t.Fatal("the \"absent\" string must NOT be measured")
+	}
+}
+
+func TestFetchRouteCollapsesPartialWrapperDecode(t *testing.T) {
+	const sentinel = "SENTINEL:/private/operator/path"
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "posture",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/route/posture" {
+					t.Fatalf("posture contract failure must stop before candidates, got %s", r.URL.Path)
+				}
+				_, _ = w.Write([]byte(
+					`{"dark":true,"error":"` + sentinel + `","decision":123}`,
+				))
+			},
+		},
+		{
+			name: "candidates",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/route/posture":
+					_, _ = w.Write([]byte(
+						`{"dark":false,"error":"","decision":"NO SPINE DECISION ON FILE"}`,
+					))
+				case "/route/candidates":
+					_, _ = w.Write([]byte(
+						`{"dark":true,"error":"` + sentinel + `","decision":123,"candidates":[]}`,
+					))
+				default:
+					t.Fatalf("unexpected route path %s", r.URL.Path)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiURL := withReadAPI(t, tt.handler)
+			posture, candidates, dark, err := FetchRoute(apiURL)
+			if !dark || err != errReadContract {
+				t.Fatalf(
+					"FetchRoute() posture=%+v candidates=%+v dark=%v err=%v",
+					posture,
+					candidates,
+					dark,
+					err,
+				)
+			}
+			if !reflect.DeepEqual(posture, grammar.RoutePosture{}) || candidates != nil {
+				t.Fatalf(
+					"contract failure released route state: posture=%+v candidates=%+v",
+					posture,
+					candidates,
+				)
+			}
+			if err.Error() != "read_contract_error" || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("route contract failure exposed producer detail: %q", err)
+			}
+		})
+	}
+}
+
+func TestDecodeReadWrapperPreservesApprovedStructuredData(t *testing.T) {
+	wire := strings.NewReader(`{
+		"dark": true,
+		"error": "turn_replay_fixture_only",
+		"turns": [{
+			"ts": "2026-07-13T10:00:00Z",
+			"role": "cc-reins",
+			"kind": "assistant",
+			"prov": "model",
+			"summary": "approved structured turn"
+		}]
+	}`)
+
+	decoded, err := decodeReadWrapper(
+		wire,
+		func(r *turnsResp) *string { return &r.Error },
+	)
+	if err == nil || err.Error() != "turn_replay_fixture_only" {
+		t.Fatalf("decodeReadWrapper() err=%v", err)
+	}
+	if decoded.Error != "" {
+		t.Fatalf("approved wire error was not cleared: %q", decoded.Error)
+	}
+	if len(decoded.Turns) != 1 || decoded.Turns[0].Summary != "approved structured turn" {
+		t.Fatalf("approved structured data was not preserved: %+v", decoded.Turns)
 	}
 }
 
@@ -275,6 +543,249 @@ func TestFetchEpistemicsReadsSourceBackedRows(t *testing.T) {
 	}
 }
 
+func contextEnvelope(state, reasons, projection, compatibility string) []byte {
+	return []byte(fmt.Sprintf(
+		`{"schema":"hapax.reins-context-read.v1","state":%q,"audience":"operator_private","reason_codes":%s,"projection":%s,"compatibility":%s}`,
+		state,
+		reasons,
+		projection,
+		compatibility,
+	))
+}
+
+func TestFetchContextDarkEnvelope(t *testing.T) {
+	payload := contextEnvelope("dark", `["producer_absent"]`, "null", "null")
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/read/context" {
+			t.Fatalf("FetchContext should GET /read/context, got %s", r.URL.Path)
+		}
+		_, _ = w.Write(payload)
+	})
+
+	readout, err := FetchContext(apiURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.State != grammar.ContextReadDark ||
+		len(readout.ReasonCodes) != 1 ||
+		readout.ReasonCodes[0] != "producer_absent" ||
+		readout.Projection != nil ||
+		readout.Compatibility != nil {
+		t.Fatalf("unexpected DARK readout: %+v", readout)
+	}
+}
+
+func TestDecodeContextHoldRetainsRawProjectionAndEnvelope(t *testing.T) {
+	nested := `{"z": 1.2300, "a":[true, null], "sentinel":"PRIVATE-NESTED"}`
+	payload := contextEnvelope(
+		"hold",
+		`["canonical_verifier_unavailable","producer_receipt_missing"]`,
+		nested,
+		"null",
+	)
+	original := append([]byte(nil), payload...)
+
+	readout, err := decodeContextReadout(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.State != grammar.ContextReadHold || readout.Projection == nil {
+		t.Fatalf("expected projection HOLD, got %+v", readout)
+	}
+	if got := string(*readout.Projection); got != nested {
+		t.Fatalf("nested bytes changed:\nwant %q\n got %q", nested, got)
+	}
+	if !bytes.Equal(readout.RawEnvelope, original) {
+		t.Fatal("full envelope bytes changed")
+	}
+
+	payload[0] = '['
+	if !bytes.Equal(readout.RawEnvelope, original) || string(*readout.Projection) != nested {
+		t.Fatal("retained bytes alias the caller buffer")
+	}
+}
+
+func TestFetchContextHoldRetainsRawCompatibility(t *testing.T) {
+	nested := `{"compatibility_only":true,"sentinel":"COMPAT-PRIVATE"}`
+	payload := contextEnvelope("hold", `["compatibility_only"]`, "null", nested)
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	})
+
+	readout, err := FetchContext(apiURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readout.Compatibility == nil || readout.Projection != nil {
+		t.Fatalf("expected compatibility-only HOLD, got %+v", readout)
+	}
+	if got := string(*readout.Compatibility); got != nested {
+		t.Fatalf("compatibility bytes changed: %q", got)
+	}
+}
+
+func TestDecodeContextPresentReturnsOnlySafeDark(t *testing.T) {
+	nested := `{"projection_id":"p1","sentinel":"UNVERIFIED-PRIVATE"}`
+	payload := contextEnvelope("present", `[]`, nested, "null")
+
+	readout, err := decodeContextReadout(payload)
+	if !errors.Is(err, ErrContextPresentValidationUnavailable) {
+		t.Fatalf("want canonical verifier sentinel, got %v", err)
+	}
+	if readout.State != grammar.ContextReadDark ||
+		len(readout.ReasonCodes) != 1 ||
+		readout.ReasonCodes[0] != grammar.ContextReadReasonCanonUnverified ||
+		readout.Projection != nil ||
+		readout.Compatibility != nil ||
+		len(readout.RawEnvelope) != 0 {
+		t.Fatalf("unverified PRESENT escaped as a usable carrier: %+v", readout)
+	}
+}
+
+func TestDecodeContextRejectsMissingAndDuplicateOuterFields(t *testing.T) {
+	base := map[string]any{
+		"schema":        grammar.ContextReadSchema,
+		"state":         "dark",
+		"audience":      grammar.ContextReadAudience,
+		"reason_codes":  []string{"producer_absent"},
+		"projection":    nil,
+		"compatibility": nil,
+	}
+	valid, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for key := range base {
+		t.Run("missing_"+key, func(t *testing.T) {
+			missing := make(map[string]any, len(base)-1)
+			for candidate, value := range base {
+				if candidate != key {
+					missing[candidate] = value
+				}
+			}
+			payload, marshalErr := json.Marshal(missing)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, decodeErr := decodeContextReadout(payload); decodeErr == nil {
+				t.Fatalf("missing %q was accepted", key)
+			}
+		})
+
+		t.Run("duplicate_"+key, func(t *testing.T) {
+			encoded, marshalErr := json.Marshal(base[key])
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			payload := []byte(fmt.Sprintf("{%q:%s,%s", key, encoded, valid[1:]))
+			if _, decodeErr := decodeContextReadout(payload); decodeErr == nil {
+				t.Fatalf("duplicate %q was accepted", key)
+			}
+		})
+	}
+}
+
+func TestDecodeContextRejectsMalformedOuterEnvelope(t *testing.T) {
+	valid := contextEnvelope("dark", `["producer_absent"]`, "null", "null")
+	invalidUTF8 := append(append([]byte(nil), valid...), 0xff)
+	cases := map[string][]byte{
+		"non_object":   []byte(`[]`),
+		"unknown":      []byte(strings.TrimSuffix(string(valid), "}") + `,"extra":true}`),
+		"trailing":     append(append([]byte(nil), valid...), []byte(` { }`)...),
+		"invalid_utf8": invalidUTF8,
+		"legacy":       []byte(`{"dark":true,"projections":{}}`),
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeContextReadout(payload); err == nil {
+				t.Fatalf("invalid envelope %q was accepted", payload)
+			}
+		})
+	}
+}
+
+func TestDecodeContextRejectsInvalidValuesAndStateMatrices(t *testing.T) {
+	cases := map[string][]byte{
+		"wrong_schema": contextEnvelope("dark", `["x"]`, "null", "null"),
+		"wrong_audience": []byte(
+			`{"schema":"hapax.reins-context-read.v1","state":"dark","audience":"all","reason_codes":["x"],"projection":null,"compatibility":null}`,
+		),
+		"unknown_state":              contextEnvelope("pending", `["x"]`, "null", "null"),
+		"reasons_null":               contextEnvelope("dark", `null`, "null", "null"),
+		"reasons_scalar":             contextEnvelope("dark", `"x"`, "null", "null"),
+		"reasons_blank":              contextEnvelope("dark", `[""]`, "null", "null"),
+		"reasons_duplicate":          contextEnvelope("dark", `["x","x"]`, "null", "null"),
+		"reasons_unsorted":           contextEnvelope("dark", `["z","a"]`, "null", "null"),
+		"reasons_edge_whitespace":    contextEnvelope("dark", `[" x"]`, "null", "null"),
+		"reasons_uppercase":          contextEnvelope("dark", `["NotCanonical"]`, "null", "null"),
+		"reasons_newline":            contextEnvelope("dark", `["line\nbreak"]`, "null", "null"),
+		"reasons_ansi":               contextEnvelope("dark", `["\u001b[31m"]`, "null", "null"),
+		"reasons_control":            contextEnvelope("dark", `["x\u0000y"]`, "null", "null"),
+		"reasons_lone_surrogate":     contextEnvelope("dark", `["\ud800"]`, "null", "null"),
+		"projection_array":           contextEnvelope("hold", `["x"]`, `[]`, "null"),
+		"compatibility_scalar":       contextEnvelope("hold", `["x"]`, "null", `"bad"`),
+		"dark_with_projection":       contextEnvelope("dark", `["x"]`, `{}`, "null"),
+		"dark_without_reasons":       contextEnvelope("dark", `[]`, "null", "null"),
+		"hold_without_payload":       contextEnvelope("hold", `["x"]`, "null", "null"),
+		"hold_with_both":             contextEnvelope("hold", `["x"]`, `{}`, `{}`),
+		"hold_without_reasons":       contextEnvelope("hold", `[]`, `{}`, "null"),
+		"present_without_projection": contextEnvelope("present", `[]`, "null", "null"),
+		"present_with_compatibility": contextEnvelope("present", `[]`, `{}`, `{}`),
+		"present_with_reasons":       contextEnvelope("present", `["x"]`, `{}`, "null"),
+	}
+	tooLongJSON, err := json.Marshal(
+		[]string{strings.Repeat("a", grammar.ContextReadMaxReasonCodeBytes+1)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases["reason_too_long"] = contextEnvelope(
+		"dark",
+		string(tooLongJSON),
+		"null",
+		"null",
+	)
+	tooMany := make([]string, grammar.ContextReadMaxReasonCodes+1)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("reason_%03d", index)
+	}
+	tooManyJSON, err := json.Marshal(tooMany)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases["too_many_reasons"] = contextEnvelope(
+		"dark",
+		string(tooManyJSON),
+		"null",
+		"null",
+	)
+	// Override the schema field in the one schema-specific case.
+	cases["wrong_schema"] = []byte(strings.Replace(
+		string(cases["wrong_schema"]),
+		grammar.ContextReadSchema,
+		"hapax.reins-context-read.v0",
+		1,
+	))
+
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeContextReadout(payload); err == nil {
+				t.Fatalf("invalid context matrix was accepted: %s", payload)
+			}
+		})
+	}
+}
+
+func TestFetchContextRejectsOversizeBody(t *testing.T) {
+	apiURL := withReadAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxContextReadBytes+1))
+	})
+	if _, err := FetchContext(apiURL); err == nil {
+		t.Fatal("oversize /read/context body was accepted")
+	}
+}
+
 func TestFetchTracesReadsRowsAndDarkFlag(t *testing.T) {
 	apiURL := withReadAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/read/traces" {
@@ -373,7 +884,7 @@ func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
 			t.Fatalf("FetchTurns should GET session turns, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"dark": true, "error": "no turn replay fixture for session role: missing", "turns": []}`))
+		_, _ = w.Write([]byte(`{"dark": true, "error": "session_turn_fixture_absent", "turns": []}`))
 	})
 	t.Setenv("REINS_API_URL", apiURL)
 
@@ -384,7 +895,7 @@ func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
 	if len(turns) != 0 {
 		t.Fatalf("dark turns response should not fabricate rows: %+v", turns)
 	}
-	if !strings.Contains(err.Error(), "no turn replay fixture") {
-		t.Fatalf("FetchTurns error should include dark reason, got %q", err.Error())
+	if err.Error() != "session_turn_fixture_absent" {
+		t.Fatalf("FetchTurns error should preserve the approved code, got %q", err.Error())
 	}
 }
