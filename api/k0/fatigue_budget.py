@@ -84,7 +84,13 @@ class BudgetStipulation:
     max_elicitations: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.max_elicitations, int) or self.max_elicitations < 1:
+        if isinstance(self.max_elicitations, bool) or not isinstance(self.max_elicitations, int):
+            raise ValueError(
+                "a budget must be an integer count of elicitations, not "
+                f"{type(self.max_elicitations).__name__} — isinstance(True, int) is True in "
+                "Python, and a default-deny law refuses the shape (CodeRabbit)"
+            )
+        if self.max_elicitations < 1:
             raise ValueError(
                 "a budget below 1 consents to no ceremony at all — decline elicitation instead"
             )
@@ -234,8 +240,18 @@ def effective_budget(root: Path) -> EffectiveBudget:
                 legal_next="restore the pinned body, or ratify the changed number",
             ),
         )
-    parsed = json.loads(raw.decode("utf-8"))
-    if set(parsed) != {"max_elicitations"}:
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise FatigueBudgetError(
+            f"{sid}: the consented budget body is not decodable JSON",
+            Refusal(
+                gate=gate,
+                why="the consented bytes are unusable",
+                legal_next="restore the body from backup, or ratify a fresh budget",
+            ),
+        ) from None
+    if not isinstance(parsed, dict) or set(parsed) != {"max_elicitations"}:
         raise FatigueBudgetError(
             f"{sid}: the consented budget carries unexpected fields",
             Refusal(

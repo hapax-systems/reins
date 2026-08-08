@@ -186,7 +186,7 @@ def test_a_late_amendment_is_refused_before_it_mutates(tmp_path: Path) -> None:
     accept(root, budget, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     elicit_capture(root, "alpha-secret", estate_id=ESTATE, kernel_version=KERNEL)
 
-    with pytest.raises(FatigueBudgetError, match="window-locked|locked"):
+    with pytest.raises(FatigueBudgetError, match="locked"):
         present(root, BudgetStipulation(9), estate_id=ESTATE, kernel_version=KERNEL)
     with pytest.raises(FatigueBudgetError, match="locked"):
         accept(root, BudgetStipulation(9), key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
@@ -317,3 +317,44 @@ def test_the_run_receipt_block_is_shaped_and_derived(tmp_path: Path) -> None:
     assert block == {
         "fatigue": {"spent": 1, "remaining": 1, "exhausted": False, "tier": "ratified"}
     }
+
+
+def test_a_boolean_is_not_a_budget(tmp_path: Path) -> None:
+    """CodeRabbit: isinstance(True, int) is True — the law must refuse the shape explicitly,
+    on construction AND on the signed-body read-back."""
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    with pytest.raises(ValueError, match="integer count"):
+        BudgetStipulation(True)
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b'{"max_elicitations":true}'
+    sid = f"fatigue-budget.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "FATIGUE BUDGET: bool test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(FatigueBudgetError, match="construction law"):
+        effective_budget(root)
+
+
+def test_an_undecodable_budget_body_refuses(tmp_path: Path) -> None:
+    import hashlib as _hashlib
+
+    from k0.ratification import SIGNATURE_DIRNAME, Stipulation, propose, ratify
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    bad = b"not json{"
+    sid = f"fatigue-budget.{_hashlib.sha256(bad).hexdigest()[:16]}"
+    stip = Stipulation.over(sid, "FATIGUE BUDGET: decode test", bad)
+    (root / SIGNATURE_DIRNAME).mkdir(exist_ok=True)
+    (root / SIGNATURE_DIRNAME / f"{sid}.body").write_bytes(bad)
+    propose(root, stip, estate_id=ESTATE, kernel_version=KERNEL)
+    ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    with pytest.raises(FatigueBudgetError, match="not decodable"):
+        effective_budget(root)
