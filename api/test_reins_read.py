@@ -1623,3 +1623,46 @@ def test_to_task_defaults_to_unmeasured_not_origin():
     able to assert a measured origin by omission."""
     row = reins_read.to_task("t1", {"stage": "S6"}, ["task_id", "stage", "prior_stage_state"], {}, None)
     assert row["prior_stage_state"] == reins_read.SILENCE_UNMEASURED
+
+
+def test_read_sessions_marks_a_stale_producer_partial(monkeypatch, tmp_path):
+    """The 2026-08-08 lesson: the coordinator died 27 days before anyone noticed, and the API
+    served its last tick as plausible rows. Aged state.json must mark partial with the age."""
+    import subprocess
+
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"lanes": {"beta": {"role": "beta", "platform": "claude", "alive": True}}}))
+    # age the file well past the producer-stale threshold
+    old = 1_700_000_000
+    import os
+
+    os.utime(state, (old, old))
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
+
+    from fastapi.testclient import TestClient
+
+    from reins_read import build_app
+
+    app = build_app(str(tmp_path), ["role", "platform", "state"], None)
+    client = TestClient(app)
+    resp = client.get("/read/sessions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["partial"] is True
+    assert body["producer"]["state"] == "stale"
+    assert body["producer"]["age_s"] > 300
+
+
+def test_read_sessions_marks_a_live_producer(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"lanes": {"beta": {"role": "beta", "platform": "claude", "alive": True}}}))
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
+
+    from fastapi.testclient import TestClient
+
+    from reins_read import build_app
+
+    app = build_app(str(tmp_path), ["role"], None)
+    body = TestClient(app).get("/read/sessions").json()
+    assert body.get("partial") is not True
+    assert body["producer"]["state"] == "live"

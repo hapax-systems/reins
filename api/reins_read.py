@@ -694,6 +694,17 @@ def _session_state_path() -> str:
     return os.path.expanduser(os.environ.get("REINS_COORDINATOR_STATE", "/dev/shm/hapax-coordinator/state.json"))
 
 
+#: Older than this, the coordinator's snapshot is its last tick, not now.
+_PRODUCER_STALE_S = 300.0
+
+
+def _producer_age_s(path: str) -> float | None:
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return None
+
+
 def _raw_sessions() -> list[tuple[str, dict]]:
     with open(_session_state_path(), encoding="utf-8") as fh:
         state = json.load(fh)
@@ -4432,7 +4443,20 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
             )
             for name, lane in raw
         ]
-        return {"dark": False, "sessions": sorted(sessions, key=_session_sort_key)}
+        payload = {"dark": False, "sessions": sorted(sessions, key=_session_sort_key)}
+        # PRODUCER LIVENESS (2026-08-08, found dead 27 days serving a plausible snapshot):
+        # the coordinator writes state.json every tick; an aged file means every row is its
+        # LAST tick, not now — that is data without valid context, and the honest render is
+        # partial with the producer's age named, never a clean dark:false.
+        age_s = _producer_age_s(_session_state_path())
+        payload["producer"] = {
+            "source": _session_state_path(),
+            "age_s": age_s,
+            "state": "live" if age_s is not None and age_s <= _PRODUCER_STALE_S else "stale",
+        }
+        if age_s is None or age_s > _PRODUCER_STALE_S:
+            payload["partial"] = True
+        return payload
 
     @app.get("/read/session/{role}")
     def read_session_detail(role: str) -> dict:
