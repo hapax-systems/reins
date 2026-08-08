@@ -63,6 +63,7 @@ def ratify_genesis_stipulations(
     allowlist: EgressAllowlist,
     forge_profile: ForgeProfile,
     key_path: Path,
+    support_boundary=None,
     estate_id: str,
     kernel_version: str,
     observed_at: datetime | None = None,
@@ -106,6 +107,21 @@ def ratify_genesis_stipulations(
     accept_forge(
         root, forge_profile, key_path=key_path, estate_id=estate_id, kernel_version=kernel_version, observed_at=observed_at
     )
+
+    # The support boundary (R2.12) is the ceremony's CLOSING stipulation act — consented last,
+    # with every narrowing already on the chain.
+    if support_boundary is not None:
+        from .support_boundary import accept as accept_boundary
+        from .support_boundary import present as present_boundary
+
+        present_boundary(
+            root, support_boundary, estate_id=estate_id, kernel_version=kernel_version,
+            observed_at=observed_at,
+        )
+        accept_boundary(
+            root, support_boundary, key_path=key_path, estate_id=estate_id,
+            kernel_version=kernel_version, observed_at=observed_at,
+        )
 
     # The run receipt (R2.11): the ceremony's run ends with its fatigue metrics on the chain —
     # a RECONCILED row at the tail phase, so the ledger holds what the run spent.

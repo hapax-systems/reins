@@ -13,6 +13,7 @@ from k0.ceremony import ceremony_complete, ratify_genesis_stipulations
 from k0.egress_consent import EgressAllowlist, ratified_allowlist
 from k0.forge_choice import FORGE_PROFILES, ForgeChoice, ratified_forge
 from k0.role_registry import role_known, sovereign_principal
+from k0.support_boundary import SupportBoundary, ratified_boundary
 
 ESTATE = "estate-0000000000000000"
 KERNEL = "k0-test"
@@ -70,6 +71,10 @@ def test_the_spine_performs_every_consent_and_the_readers_answer(tmp_path: Path)
         allowlist=EgressAllowlist(hosts=("api.anthropic.com",)),
         forge_profile=FORGE_PROFILES[ForgeChoice.GITHUB_ONLY],
         key_path=key,
+        support_boundary=SupportBoundary(
+            in_scope=("install",), out_scope=("custom-consulting",),
+            answer_surface="docs/SUPPORT.md",
+        ),
         estate_id=ESTATE,
         kernel_version=KERNEL,
     )
@@ -86,6 +91,18 @@ def test_the_spine_performs_every_consent_and_the_readers_answer(tmp_path: Path)
     assert last.act.value == "reconciled" and any(
         ref.startswith("fatigue-metrics:") for ref in last.payload_refs
     ), "the ceremony's run ends with its fatigue metrics on the chain (R2.11, wired)"
+
+    # and the support boundary, as the closing act when supplied
+    assert ratified_boundary(root, allow_unauthenticated=True) is not None, (
+        "the closing act landed"
+    )
+    ratified_ids = [
+        r.receipt_id for r in load_chain(root) if r.act.value == "ratified"
+    ]
+    boundary_row = [rid for rid in ratified_ids if "support-boundary" in rid]
+    assert ratified_ids.index(boundary_row[0]) == len(ratified_ids) - 1, (
+        "the support boundary is the LAST ratified act of the ceremony"
+    )
 
 
 def test_a_refusal_midway_stops_the_ceremony_honestly(tmp_path: Path) -> None:
