@@ -292,6 +292,50 @@ def budget_state(root: Path) -> BudgetState:
     )
 
 
+def emit_run_receipt(
+    root: Path,
+    *,
+    estate_id: str,
+    kernel_version: str,
+    observed_at: datetime | None = None,
+) -> Path:
+    """Emit the fatigue metrics as an ACTUAL chain receipt (codex r3): a RECONCILED row at the
+    chain's current tail phase (never a regression, so always legal mid-ceremony), carrying the
+    derived metrics as refs. The runner calls this at the end of a run; the ledger then holds
+    the metrics, not just a derivation that could produce them."""
+    state = budget_state(root)
+    chain = load_chain(root)
+    if not chain:
+        raise FatigueBudgetError(
+            "no genesis self-attest: there is no run to receipt",
+            Refusal(gate="budget.run-receipt", why="no chain", legal_next="open the chain first"),
+        )
+    if chain[-1].phase is BootstrapPhase.COMPLETE:
+        raise FatigueBudgetError(
+            "the chain is COMPLETE — a run receipt after it would be a row after terminal",
+            Refusal(
+                gate="budget.run-receipt",
+                why="the ceremony is over; the metrics for it live in the rows already written",
+                legal_next="read budget_state for the derived answer",
+            ),
+        )
+    from .key_capture import _append_row_phased
+
+    return _append_row_phased(
+        root,
+        act=BootstrapAct.RECONCILED,
+        phase=chain[-1].phase,
+        estate_id=estate_id,
+        kernel_version=kernel_version,
+        payload_refs=[
+            f"fatigue-metrics:spent={state.spent},remaining={state.remaining},"
+            f"tier={state.tier.value},exhausted={str(state.exhausted).lower()}"
+        ],
+        receipt_id=f"fatigue-run-receipt-{len(chain)}",
+        observed_at=observed_at,
+    )
+
+
 def run_receipt_metrics(root: Path) -> dict[str, object]:
     """The fatigue metrics as the run-receipt block (R2.11's 'metrics in run receipts'; codex
     r2): a shaped, JSON-safe mapping the ceremony runner embeds in its run receipts. Derived

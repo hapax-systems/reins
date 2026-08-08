@@ -36,6 +36,12 @@ def _key(tmp_path: Path) -> Path:
     return key
 
 
+def _chain(root: Path):
+    from bootstrap_receipt import load_chain
+
+    return load_chain(root)
+
+
 def _root(tmp_path: Path) -> Path:
     root = tmp_path / "root"
     root.mkdir()
@@ -268,6 +274,28 @@ def test_an_illegal_number_on_readback_is_refused(tmp_path: Path) -> None:
     ratify(root, stip, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
     with pytest.raises(FatigueBudgetError, match="construction law"):
         effective_budget(root)
+
+
+def test_the_metrics_land_in_an_actual_chain_receipt(tmp_path: Path) -> None:
+    """codex r3: the metrics are emitted as a RECONCILED row on the chain itself — the ledger
+    holds them, and the row matches the derived state exactly."""
+    from k0.fatigue_budget import emit_run_receipt
+
+    root = _root(tmp_path)
+    key = _key(tmp_path)
+    budget = BudgetStipulation(2)
+    present(root, budget, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, budget, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    elicit_capture(root, "alpha-secret", estate_id=ESTATE, kernel_version=KERNEL)
+
+    emit_run_receipt(root, estate_id=ESTATE, kernel_version=KERNEL)
+    last = _chain(root)[-1]
+    assert last.act.value == "reconciled"
+    assert any(
+        ref == "fatigue-metrics:spent=1,remaining=1,tier=ratified,exhausted=false"
+        for ref in last.payload_refs
+    ), "the receipt carries the derived metrics verbatim"
+    assert verify_chain_at(root).ok
 
 
 def test_the_run_receipt_block_is_shaped_and_derived(tmp_path: Path) -> None:
