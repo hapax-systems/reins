@@ -312,7 +312,8 @@ def test_the_run_receipt_block_is_shaped_and_derived(tmp_path: Path) -> None:
     elicit_capture(root, "alpha-secret", estate_id=ESTATE, kernel_version=KERNEL)
 
     block = run_receipt_metrics(root)
-    _json.dumps(block), "the block must serialize into any receipt format"
+    serialized = _json.dumps(block)
+    assert _json.loads(serialized) == block, "the block must serialize into any receipt format"
     assert block == {
         "fatigue": {"spent": 1, "remaining": 1, "exhausted": False, "tier": "ratified"}
     }

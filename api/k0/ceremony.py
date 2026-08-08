@@ -107,6 +107,12 @@ def ratify_genesis_stipulations(
         root, forge_profile, key_path=key_path, estate_id=estate_id, kernel_version=kernel_version, observed_at=observed_at
     )
 
+    # The run receipt (R2.11): the ceremony's run ends with its fatigue metrics on the chain —
+    # a RECONCILED row at the tail phase, so the ledger holds what the run spent.
+    from .fatigue_budget import emit_run_receipt
+
+    emit_run_receipt(root, estate_id=estate_id, kernel_version=kernel_version, observed_at=observed_at)
+
     return CeremonyResult(
         sovereign_identity=SovereignIdentity(principal, _fingerprint_of(key_path)).stipulation_id(),
         role_registry=RoleSet(roles).stipulation_id(),

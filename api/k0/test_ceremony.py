@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from bootstrap_receipt import append_receipt, genesis_self_attest, verify_chain_at
+from bootstrap_receipt import append_receipt, genesis_self_attest, load_chain, verify_chain_at
 from k0.boot_profile import PROFILES, ratified_profile
 from k0.ceremony import ceremony_complete, ratify_genesis_stipulations
 from k0.egress_consent import EgressAllowlist, ratified_allowlist
@@ -82,6 +82,10 @@ def test_the_spine_performs_every_consent_and_the_readers_answer(tmp_path: Path)
     assert ceremony_complete(root)
     assert verify_chain_at(root).ok
     assert result.sovereign_identity.startswith("sovereign-identity.")
+    last = load_chain(root)[-1]
+    assert last.act.value == "reconciled" and any(
+        ref.startswith("fatigue-metrics:") for ref in last.payload_refs
+    ), "the ceremony's run ends with its fatigue metrics on the chain (R2.11, wired)"
 
 
 def test_a_refusal_midway_stops_the_ceremony_honestly(tmp_path: Path) -> None:
