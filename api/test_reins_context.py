@@ -1,106 +1,427 @@
-"""Tests for the tri-audience projection engine — AIR-seal-per-audience-before-derivation + never-injector."""
+"""Canonical context carrier admission and exact-wire tests."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import inspect
+import json
+import re
+from pathlib import Path
+
+import pytest
 import reins_context as rc
 
-# a contract-shaped fixture (reins-text-context-producer-contract). The session fact is operator-private
-# (denied to public); the classification is public-redacted + provider-prompt-eligible.
-FIXTURE = {
-    "schema_version": 1,
-    "evaluation": {"bundle_state": "partial"},
-    "facts": {
-        "session_extractions": [{
-            "fact_id": "fx-s1", "subject_ref": "session:x",
-            "freshness_state": "fresh", "confidence_word": "high",
-            "air": {"operator_private": "allow", "yard_context": "redact",
-                    "hapax_substrate": "redact", "public_or_air": "deny"},
-            "extracted": {"active_task_ref": "cc-task-secret"},
-            "affordance_inputs": {"can_explain": True, "can_yank_operator_private": True},
-        }],
-        "text_classifications": [{
-            "fact_id": "fx-c1", "subject_ref": "chunk:y", "text_domain": ["design"],
-            "freshness_state": "fresh", "confidence_word": "medium",
-            "air": {"operator_private": "allow", "yard_context": "allow",
-                    "hapax_substrate": "allow", "public_or_air": "redact"},
-            "labels": {"primary": "producer_contract"},
-            "affordance_inputs": {"can_explain": True, "can_enter_provider_prompt": True, "requires_hold": True},
-        }],
-    },
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "context-canon-gate0-carriers.json"
+FIXTURE_SHA256 = "594b6b96656cea2a46e4d50c2201152523bcf4530f0afcb0360425e76c17fae9"
+PREDECESSOR_FIXTURE_SHA256 = (
+    "c16fce720b4bfb80233b0a3b94a9d5903796c646261651788a9084bfc0e97704"
+)
+OUTER_KEYS = {
+    "schema",
+    "state",
+    "audience",
+    "reason_codes",
+    "projection",
+    "compatibility",
 }
+REASON_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.:-]*$")
 
 
-def test_tri_audience_seal_denied_never_derives():
-    op = rc.project(FIXTURE, "operator_private")
-    pub = rc.project(FIXTURE, "public_or_air")
-    assert op["fact_count"] == 2                      # operator sees both
-    subs = {f["subject_ref"] for f in pub["facts"]}
-    assert "session:x" not in subs                    # public-DENIED fact never enters public's derivation
-    assert "chunk:y" in subs                          # public-redacted classification survives structurally
-    assert pub["fact_count"] == 1                      # the count is taken AFTER sealing (no leak-by-count)
+def _fixtures() -> dict:
+    raw = FIXTURE_PATH.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256
+    return json.loads(raw)
 
 
-def test_redact_seals_body_keeps_envelope():
-    yard = rc.project(FIXTURE, "yard_context")
-    sess = next(f for f in yard["facts"] if f["subject_ref"] == "session:x")
-    assert sess["_air_redacted"] is True
-    assert sess["extracted"] == rc.REDACTION_TOKEN    # body redacted…
-    assert sess["fact_id"] == "fx-s1"                 # …envelope intact
+def _bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
 
 
-def test_affordance_why_from_classification():
-    op = rc.project(FIXTURE, "operator_private")
-    aff = {a["subject_ref"]: {e["affordance_kind"]: e["state"] for e in a["affordances"]}
-           for a in op["affordances"]}
-    assert aff["chunk:y"]["explain_why"] == "present"
-    assert aff["chunk:y"]["refocus"] == "present"
-    assert aff["chunk:y"]["stage_injection_preview"] == "hold"   # never-injector: provider-eligible -> HOLD
-    assert aff["session:x"].get("yank_operator_private") == "present"  # operator + un-redacted body
+class _PinnedProjectionModel:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    @classmethod
+    def model_validate(cls, payload: dict):
+        fixtures = _fixtures()
+        candidates = tuple(
+            fixtures[name]
+            for name in (
+                "operator_projection",
+                "yard_projection",
+                "lifecycle_projection",
+                "operation_projection",
+            )
+        )
+        if _bytes(payload) not in {_bytes(item) for item in candidates}:
+            raise ValueError("not the pinned current projection fixture")
+        return cls(payload)
+
+    def model_dump(self, *, mode: str, by_alias: bool) -> dict:
+        assert mode == "json" and by_alias is True
+        return self.payload
 
 
-def test_yank_denied_outside_operator_audience():
-    yard = rc.project(FIXTURE, "yard_context")
-    aff = {a["subject_ref"]: {e["affordance_kind"]: e["state"] for e in a["affordances"]}
-           for a in yard["affordances"]}
-    assert "yank_operator_private" not in aff.get("session:x", {})  # redacted body + non-operator -> no yank
+class _PinnedCompatibilityModel(_PinnedProjectionModel):
+    @classmethod
+    def model_validate(cls, payload: dict):
+        if _bytes(payload) != _bytes(_fixtures()["compatibility"]):
+            raise ValueError("not the pinned compatibility fixture")
+        return cls(payload)
 
 
-def test_default_deny_on_absent_air():
-    bundle = {"facts": {"salience_facts": [{"fact_id": "fx-x", "subject_ref": "s", "air": {}}]}}
-    assert rc.project(bundle, "yard_context")["fact_count"] == 0    # absent decision defaults to DENY
+@pytest.fixture(autouse=True)
+def _use_pinned_current_contract(monkeypatch):
+    """Exercise Reins source without pretending an unpublished wheel exists."""
+
+    monkeypatch.setattr(
+        rc,
+        "_canonical_models",
+        lambda: (_PinnedProjectionModel, _PinnedCompatibilityModel, _bytes),
+    )
 
 
-def test_project_all_is_tri_audience():
-    allp = rc.project_all(FIXTURE)
-    assert set(allp) == set(rc.AUDIENCES)
+def _reverse_objects(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _reverse_objects(item) for key, item in reversed(tuple(value.items()))
+        }
+    if isinstance(value, list):
+        return [_reverse_objects(item) for item in value]
+    return value
 
 
-def test_readout_only_never_injector():
-    # the module exposes NO egress/inject path — action routes through the governed apply seam elsewhere.
-    for banned in ("send", "dispatch", "inject", "publish", "spawn", "spend", "provider_call"):
-        assert not hasattr(rc, banned), f"reins_context must expose no {banned} path (never-injector)"
+def _assert_outer(body: bytes) -> dict:
+    assert isinstance(body, bytes)
+    assert len(body) <= rc.MAX_CONTEXT_READ_BYTES
+    value = json.loads(body)
+    assert set(value) == OUTER_KEYS
+    assert value["schema"] == rc.CONTEXT_READ_SCHEMA
+    assert value["state"] in {"dark", "hold"}
+    assert value["audience"] == rc.CONTEXT_READ_AUDIENCE
+    assert value["reason_codes"] == sorted(set(value["reason_codes"]))
+    assert 1 <= len(value["reason_codes"]) <= rc.MAX_REASON_CODES
+    for reason in value["reason_codes"]:
+        assert reason.isascii()
+        assert len(reason.encode("ascii")) <= rc.MAX_REASON_CODE_BYTES
+        assert REASON_PATTERN.fullmatch(reason)
+    if value["state"] == "dark":
+        assert value["projection"] is None
+        assert value["compatibility"] is None
+    else:
+        assert (value["projection"] is None) != (value["compatibility"] is None)
+    return value
 
 
-def test_value_state_hold_suppresses_live_affordances():
-    # a HOLD fact must NOT project explain_why/yank — only a hold marker + refocus skeleton (contract §7).
-    fact = {"fact_id": "h1", "subject_ref": "chunk:held", "freshness_state": "fresh",
-            "text_domain": ["design"], "affordance_inputs": {"can_explain": True, "can_yank_operator_private": True},
-            "state": {"value_state": "hold", "reason_codes": ["provider_send_not_authorized"]}}
-    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
-    assert a.get("hold") == "hold"
-    assert "explain_why" not in a and "yank_operator_private" not in a
-    assert a.get("refocus") == "present"
+def _assert_dark(body: bytes, reason: str) -> dict:
+    value = _assert_outer(body)
+    assert value["state"] == "dark"
+    assert value["reason_codes"] == [reason]
+    return value
 
 
-def test_value_state_refused_is_skeleton():
-    fact = {"fact_id": "r1", "subject_ref": "chunk:refused", "freshness_state": "fresh",
-            "state": {"value_state": "refused"}}
-    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
-    assert a.get("inspect") == "refused" and a.get("refocus") == "present"
-    assert "explain_why" not in a
+def test_fixture_is_sha_pinned_current_contract_not_predecessor() -> None:
+    assert FIXTURE_SHA256 != PREDECESSOR_FIXTURE_SHA256
+    fixtures = _fixtures()
+    for name in (
+        "operator_projection",
+        "yard_projection",
+        "lifecycle_projection",
+        "operation_projection",
+    ):
+        projection = fixtures[name]
+        assert len(projection) == 50
+        assert len(projection["events"]) > 0
+        assert all(action["operation"] for action in projection["actions"])
+        descriptor = projection["demand_shape"]["descriptor"]
+        assert descriptor["canon"]["canonical_json"]
+        assert descriptor["position_basis"]["canonical_json"]
 
 
-def test_stale_fact_offers_no_live_yank():
-    # a STALE fact is inspect-only — a live yank on stale evidence is the "stale rows look live" failure.
-    fact = {"fact_id": "s1", "subject_ref": "chunk:stale", "freshness_state": "stale",
-            "affordance_inputs": {"can_yank_operator_private": True}, "state": {"value_state": "lit"}}
-    a = {e["affordance_kind"]: e["state"] for e in rc.affordance_explanation(fact, "operator_private")["affordances"]}
-    assert "yank_operator_private" not in a
-    assert a.get("explain_why") == "stale"
+@pytest.mark.parametrize(
+    "fixture_name",
+    ("operator_projection", "lifecycle_projection", "operation_projection"),
+)
+def test_operator_private_current_projections_are_exact_opaque_hold(
+    fixture_name: str,
+) -> None:
+    payload = _fixtures()[fixture_name]
+    raw = _bytes(payload)
+    body = rc.parse_context_payload_bytes(raw)
+    value = _assert_outer(body)
+    assert value == {
+        "schema": "hapax.reins-context-read.v1",
+        "state": "hold",
+        "audience": "operator_private",
+        "reason_codes": [
+            "canonical_projection_verification_unavailable",
+            "producer_receipt_missing",
+        ],
+        "projection": payload,
+        "compatibility": None,
+    }
+    assert b'"projection":' + raw + b',"compatibility":null}' in body
+    assert not ({"facts", "counts", "correlation", "affordances"} & set(value))
+
+
+def test_compatibility_is_exact_opaque_hold() -> None:
+    payload = _fixtures()["compatibility"]
+    raw = _bytes(payload)
+    body = rc.parse_context_payload_bytes(raw)
+    value = _assert_outer(body)
+    assert value == {
+        "schema": "hapax.reins-context-read.v1",
+        "state": "hold",
+        "audience": "operator_private",
+        "reason_codes": ["compatibility_only"],
+        "projection": None,
+        "compatibility": payload,
+    }
+    assert body.endswith(b'"compatibility":' + raw + b"}")
+
+
+def test_internal_whitespace_key_order_and_unicode_escape_survive_exactly() -> None:
+    payload = _fixtures()["operator_projection"]
+    reordered = _reverse_objects(payload)
+    assert list(reordered) == list(reversed(tuple(payload)))
+    raw = json.dumps(reordered, allow_nan=False, ensure_ascii=True, indent=2).encode(
+        "ascii"
+    )
+    raw = raw.replace(
+        b'"audience": "operator_private"',
+        b'"audience": "oper\\u0061tor_private"',
+        1,
+    )
+    assert b"oper\\u0061tor_private" in raw
+
+    body = rc.parse_context_payload_bytes(raw)
+    value = _assert_outer(body)
+    assert value["state"] == "hold"
+    assert value["projection"] == payload
+    assert b'"projection":' + raw + b',"compatibility":null}' in body
+    assert b"oper\\u0061tor_private" in body
+
+
+def test_non_operator_projection_is_dark() -> None:
+    body = rc.parse_context_payload_bytes(_bytes(_fixtures()["yard_projection"]))
+    _assert_dark(body, "audience_unsupported")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"",
+        b"{not-json",
+        b'{"schema":"one","schema":"two"}',
+        b'{"schema":"one","\\u0073chema":"two"}',
+        b'{"outer":{"x":1,"x":2}}',
+        b"{}{}",
+        b"[]",
+        b'"text"',
+        b'{"schema":NaN}',
+        b"\xff",
+        b" {}",
+        b"{}\n",
+        b'{"n":' + b"9" * 5000 + b"}",
+    ],
+)
+def test_malformed_producer_bytes_are_exact_dark(payload: bytes) -> None:
+    _assert_dark(rc.parse_context_payload_bytes(payload), "producer_malformed")
+
+
+def test_oversized_payload_is_rejected_before_json_decode() -> None:
+    body = rc.parse_context_payload_bytes(b" " * (rc.MAX_CONTEXT_READ_BYTES + 1))
+    _assert_dark(body, "producer_payload_too_large")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "context_bundle"},
+        {"schema": "hapax.context-frame.v1"},
+        {"schema": "unknown"},
+    ],
+)
+def test_raw_bundle_and_unsupported_schemas_are_dark(payload: dict) -> None:
+    _assert_dark(
+        rc.parse_context_payload_bytes(_bytes(payload)),
+        "producer_schema_unsupported",
+    )
+
+
+def test_recognized_but_invalid_carrier_is_malformed_dark() -> None:
+    body = rc.parse_context_payload_bytes(_bytes({"schema": rc.PROJECTION_SCHEMA}))
+    _assert_dark(body, "producer_malformed")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("events", "operation", "canon", "position_basis"),
+)
+def test_predecessor_or_partial_current_projection_is_rejected(mutation: str) -> None:
+    payload = copy.deepcopy(_fixtures()["operator_projection"])
+    if mutation == "events":
+        del payload["events"]
+    elif mutation == "operation":
+        del payload["actions"][0]["operation"]
+    else:
+        del payload["demand_shape"]["descriptor"][mutation]
+    _assert_dark(rc.parse_context_payload_bytes(_bytes(payload)), "producer_malformed")
+
+
+def test_hash_tampering_is_rejected_by_canonical_model() -> None:
+    payload = copy.deepcopy(_fixtures()["operator_projection"])
+    payload["generated_at"] = "2026-07-10T16:07:00Z"
+    _assert_dark(rc.parse_context_payload_bytes(_bytes(payload)), "producer_malformed")
+
+
+def test_bool_integer_normalization_cannot_admit_noncanonical_wire_type() -> None:
+    payload = copy.deepcopy(_fixtures()["operator_projection"])
+    assert payload["may_authorize"] is False
+    payload["may_authorize"] = 0
+    _assert_dark(rc.parse_context_payload_bytes(_bytes(payload)), "producer_malformed")
+
+
+def test_missing_canonical_package_fails_dark(monkeypatch) -> None:
+    def unavailable():
+        raise rc.ContextReadError("canonical_verifier_unavailable")
+
+    monkeypatch.setattr(rc, "_canonical_models", unavailable)
+    body = rc.parse_context_payload_bytes(_bytes(_fixtures()["operator_projection"]))
+    _assert_dark(body, "canonical_verifier_unavailable")
+
+
+def test_reason_codes_are_sorted_unique_and_bounded() -> None:
+    body = rc.dark_readout_bytes("z_reason", "a_reason", "z_reason")
+    value = _assert_outer(body)
+    assert value["reason_codes"] == ["a_reason", "z_reason"]
+
+    for invalid in ("", "Uppercase", "contains space", "nonascii-\u00e9", "x" * 129):
+        with pytest.raises(rc.ContextReadError, match="context_read_error"):
+            rc.dark_readout_bytes(invalid)
+    with pytest.raises(rc.ContextReadError, match="context_read_error"):
+        rc.dark_readout_bytes(*(f"reason_{index}" for index in range(65)))
+
+
+def test_private_renderer_enforces_exact_dark_hold_matrix() -> None:
+    with pytest.raises(rc.ContextReadError, match="context_read_error"):
+        rc._render_readout_bytes(
+            state="hold",
+            reason_codes=("context_read_error",),
+            carrier=None,
+        )
+    with pytest.raises(rc.ContextReadError, match="context_read_error"):
+        rc._ValidatedCarrier(
+            "projection",
+            b'{"x":1,"x":2}',
+            object(),
+        )
+    with pytest.raises(TypeError):
+        rc._render_readout_bytes(  # type: ignore[call-arg]
+            state="hold",
+            reason_codes=("context_read_error",),
+            projection_bytes=b'{"x":1,"x":2}',
+        )
+    assert not hasattr(rc, "hold_projection")
+    assert not hasattr(rc, "hold_compatibility")
+
+
+def test_full_outer_response_exact_limit_and_over_limit(monkeypatch) -> None:
+    class PermissiveModel:
+        def __init__(self, payload):
+            self.payload = payload
+
+        @classmethod
+        def model_validate(cls, payload):
+            return cls(payload)
+
+        def model_dump(self, *, mode, by_alias):
+            assert mode == "json" and by_alias is True
+            return self.payload
+
+    monkeypatch.setattr(
+        rc,
+        "_canonical_models",
+        lambda: (PermissiveModel, PermissiveModel, _bytes),
+    )
+    monkeypatch.setattr(rc, "_require_current_projection_shape", lambda _payload: None)
+    payload = {
+        "schema": rc.PROJECTION_SCHEMA,
+        "audience": rc.CONTEXT_READ_AUDIENCE,
+        "padding": "",
+    }
+    base_raw = _bytes(payload)
+    base_body = rc.parse_context_payload_bytes(base_raw)
+    assert _assert_outer(base_body)["state"] == "hold"
+
+    payload["padding"] = "x" * (rc.MAX_CONTEXT_READ_BYTES - len(base_body))
+    at_limit_raw = _bytes(payload)
+    at_limit_body = rc.parse_context_payload_bytes(at_limit_raw)
+    assert len(at_limit_body) == rc.MAX_CONTEXT_READ_BYTES
+    assert _assert_outer(at_limit_body)["state"] == "hold"
+    assert b'"projection":' + at_limit_raw + b',"compatibility":null}' in at_limit_body
+
+    payload["padding"] += "x"
+    over_limit_raw = _bytes(payload)
+    assert len(over_limit_raw) < rc.MAX_CONTEXT_READ_BYTES
+    _assert_dark(
+        rc.parse_context_payload_bytes(over_limit_raw),
+        "producer_payload_too_large",
+    )
+
+
+def test_public_carrier_surface_is_bytes_only() -> None:
+    assert isinstance(rc.dark_readout_bytes("producer_absent"), bytes)
+    assert isinstance(
+        rc.parse_context_payload_bytes(_bytes(_fixtures()["operator_projection"])),
+        bytes,
+    )
+    assert "dark_readout" not in rc.__all__
+    assert "hold_projection" not in rc.__all__
+    assert "hold_compatibility" not in rc.__all__
+
+
+def test_gate0_defines_no_present_or_semantic_projection_path() -> None:
+    source = inspect.getsource(rc)
+    for forbidden in (
+        "reins_context_correlation",
+        "project_context_frame",
+        "project_context_bundle_v1",
+        "fingerprint_correlation",
+        "affordance_explanation",
+        "public_or_air",
+    ):
+        assert forbidden not in source
+    assert 'state="present"' not in source
+    for removed in (
+        "AUDIENCES",
+        "ContextBundleEnvelope",
+        "air_decision",
+        "project",
+        "project_all",
+        "seal_fact",
+        "validate_context_bundle",
+    ):
+        assert not hasattr(rc, removed)
+
+
+def test_adapter_exposes_no_effectful_path_or_runtime_fixture_dependency() -> None:
+    for banned in (
+        "send",
+        "dispatch",
+        "inject",
+        "publish",
+        "spawn",
+        "spend",
+        "provider_call",
+    ):
+        assert not hasattr(rc, banned)
+    source = inspect.getsource(rc)
+    assert FIXTURE_PATH.name not in source

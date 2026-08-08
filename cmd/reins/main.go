@@ -129,11 +129,11 @@ func fetchCapabilitiesOnce(url string) tea.Msg {
 	return msg
 }
 
-func fetchContextOnce(url string) tea.Msg {
-	affs, dark, err := api.FetchContext(url)
-	msg := model.ContextMsg{Affordances: affs, Dark: dark}
+func fetchContextOnce(url string, epoch uint64) tea.Msg {
+	readout, err := api.FetchContext(url)
+	msg := model.ContextMsg{Readout: readout, Epoch: epoch}
 	if err != nil {
-		msg.Error = err.Error()
+		msg.Error = "context_read_error"
 	}
 	return msg
 }
@@ -268,8 +268,18 @@ func intakeTick(url string) tea.Cmd {
 func capabilitiesTick(url string) tea.Cmd {
 	return tea.Tick(12*time.Second, func(time.Time) tea.Msg { return fetchCapabilitiesOnce(url) })
 }
-func contextTick(url string) tea.Cmd { // the tri-audience /read/context substrate -> steady refresh
-	return tea.Tick(12*time.Second, func(time.Time) tea.Msg { return fetchContextOnce(url) })
+func contextTick(url string, epoch uint64) tea.Cmd {
+	return tea.Tick(
+		12*time.Second,
+		func(time.Time) tea.Msg { return fetchContextOnce(url, epoch) },
+	)
+}
+
+func contextFetchNow(url string, epoch uint64, air bool) tea.Cmd {
+	if air {
+		return nil
+	}
+	return func() tea.Msg { return fetchContextOnce(url, epoch) }
 }
 func vaultTick(url string) tea.Cmd { // vault metadata is near-static -> a slow refresh
 	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return fetchVaultOnce(url) })
@@ -338,7 +348,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchSessionsOnce(r.url) },
 		func() tea.Msg { return fetchIntakeOnce(r.url) },
 		func() tea.Msg { return fetchCapabilitiesOnce(r.url) },
-		func() tea.Msg { return fetchContextOnce(r.url) },
+		contextFetchNow(r.url, r.m.ContextEpoch, r.m.AIR),
 		func() tea.Msg { return fetchGatesOnce(r.url) },
 		func() tea.Msg { return fetchDomainsOnce(r.url) },
 		func() tea.Msg { return fetchTracesOnce(r.url) },
@@ -373,6 +383,7 @@ func confirmProbationTick() tea.Cmd {
 }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	priorContextEpoch := r.m.ContextEpoch
 	nm, cmd := r.m.Update(msg)
 	r.m = nm.(model.Model)
 	// apply seam: Exec staged a WIRED governed verb — issue the witnessed POST (the model holds no API
@@ -383,6 +394,12 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		verb, target := pc.Verb, pc.Target
 		slot := dispatchSlot(r.m.VerbModes[verb], r.dispatchSeq, time.Now().Unix())
 		return r, tea.Batch(cmd, func() tea.Msg { return postCommandOnce(r.url, verb, target, slot) })
+	}
+	if r.m.ContextEpoch != priorContextEpoch {
+		return r, tea.Batch(
+			cmd,
+			contextFetchNow(r.url, r.m.ContextEpoch, r.m.AIR),
+		)
 	}
 	switch msg.(type) {
 	case model.EventsMsg:
@@ -404,7 +421,11 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case model.CapabilitiesMsg:
 		return r, capabilitiesTick(r.url) // re-arm capability-routing polling
 	case model.ContextMsg:
-		return r, contextTick(r.url) // re-arm the tri-audience context-substrate polling
+		contextMsg := msg.(model.ContextMsg)
+		if r.m.AIR || contextMsg.Epoch != r.m.ContextEpoch {
+			return r, cmd
+		}
+		return r, contextTick(r.url, r.m.ContextEpoch)
 	case model.VaultMsg:
 		return r, vaultTick(r.url) // re-arm vault-metadata polling
 	case model.ObserveMsg:
@@ -918,7 +939,7 @@ func main() {
 			case strings.HasPrefix(a, "filter:"):
 				m.Page, m.Mode, m.Filter = model.PageTasks, model.ModeFilter, strings.TrimPrefix(a, "filter:")
 			case a == "--air":
-				m.AIR = true
+				m = m.SetAIR(true)
 			case a == "split":
 				// Inc-5 only-split: the split is structural now (always on for the session-anchored pages);
 				// this legacy drive directive is a no-op, kept so older drive specs do not error.
@@ -970,7 +991,8 @@ func main() {
 		} else {
 			m = smoke.SeedModel(w, h)
 		}
-		m.Width, m.Height, m.AIR = w, h, air
+		m.Width, m.Height = w, h
+		m = m.SetAIR(air)
 		frames := smoke.Drive(m, steps)
 		if allFrames {
 			for i, f := range frames {
