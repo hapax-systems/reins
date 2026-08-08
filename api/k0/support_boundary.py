@@ -41,6 +41,11 @@ from .refusal import Refusal
 
 _TOPIC_GRAMMAR = re.compile(r"[a-z][a-z0-9-]{1,63}")
 
+#: The answer surface is a DOCUMENT PATH — never a URL, never a scheme. `mailto:`, `https://`,
+#: `irc:` and friends would make a contact channel representable in the pointer field, and the
+#: entire clause is that the channel does not exist (claude r1 major).
+_ANSWER_SURFACE_GRAMMAR = re.compile(r"[A-Za-z0-9][A-Za-z0-9./_-]{2,127}")
+
 
 class SupportBoundaryError(RuntimeError):
     def __init__(self, message: str, refusal: Refusal | None = None) -> None:
@@ -69,6 +74,12 @@ class SupportBoundary:
         overlap = set(self.in_scope) & set(self.out_scope)
         if overlap:
             raise ValueError(f"declared both in and out of scope: {sorted(overlap)}")
+        if not _ANSWER_SURFACE_GRAMMAR.fullmatch(self.answer_surface):
+            raise ValueError(
+                f"{self.answer_surface!r}: the answer surface is a document path "
+                "(docs/SUPPORT.md-shaped) — a scheme or channel would make contact "
+                "representable, and the clause is that it is not"
+            )
 
     def body(self) -> bytes:
         return json.dumps(
@@ -182,11 +193,17 @@ def ratified_boundary(root: Path, *, allow_unauthenticated: bool = False) -> Sup
             f"{sid}: the consented boundary carries unexpected fields",
             Refusal(gate=gate, why="not the canonical shape", legal_next="restore or re-ratify"),
         )
-    return SupportBoundary(
-        in_scope=tuple(parsed["in_scope"]),
-        out_scope=tuple(parsed["out_scope"]),
-        answer_surface=parsed["answer_surface"],
-    )
+    try:
+        return SupportBoundary(
+            in_scope=tuple(parsed["in_scope"]),
+            out_scope=tuple(parsed["out_scope"]),
+            answer_surface=parsed["answer_surface"],
+        )
+    except ValueError as exc:
+        raise SupportBoundaryError(
+            f"{sid}: the consented boundary violates the construction laws: {exc}",
+            Refusal(gate=gate, why="parses but is not canonical", legal_next="restore or re-ratify"),
+        ) from None
 
 
 @dataclass(frozen=True)

@@ -112,3 +112,59 @@ def test_the_boundary_shape_laws(tmp_path: Path) -> None:
         SupportBoundary(("xa",), ("xa",), "docs/SUPPORT.md")
     with pytest.raises(ValueError, match="lowercase kebab"):
         SupportBoundary(("Not A Topic",), (), "docs/SUPPORT.md")
+
+
+def test_a_contact_channel_is_unrepresentable_in_the_pointer(tmp_path: Path) -> None:
+    """claude r1: mailto:, URLs, chat schemes — none parse as an answer surface."""
+    for channel in ("mailto:ops@example.com", "https://example.com/support", "irc://irc.example/chan"):
+        with pytest.raises(ValueError, match="document path"):
+            SupportBoundary(("install",), (), channel)
+
+
+def test_the_refusal_branches(tmp_path: Path) -> None:
+    """codex/claude r1: chain break, missing body, tampered body — each loud with its own words."""
+    import json as _json
+
+    from bootstrap_receipt import RECEIPT_CHAIN_FILENAME
+    from k0.ratification import SIGNATURE_DIRNAME
+
+    # chain break
+    sub = tmp_path / "c1"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, BOUNDARY, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, BOUNDARY, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    chain_path = root / RECEIPT_CHAIN_FILENAME
+    rows = chain_path.read_text(encoding="utf-8").splitlines()
+    forged = _json.loads(rows[1])
+    forged["payload_refs"] = ["stipulation:sha256:" + "f" * 64]
+    rows[1] = _json.dumps(forged)
+    chain_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    with pytest.raises(SupportBoundaryError, match="fails verification"):
+        ratified_boundary(root, allow_unauthenticated=True)
+
+    # missing body
+    sub = tmp_path / "c2"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, BOUNDARY, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, BOUNDARY, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    (root / SIGNATURE_DIRNAME / f"{BOUNDARY.stipulation_id()}.body").unlink()
+    with pytest.raises(SupportBoundaryError, match="cannot be read"):
+        ratified_boundary(root, allow_unauthenticated=True)
+
+    # tampered body
+    sub = tmp_path / "c3"
+    sub.mkdir()
+    root = _root(sub)
+    key = _key(sub)
+    present(root, BOUNDARY, estate_id=ESTATE, kernel_version=KERNEL)
+    accept(root, BOUNDARY, key_path=key, estate_id=ESTATE, kernel_version=KERNEL)
+    (root / SIGNATURE_DIRNAME / f"{BOUNDARY.stipulation_id()}.body").write_text(
+        '{"in_scope":["install"],"out_scope":[],"answer_surface":"docs/X.md"}',
+        encoding="utf-8",
+    )
+    with pytest.raises(SupportBoundaryError, match="not the artifact"):
+        ratified_boundary(root, allow_unauthenticated=True)
