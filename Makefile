@@ -18,7 +18,7 @@ help: ## list targets
 	@grep -E '^[a-z]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | sort
 
 up: ## bring up BOTH halves — READ API in the background, then the cockpit; API torn down on exit
-	@$(PY) api/reins_read.py >/tmp/reins-api.log 2>&1 & \
+	@$(PY) api/reins_serve.py >/tmp/reins-api.log 2>&1 & \
 	  api_pid=$$!; \
 	  trap 'kill $$api_pid 2>/dev/null' EXIT INT TERM; \
 	  printf 'reins: READ API pid %s (port from config.toml; log /tmp/reins-api.log)\n' "$$api_pid"; \
@@ -29,7 +29,7 @@ run: ## the cockpit only (assumes the READ API is already up)
 	go run ./cmd/reins
 
 api: ## the READ API only (foreground; port from config.toml)
-	$(PY) api/reins_read.py
+	$(PY) api/reins_serve.py
 
 build: ## build the cockpit binary -> bin/reins (VERSION-stamped)
 	go build -ldflags "-X main.version=$(VERSION)" -o bin/reins ./cmd/reins
