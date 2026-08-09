@@ -680,6 +680,16 @@ def to_session(name: str, lane: dict, allowlist: list[str], route_binding: dict 
         "readiness": readiness,
         "blocker": blocker,
         "attention": _session_attention(lane, state, readiness, blocker, output_age_s, relay_age_s),
+        # The coordinator's own verdict, carried through instead of re-derived. `state` and
+        # `blocker` above are synthesised from alive/idle/ages and cannot tell a retired lane from
+        # an unstarted one; the producer already decided and we were dropping it.
+        # `dispatchable` is permission (false = retired), `dispatch_ready` is capability
+        # (false = not alive) — the pair distinguishes retired / not-started / working.
+        # `dispatch_blocked_reason` is free text carrying absolute paths, so it is deliberately
+        # NOT on the AIR allowlist: available off-air, redacted on-air.
+        "dispatchable": bool(lane.get("dispatchable")),
+        "dispatch_ready": bool(lane.get("dispatch_ready")),
+        "dispatch_blocked_reason": str(lane.get("dispatch_blocked_reason") or ""),
     }
     if route_binding:
         fields.update(route_binding)
@@ -4592,6 +4602,9 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
 _DEFAULT_ALLOW = (
     "kind,score,ts,task_id,stage,no_go,id,layer,status,source,target,relation,res,"
     "role,platform,state,alive,idle,stalled,output_age_s,relay_age_s,readiness,blocker,attention,"
+    # Structural booleans, safe on air. dispatch_blocked_reason is deliberately absent: it is free
+    # text containing absolute filesystem paths, which is exactly what this allowlist excludes.
+    "dispatchable,dispatch_ready,"
     "evidence_count,resume_ready,evidence_summary,by_kind,transcript_roots_observed,transcript_roots_missing,truncated,"
     "count,age_bucket,coverage,task_link_state,severity,privacy,raw_access,exists,"
     "capability_id,capability_class,surface_family,spend_model,egress_class,receipt_requirement,"
