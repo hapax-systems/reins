@@ -376,20 +376,26 @@ func confirmProbationTick() tea.Cmd {
 }
 
 // observeConfigStamp identifies the on-disk config state so a poll only re-loads on change.
-// "absent" is a first-class stamp (zero-config): a file appearing later is just a stamp change.
+// "absent" is a first-class stamp (zero-config): a file appearing later is just a stamp change. A
+// present-but-unreadable file stamps "stat-error" — never "absent", so a permissions problem can
+// never silently fall back to defaults.
 func observeConfigStamp(path string) string {
 	fi, err := os.Stat(path)
-	if err != nil {
+	switch {
+	case err == nil:
+		return fmt.Sprintf("%d/%d", fi.ModTime().UnixNano(), fi.Size())
+	case os.IsNotExist(err):
 		return "absent"
+	default:
+		return "stat-error"
 	}
-	return fmt.Sprintf("%d/%d", fi.ModTime().UnixNano(), fi.Size())
 }
 
 type configPollMsg struct {
 	stamp   string         // the stamp just observed — the re-arm tracks it even when nothing changed
 	changed bool           // the stamp moved since the last poll
 	cfg     *config.Config // non-nil only when changed && the load succeeded
-	err     error          // non-nil only when changed && the load failed (malformed TOML)
+	err     error          // non-nil only when changed && the load failed (malformed TOML, unreadable file)
 }
 
 // pollConfigOnce stats the config and, only when the stamp moved, re-runs the FULL Load (never a
@@ -398,6 +404,9 @@ func pollConfigOnce(path, last string) configPollMsg {
 	st := observeConfigStamp(path)
 	if st == last {
 		return configPollMsg{stamp: st}
+	}
+	if st == "stat-error" {
+		return configPollMsg{stamp: st, changed: true, err: fmt.Errorf("reins: config %q exists but cannot be stat'd — check its permissions", path)}
 	}
 	cfg, err := config.Load(path)
 	return configPollMsg{stamp: st, changed: true, cfg: cfg, err: err}
@@ -474,8 +483,13 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		r.cfgStamp = pm.stamp
 		if pm.err != nil {
-			// keep last-good; the persistent notice carries the parse error until a later load succeeds
-			r.m.ConfigNotice = "config kept last-good — " + pm.err.Error()
+			// keep last-good; the persistent notice leads with the corrective action FOR THE FAILURE
+			// CLASS (the error detail trails — the status-bar clip must never cut the next move off)
+			action := "fix the TOML or remove the file"
+			if pm.stamp == "stat-error" {
+				action = "check the config file's permissions"
+			}
+			r.m.ConfigNotice = "config kept last-good — " + action + "; " + pm.err.Error()
 			return r, configReloadTick(r.cfgPath, pm.stamp)
 		}
 		r.m.ConfigNotice = ""

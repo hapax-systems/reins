@@ -17,6 +17,10 @@ var pal = palette.For("gruvbox")
 // SetPalette switches the color grammar for the working mode ("gruvbox"/"solarized").
 func SetPalette(mode string) { pal = palette.For(mode) }
 
+// PaletteMode reports the active palette's mode — the observability seam for the live config
+// reload (off-TTY rendering strips color, so a render diff cannot witness the switch).
+func PaletteMode() string { return pal.Mode() }
+
 // C colorizes text with a palette token (the cockpit's one coloring entry point for zones/widgets).
 func C(token, text string) string { return pal.Colorize(token, text) }
 

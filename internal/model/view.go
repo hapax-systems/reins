@@ -541,7 +541,11 @@ func (m Model) viewVital(w int) string {
 		r1 += grammar.C("mut", "   ") + grammar.FlashLabel(" "+m.Flash+" ")
 	}
 	if m.ConfigNotice != "" { // persistent config-reload notice — stays until a later load resolves it
-		r1 += grammar.C("mut", "   ") + grammar.C("yel", " "+clipRunes(m.ConfigNotice, 96)+" ")
+		notice := m.ConfigNotice
+		if m.AIR { // config detail can embed paths/content — on air the label airs, never the detail
+			notice = "config kept last-good — detail withheld on air"
+		}
+		r1 += grammar.C("mut", "   ") + grammar.C("yel", " "+clipRunes(notice, 96)+" ")
 	}
 
 	var r2 string
