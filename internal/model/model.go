@@ -603,6 +603,7 @@ type Model struct {
 	CompIdx             int                // fish-style completion: the highlighted candidate in the navigable list
 	Flash               string             // transient effect-confirmation (Norman feedback); auto-clears via FlashClearMsg
 	FlashSeq            int                // monotonic flash id — a stale tick only clears the flash it was armed for
+	ConfigNotice        string             // persistent config-reload state (set by the effect layer); empty = none — stays until the next load resolves it
 	IntentTarget        string             // currently reviewed governed intent target, e.g. resume/dispatch/show-route
 	IntentSubject       string             // AIR-safe subject captured before switching to the intent review page
 	SuppressSplitPinned bool               // render-only: split body clone omits the pinned selected-source block
@@ -624,6 +625,10 @@ func (m Model) flash(msg string) (Model, tea.Cmd) {
 	seq := m.FlashSeq
 	return m, tea.Tick(900*time.Millisecond, func(time.Time) tea.Msg { return FlashClearMsg{Seq: seq} })
 }
+
+// NoteFlash exposes the transient confirmation to the effect layer (root) — e.g. a live config
+// reload applied. Same seq-guarded auto-clear as an internal flash.
+func (m Model) NoteFlash(msg string) (Model, tea.Cmd) { return m.flash(msg) }
 
 // critFromHint: the count labels in hint mode (cross-cutting selectables) → the criticality class.
 var critFromHint = map[rune]string{'O': "ok", 'W': "warn", 'M': "major", 'C': "crit"}

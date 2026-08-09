@@ -540,6 +540,9 @@ func (m Model) viewVital(w int) string {
 	if m.Flash != "" { // transient effect-confirmation — always-visible, even when an effect jumped to command mode
 		r1 += grammar.C("mut", "   ") + grammar.FlashLabel(" "+m.Flash+" ")
 	}
+	if m.ConfigNotice != "" { // persistent config-reload notice — stays until a later load resolves it
+		r1 += grammar.C("mut", "   ") + grammar.C("yel", " "+clipRunes(m.ConfigNotice, 96)+" ")
+	}
 
 	var r2 string
 	if len(blocked) == 0 {
