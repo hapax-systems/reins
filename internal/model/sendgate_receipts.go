@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // The send-gate evidence consumer (the reins half of council #4440's SESSION bus).
@@ -36,8 +37,11 @@ type sendReceiptEvidence struct {
 	CreatedAt string
 }
 
-// latestSendEvidence reads the bus and returns the newest outcome=sent receipt.
-// Every failure mode is dark: missing/unreadable file, corrupt lines (skipped,
+// latestSendEvidence reads the bus and returns the newest outcome=sent receipt, selected by the
+// newest VALID created_at — row order is not trusted (a replayed or backfilled bus can place an
+// older sent after a newer one). A sent line with a missing or invalid timestamp stays dark: the
+// writer always timestamps, so an untimed "sent" is not evidence.
+// Every other failure mode is dark too: missing/unreadable file, corrupt lines (skipped,
 // not fatal), attempted-only pairs, failed outcomes, unknown schemas or ops.
 func latestSendEvidence(path string) *sendReceiptEvidence {
 	raw, err := os.ReadFile(path)
@@ -45,6 +49,7 @@ func latestSendEvidence(path string) *sendReceiptEvidence {
 		return nil
 	}
 	var latest *sendReceiptEvidence
+	var latestT time.Time
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -64,11 +69,18 @@ func latestSendEvidence(path string) *sendReceiptEvidence {
 		if row.ReceiptSchema != 1 || row.Op != "session_send" || row.Outcome != "sent" {
 			continue
 		}
-		latest = &sendReceiptEvidence{
-			ReceiptID: row.ReceiptID,
-			Lane:      row.Lane,
-			Outcome:   row.Outcome,
-			CreatedAt: row.CreatedAt,
+		ts, terr := time.Parse(time.RFC3339, row.CreatedAt)
+		if terr != nil {
+			continue // untimed or unparseable "sent" is not evidence — dark
+		}
+		if latest == nil || ts.After(latestT) {
+			latestT = ts
+			latest = &sendReceiptEvidence{
+				ReceiptID: row.ReceiptID,
+				Lane:      row.Lane,
+				Outcome:   row.Outcome,
+				CreatedAt: row.CreatedAt,
+			}
 		}
 	}
 	return latest
