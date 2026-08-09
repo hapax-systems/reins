@@ -207,7 +207,7 @@ func TestPollConfigOnceRemovedFileFallsBackToDefaults(t *testing.T) {
 }
 
 func TestRootUpdateConfigReloadAppliesAndKeepsLastGood(t *testing.T) {
-	defer grammar.SetPalette("gruvbox") // restore the global palette — no cross-test leak
+	defer grammar.SetPalette(grammar.PaletteMode()) // restore the prior global palette — no cross-test leak
 	m := model.New("REINS")
 	r := root{m: m, url: "http://127.0.0.1:8799", cfgPath: "/tmp/x", palette: "gruvbox"}
 
@@ -274,5 +274,16 @@ func TestPollConfigOnceStatErrorIsNotAbsent(t *testing.T) {
 	pm := pollConfigOnce(p, "absent")
 	if !pm.changed || pm.err == nil || pm.cfg != nil {
 		t.Fatalf("a stat error must fail closed with the error, got %+v", pm)
+	}
+}
+
+// The stat-error class leads with the permissions action, not the TOML action.
+func TestRootUpdateConfigStatErrorLeadsWithPermissions(t *testing.T) {
+	m := model.New("REINS")
+	r := root{m: m, url: "http://127.0.0.1:8799", cfgPath: "/tmp/x", palette: "gruvbox"}
+	rm, _ := r.Update(configPollMsg{stamp: "stat-error", changed: true, err: os.ErrPermission})
+	r = rm.(root)
+	if !strings.HasPrefix(r.m.ConfigNotice, "config kept last-good — check the config file's permissions; ") {
+		t.Fatalf("a stat error must lead with the permissions action, got %q", r.m.ConfigNotice)
 	}
 }

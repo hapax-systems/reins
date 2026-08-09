@@ -483,9 +483,13 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		r.cfgStamp = pm.stamp
 		if pm.err != nil {
-			// keep last-good; the persistent notice leads with the corrective action (the error detail
-			// trails — the status-bar clip must never cut the next move off)
-			r.m.ConfigNotice = "config kept last-good — fix the TOML or remove the file; " + pm.err.Error()
+			// keep last-good; the persistent notice leads with the corrective action FOR THE FAILURE
+			// CLASS (the error detail trails — the status-bar clip must never cut the next move off)
+			action := "fix the TOML or remove the file"
+			if pm.stamp == "stat-error" {
+				action = "check the config file's permissions"
+			}
+			r.m.ConfigNotice = "config kept last-good — " + action + "; " + pm.err.Error()
 			return r, configReloadTick(r.cfgPath, pm.stamp)
 		}
 		r.m.ConfigNotice = ""
