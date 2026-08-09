@@ -12632,7 +12632,7 @@ func sessionConstraints(s grammar.Session, air bool) []string {
 		out = append(out, grammar.C("grn", "claim-ready")+
 			grammar.C("mut", " · needs governed resume/claim route"))
 	}
-	if (s.Readiness == "stale" && !denied("readiness")) || (s.RelayAgeS > 3600 && !denied("relay_age_s")) {
+	if s.Readiness == "stale" && !denied("readiness") { // the API's verdict only — never a local threshold (A2: the 3600s disjunct double-fired in the 1h..6h dead band)
 		out = append(out, grammar.C("yel", "stale relay")+
 			grammar.C("mut", " · verify before resume"))
 	}

@@ -88,3 +88,19 @@ func TestSessionRouteBindingSummaryIsAirSafe(t *testing.T) {
 		t.Fatalf("off air both route_ids count (evidence:2)")
 	}
 }
+
+// A2 (2026-08-09): the local 3600s relay-age disjunct is gone — the cockpit renders the API's
+// stale verdict, never a second threshold. The 1h..6h dead band must NOT render "stale relay"
+// unless the API said so; the API's own verdict (Readiness "stale") still renders.
+func TestSessionConstraintsStaleRelayIsTheApiVerdictOnly(t *testing.T) {
+	deadband := grammar.Session{Readiness: "ok", RelayAgeS: 7200, AIR: map[string]string{}}
+	out := strings.Join(sessionConstraints(deadband, false), " | ")
+	if strings.Contains(out, "stale relay") {
+		t.Fatalf("a 2h relay age with an API ok verdict must not render stale relay (was the 3600s disjunct): %s", out)
+	}
+	verdict := grammar.Session{Readiness: "stale", RelayAgeS: 7200, AIR: map[string]string{}}
+	out = strings.Join(sessionConstraints(verdict, false), " | ")
+	if !strings.Contains(out, "stale relay") {
+		t.Fatalf("the API's stale verdict must still render: %s", out)
+	}
+}
