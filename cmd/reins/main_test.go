@@ -3,9 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hapax-systems/reins/internal/config"
+	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/model"
 )
 
@@ -205,20 +207,27 @@ func TestPollConfigOnceRemovedFileFallsBackToDefaults(t *testing.T) {
 }
 
 func TestRootUpdateConfigReloadAppliesAndKeepsLastGood(t *testing.T) {
+	defer grammar.SetPalette("gruvbox") // restore the global palette — no cross-test leak
 	m := model.New("REINS")
 	r := root{m: m, url: "http://127.0.0.1:8799", cfgPath: "/tmp/x", palette: "gruvbox"}
 
-	// malformed edit: last-good keeps serving, the notice persists with why
+	// malformed edit: last-good keeps serving, the notice persists and leads with the corrective action
 	rm, _ := r.Update(configPollMsg{stamp: "2", changed: true, err: os.ErrInvalid})
 	r = rm.(root)
 	if r.m.ConfigNotice == "" {
 		t.Fatal("a failed reload must leave a persistent honest notice")
 	}
+	if !strings.HasPrefix(r.m.ConfigNotice, "config kept last-good — fix the TOML or remove the file; ") {
+		t.Fatalf("the notice must lead with the corrective action, got %q", r.m.ConfigNotice)
+	}
+	if !strings.Contains(r.m.ConfigNotice, os.ErrInvalid.Error()) {
+		t.Fatalf("the notice must carry the underlying error, got %q", r.m.ConfigNotice)
+	}
 	if r.url != "http://127.0.0.1:8799" || r.palette != "gruvbox" {
 		t.Fatalf("failed reload must not move url/palette: %q %q", r.url, r.palette)
 	}
 
-	// a later good load clears the notice and applies palette + url live
+	// a later good load clears the notice and applies palette + url live, through the real path
 	good := configPollMsg{stamp: "3", changed: true, cfg: &config.Config{APIURL: "http://127.0.0.1:9999", Palette: "solarized"}}
 	rm, _ = r.Update(good)
 	r = rm.(root)
@@ -230,5 +239,40 @@ func TestRootUpdateConfigReloadAppliesAndKeepsLastGood(t *testing.T) {
 	}
 	if r.m.Flash == "" {
 		t.Fatal("successful reload must flash a transient confirmation")
+	}
+	if mode := grammar.PaletteMode(); mode != "solarized" {
+		t.Fatalf("SetPalette through Update must switch the live grammar, got mode %q", mode)
+	}
+}
+
+// The unchanged-stamp branch: no reload, state untouched, the poll re-arms.
+func TestRootUpdateConfigUnchangedRearms(t *testing.T) {
+	m := model.New("REINS")
+	r := root{m: m, url: "http://127.0.0.1:8799", cfgPath: "/tmp/x", palette: "gruvbox"}
+	rm, cmd := r.Update(configPollMsg{stamp: "9", changed: false})
+	r = rm.(root)
+	if cmd == nil {
+		t.Fatal("an unchanged poll must re-arm the reload tick")
+	}
+	if r.m.ConfigNotice != "" || r.url != "http://127.0.0.1:8799" {
+		t.Fatalf("an unchanged poll must not touch state: %q %q", r.m.ConfigNotice, r.url)
+	}
+}
+
+// A present-but-unreadable config is NOT the absent case: stat fails with ENOTDIR here, the poll
+// must surface an error (last-good keeps serving) rather than silently fall back to defaults.
+func TestPollConfigOnceStatErrorIsNotAbsent(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(blocker, "config.toml") // a path component is a file -> ENOTDIR
+	if st := observeConfigStamp(p); st == "absent" {
+		t.Fatalf("a stat error must not masquerade as absent, got %q", st)
+	}
+	pm := pollConfigOnce(p, "absent")
+	if !pm.changed || pm.err == nil || pm.cfg != nil {
+		t.Fatalf("a stat error must fail closed with the error, got %+v", pm)
 	}
 }
