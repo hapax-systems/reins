@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/model"
 )
 
@@ -123,5 +126,109 @@ func TestDispatchSlotInflectionVsGoverned(t *testing.T) {
 	// inflection slots are negative so they never collide with a positive window bucket
 	if dispatchSlot("inflection", 5, 999999) >= 0 {
 		t.Fatal("inflection slot must be negative (never collide with a window bucket)")
+	}
+}
+
+func TestObserveConfigStampAbsentIsFirstClass(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "nope.toml")
+	if st := observeConfigStamp(p); st != "absent" {
+		t.Fatalf("missing file must stamp 'absent', got %q", st)
+	}
+}
+
+func TestPollConfigOnceUnchangedStampDoesNotLoad(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("palette = \"gruvbox\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := observeConfigStamp(p)
+	pm := pollConfigOnce(p, st)
+	if pm.changed || pm.cfg != nil || pm.err != nil {
+		t.Fatalf("unchanged stamp must not re-load: %+v", pm)
+	}
+}
+
+func TestPollConfigOnceAppearingFileLoads(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	pm0 := pollConfigOnce(p, "absent")
+	if pm0.changed || pm0.err != nil {
+		t.Fatalf("still-absent file must be a no-op: %+v", pm0)
+	}
+	if err := os.WriteFile(p, []byte("palette = \"solarized\"\napi_url = \"http://127.0.0.1:9999\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pm := pollConfigOnce(p, pm0.stamp)
+	if !pm.changed || pm.err != nil || pm.cfg == nil {
+		t.Fatalf("appearing file must load: %+v", pm)
+	}
+	if pm.cfg.Palette != "solarized" || pm.cfg.APIURL != "http://127.0.0.1:9999" {
+		t.Fatalf("loaded values wrong: %+v", pm.cfg)
+	}
+}
+
+func TestPollConfigOnceMalformedFailsClosedWithLastGood(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("palette = \"gruvbox\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	good := pollConfigOnce(p, "absent")
+	if !good.changed || good.err != nil {
+		t.Fatalf("initial load must succeed: %+v", good)
+	}
+	// a malformed edit: stamp moves, load fails — the caller keeps serving the last-good config
+	if err := os.WriteFile(p, []byte("palette = [unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := pollConfigOnce(p, good.stamp)
+	if !bad.changed || bad.err == nil || bad.cfg != nil {
+		t.Fatalf("malformed edit must surface an error and no config: %+v", bad)
+	}
+}
+
+func TestPollConfigOnceRemovedFileFallsBackToDefaults(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(p, []byte("palette = \"solarized\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	live := pollConfigOnce(p, "absent")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	gone := pollConfigOnce(p, live.stamp)
+	if !gone.changed || gone.err != nil || gone.cfg == nil {
+		t.Fatalf("removal must re-load to defaults, not error: %+v", gone)
+	}
+	if gone.cfg.Palette != "gruvbox" { // Defaults()
+		t.Fatalf("removal must restore defaults, got palette %q", gone.cfg.Palette)
+	}
+}
+
+func TestRootUpdateConfigReloadAppliesAndKeepsLastGood(t *testing.T) {
+	m := model.New("REINS")
+	r := root{m: m, url: "http://127.0.0.1:8799", cfgPath: "/tmp/x", palette: "gruvbox"}
+
+	// malformed edit: last-good keeps serving, the notice persists with why
+	rm, _ := r.Update(configPollMsg{stamp: "2", changed: true, err: os.ErrInvalid})
+	r = rm.(root)
+	if r.m.ConfigNotice == "" {
+		t.Fatal("a failed reload must leave a persistent honest notice")
+	}
+	if r.url != "http://127.0.0.1:8799" || r.palette != "gruvbox" {
+		t.Fatalf("failed reload must not move url/palette: %q %q", r.url, r.palette)
+	}
+
+	// a later good load clears the notice and applies palette + url live
+	good := configPollMsg{stamp: "3", changed: true, cfg: &config.Config{APIURL: "http://127.0.0.1:9999", Palette: "solarized"}}
+	rm, _ = r.Update(good)
+	r = rm.(root)
+	if r.m.ConfigNotice != "" {
+		t.Fatalf("successful reload must clear the notice, got %q", r.m.ConfigNotice)
+	}
+	if r.url != "http://127.0.0.1:9999" || r.palette != "solarized" {
+		t.Fatalf("successful reload must apply url+palette: %q %q", r.url, r.palette)
+	}
+	if r.m.Flash == "" {
+		t.Fatal("successful reload must flash a transient confirmation")
 	}
 }

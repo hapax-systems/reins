@@ -308,8 +308,11 @@ func beatTick() tea.Cmd {
 type root struct {
 	m           model.Model
 	url         string
-	dispatchSeq int64 // monotonic; salts the idempotency key for LAST-WINS inflection verbs (focus/breakglass)
-	demo        bool  // reins --demo: seed-backed fixture instance — Init launches NO live fetch (structural)
+	dispatchSeq int64  // monotonic; salts the idempotency key for LAST-WINS inflection verbs (focus/breakglass)
+	demo        bool   // reins --demo: seed-backed fixture instance — Init launches NO live fetch (structural)
+	cfgPath     string // the config this run loaded from — polled for live reload (C2a)
+	cfgStamp    string // last observed on-disk config state ("absent" is first-class: zero-config)
+	palette     string // last applied palette — reload re-applies only on change
 }
 
 // dispatchSlot picks the idempotency-key slot for a dispatched verb. A GOVERNED verb (close/arm/…) uses the
@@ -355,7 +358,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(), confirmProbationTick(),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(), confirmProbationTick(), configReloadTick(r.cfgPath, r.cfgStamp),
 	)
 }
 
@@ -370,6 +373,41 @@ func confirmProbationTick() tea.Cmd {
 		return nil
 	}
 	return tea.Tick(6*time.Second, func(time.Time) tea.Msg { return probationConfirmMsg{} })
+}
+
+// observeConfigStamp identifies the on-disk config state so a poll only re-loads on change.
+// "absent" is a first-class stamp (zero-config): a file appearing later is just a stamp change.
+func observeConfigStamp(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "absent"
+	}
+	return fmt.Sprintf("%d/%d", fi.ModTime().UnixNano(), fi.Size())
+}
+
+type configPollMsg struct {
+	stamp   string         // the stamp just observed — the re-arm tracks it even when nothing changed
+	changed bool           // the stamp moved since the last poll
+	cfg     *config.Config // non-nil only when changed && the load succeeded
+	err     error          // non-nil only when changed && the load failed (malformed TOML)
+}
+
+// pollConfigOnce stats the config and, only when the stamp moved, re-runs the FULL Load (never a
+// patch): env > file > defaults, the same precedence as startup.
+func pollConfigOnce(path, last string) configPollMsg {
+	st := observeConfigStamp(path)
+	if st == last {
+		return configPollMsg{stamp: st}
+	}
+	cfg, err := config.Load(path)
+	return configPollMsg{stamp: st, changed: true, cfg: cfg, err: err}
+}
+
+// configReloadTick is the C2a live-change seam: the config stratum re-derives in-session instead of
+// demanding a restart. A malformed edit never darkens the surface — the last-good config keeps
+// serving and the notice says why (fail-closed with last-good, per the stratification design).
+func configReloadTick(path, last string) tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return pollConfigOnce(path, last) })
 }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -429,6 +467,28 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = os.WriteFile(p, []byte("ok\n"), 0o644)
 		}
 		return r, nil
+	case configPollMsg:
+		pm := msg.(configPollMsg)
+		if !pm.changed {
+			return r, configReloadTick(r.cfgPath, pm.stamp)
+		}
+		r.cfgStamp = pm.stamp
+		if pm.err != nil {
+			// keep last-good; the persistent notice carries the parse error until a later load succeeds
+			r.m.ConfigNotice = "config kept last-good — " + pm.err.Error()
+			return r, configReloadTick(r.cfgPath, pm.stamp)
+		}
+		r.m.ConfigNotice = ""
+		if pm.cfg.Palette != r.palette {
+			r.palette = pm.cfg.Palette
+			grammar.SetPalette(r.palette) // the color grammar follows the working mode, live
+		}
+		if pm.cfg.APIURL != r.url {
+			r.url = pm.cfg.APIURL // every fetch tick re-arms from r.url — the next polls ride the new endpoint
+		}
+		fm, fcmd := r.m.NoteFlash("config reloaded")
+		r.m = fm
+		return r, tea.Batch(fcmd, configReloadTick(r.cfgPath, pm.stamp))
 	case model.TurnBlocksMsg:
 		return r, turnBlocksTickFocused(r) // re-arm the focused-turn detail-block fetch
 	case model.GatesMsg:
@@ -1015,7 +1075,7 @@ func main() {
 			launch = launch.RestorePosture(snap)
 		}
 	}
-	r := root{m: launch, url: cfg.APIURL}
+	r := root{m: launch, url: cfg.APIURL, cfgPath: configPath(), cfgStamp: observeConfigStamp(configPath()), palette: cfg.Palette}
 	finalModel, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
