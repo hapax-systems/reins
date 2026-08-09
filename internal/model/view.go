@@ -1357,6 +1357,17 @@ func (m Model) coordinatorChatPane(w, h int) string {
 			footer = append(footer, clipRunes(ln, w))
 		}
 		footer = append(footer, clipRunes(grammar.C("yel", " [enter/y] confirm send (stub) · [d] dump/kill · [esc] back to compose"), maxVisible(8, w)))
+		// the governed-evidence line: LIVE only on a genuine sent SESSION receipt;
+		// attempted-only, failed, corrupt, missing, and unknown stay honest-dark.
+		if ev := m.sendGateEvidence(); ev != nil {
+			lane := ev.Lane
+			if lane == "" {
+				lane = "?"
+			}
+			footer = append(footer, clipRunes(grammar.C("grn", " session gate: LIVE — governed send receipted ("+lane+", "+ev.CreatedAt+")"), maxVisible(8, w)))
+		} else {
+			footer = append(footer, clipRunes(grammar.C("mut", " session gate: NOT WIRED (no governed send receipt)"), maxVisible(8, w)))
+		}
 	} else {
 		prompt := " › "
 		if m.Mode == ModeCoordChat {
