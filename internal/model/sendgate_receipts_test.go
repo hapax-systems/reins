@@ -108,3 +108,36 @@ func Test_sendgate_footer_renders_dark_through_the_real_ui_path(t *testing.T) {
 		t.Fatalf("attempted-only must never render LIVE:\n%s", out)
 	}
 }
+
+func Test_sendgate_selects_newest_by_created_at_not_row_order(t *testing.T) {
+	// a replayed/backfilled bus can place an OLDER sent after a newer one — the newest
+	// valid created_at must win, not the last row
+	older := `{"receipt_schema":1,"receipt_id":"r-old","op":"session_send","outcome":"sent","lane":"eta","created_at":"2026-08-08T10:00:00Z"}`
+	newer := `{"receipt_schema":1,"receipt_id":"r-new","op":"session_send","outcome":"sent","lane":"zeta","created_at":"2026-08-08T13:00:00Z"}`
+	ev := latestSendEvidence(_writeBus(t, newer, older)) // newer first, older trailing
+	if ev == nil || ev.ReceiptID != "r-new" {
+		t.Fatalf("newest-by-created_at must win over row order, got %+v", ev)
+	}
+	ev = latestSendEvidence(_writeBus(t, older, newer)) // canonical order as a control
+	if ev == nil || ev.ReceiptID != "r-new" {
+		t.Fatalf("canonical order must also surface the newest, got %+v", ev)
+	}
+}
+
+func Test_sendgate_dark_on_untimed_sent(t *testing.T) {
+	// the writer always timestamps; an untimed or unparseable "sent" is not evidence
+	untimed := `{"receipt_schema":1,"receipt_id":"r9","op":"session_send","outcome":"sent","lane":"eta"}`
+	if ev := latestSendEvidence(_writeBus(t, untimed)); ev != nil {
+		t.Fatalf("a sent with no created_at must stay dark, got %+v", ev)
+	}
+	badts := `{"receipt_schema":1,"receipt_id":"r9","op":"session_send","outcome":"sent","lane":"eta","created_at":"yesterday"}`
+	if ev := latestSendEvidence(_writeBus(t, badts)); ev != nil {
+		t.Fatalf("a sent with an unparseable created_at must stay dark, got %+v", ev)
+	}
+	// an untimed "sent" must not displace a genuinely-timed one
+	timed := `{"receipt_schema":1,"receipt_id":"r8","op":"session_send","outcome":"sent","lane":"eta","created_at":"2026-08-08T09:00:00Z"}`
+	ev := latestSendEvidence(_writeBus(t, timed, untimed))
+	if ev == nil || ev.ReceiptID != "r8" {
+		t.Fatalf("the timed receipt must remain the evidence, got %+v", ev)
+	}
+}
