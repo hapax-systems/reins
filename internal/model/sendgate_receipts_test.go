@@ -3,7 +3,10 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func _writeBus(t *testing.T, lines ...string) string {
@@ -73,5 +76,35 @@ func Test_sendgate_corrupt_lines_do_not_hide_a_later_valid_sent(t *testing.T) {
 	ev := latestSendEvidence(path)
 	if ev == nil || ev.ReceiptID != "r1" {
 		t.Fatalf("a valid sent receipt after corrupt lines must still light, got %+v", ev)
+	}
+}
+
+func Test_sendgate_footer_renders_live_through_the_real_ui_path(t *testing.T) {
+	bus := _writeBus(t, _attemptedLine, _sentLine)
+	t.Setenv("HAPAX_SESSION_SEND_RECEIPTS", bus)
+	m := New("REINS")
+	m.Mode = ModeSendGate
+	m.CoordChatInput = "status check"
+	out := ansi.Strip(m.coordinatorChatPane(200, 24))
+	if !strings.Contains(out, "session gate: LIVE") {
+		t.Fatalf("the footer must render LIVE through coordinatorChatPane:\n%s", out)
+	}
+	if !strings.Contains(out, "eta") {
+		t.Fatalf("the LIVE line must name the governed lane:\n%s", out)
+	}
+}
+
+func Test_sendgate_footer_renders_dark_through_the_real_ui_path(t *testing.T) {
+	bus := _writeBus(t, _attemptedLine) // attempted-only: never evidence of send
+	t.Setenv("HAPAX_SESSION_SEND_RECEIPTS", bus)
+	m := New("REINS")
+	m.Mode = ModeSendGate
+	m.CoordChatInput = "status check"
+	out := ansi.Strip(m.coordinatorChatPane(200, 24))
+	if !strings.Contains(out, "session gate: NOT WIRED") {
+		t.Fatalf("the footer must render NOT WIRED with no genuine receipt:\n%s", out)
+	}
+	if strings.Contains(out, "session gate: LIVE") {
+		t.Fatalf("attempted-only must never render LIVE:\n%s", out)
 	}
 }
