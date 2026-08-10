@@ -233,3 +233,64 @@ def test_the_kernel_can_attest_itself():
     ident = kernel_identity()
     assert ident["kernel_manifest_sha256"] == K0_DRIFT_PIN
     assert ident["kernel_version"] == K0.kernel_version
+
+
+# --- the second closed-world source: the superseded draft ------------------------------------
+#: Every member of the 11-member vault draft (k0-manifest.yaml, 0.1.0-draft), under the name this
+#: file classifies it by. Frozen here because the draft is a superseded VAULT artifact: once it is
+#: retired there is no other record that these were kernel candidates, and an unrecorded candidate
+#: is precisely what a closed-world check exists to make impossible.
+DRAFT_MEMBER_DISPOSITIONS = {
+    "K0.1 fail-closed default": "fail-closed-default",
+    "K0.2 refusal-as-data": "refusal-as-data",
+    "K0.3 receipt primitive": "receipt-primitive",
+    "K0.4 ratification act": "ratification-act",
+    "K0.5 sovereign-only mutation": "sovereign-only-mutation",
+    "K0.6 signed EscapeGrant verify": "escape-grant-verify",
+    "K0.7 PII/consent scanner": "pii-consent-scanner",
+    "K0.8 identity seed": "identity-seed",
+    "K0.8 ratifier signing key": "ratifier-signing-key",
+    "K0.9 FSM phase-legality law": "fsm-phase-legality-law",
+    "K0.10 single-instance lock": "single-instance-lock",
+    "K0.11 bounded-affordance law": "bounded-affordance-law",
+}
+
+
+def test_every_draft_candidate_is_classified_exactly_once():
+    """The check that was missing on 2026-08-10, when two draft members were in NEITHER list.
+
+    verify_minimality could not catch it: an unclassified candidate is invisible to a world
+    closed against R0.1-R0.12 alone. K0.5 and K0.6 sat outside both lists with real circularity
+    witnesses and byte-pinned artifacts, so the minimality claim held only over a world that
+    omitted them.
+
+    Note K0.8: the draft bundled the identity seed and the ratifier key into ONE member, and this
+    kernel splits them -- seed is kernel, key is minted. A test keyed to draft members has to
+    represent that split, or it re-hides the sharper answer.
+    """
+    from k0.manifest import EXCLUDED
+    member_ids = {m.id for m in K0.members}
+
+    unclassified = [
+        draft_name
+        for draft_name, name in DRAFT_MEMBER_DISPOSITIONS.items()
+        if name not in member_ids and name not in EXCLUDED
+    ]
+    assert not unclassified, (
+        f"draft candidates in neither K0 nor EXCLUDED: {unclassified}. A non-installable "
+        f"candidate belongs in K0; an installable one belongs in EXCLUDED with its installer "
+        f"named. Silence is the third option, and it is the one that is wrong."
+    )
+
+
+def test_the_two_harvested_candidates_record_their_provenance():
+    """Regression pin for the harvest itself, not merely for its presence.
+
+    An exclusion whose reason omits a bootstrap act already fails verify_minimality. These two
+    are the entries a later editor is most likely to prune as redundant, because they are the
+    only ones not traceable to an R0.x id.
+    """
+    from k0.manifest import EXCLUDED
+    for name in ("sovereign-only-mutation", "escape-grant-verify"):
+        assert name in EXCLUDED, f"{name} was harvested from the draft; do not drop it"
+        assert "draft K0." in EXCLUDED[name], f"{name} must record which draft member it was"

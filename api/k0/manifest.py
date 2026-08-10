@@ -350,9 +350,26 @@ K0_DRIFT_PIN = verify(K0, expect_pin=RATIFIED_PIN)
 # non-installable and therefore belongs in K0. A member that also appears here with an installer
 # is the opposite violation. Both fail the check.
 #
-# Candidates are drawn from the P0 requirements (R0.1-R0.12) of
-# first-init-requirements-graph-2026-07-09.yaml -- the design's own enumeration of the
-# kit-and-kernel surface -- so the world is closed against a stated source, not against intuition.
+# Candidates are drawn from TWO stated sources, so the world is closed against enumerations
+# rather than against intuition:
+#
+#   (a) the P0 requirements (R0.1-R0.12) of first-init-requirements-graph-2026-07-09.yaml --
+#       the design's own enumeration of the kit-and-kernel surface; and
+#   (b) the member list of the superseded 11-member vault draft
+#       (30-areas/hapax/first-init-lane-source/k0-manifest.yaml, kernel_version 0.1.0-draft).
+#
+# WHY (b) WAS ADDED, 2026-08-10. Mapping the draft against this file showed 9 of its 11
+# members already classified here -- as members, as exclusions, or (for the identity seed)
+# SPLIT between the two, which is the sharper answer. TWO were in neither list:
+# `sovereign-only mutation (registry-guard)` and `signed EscapeGrant verify`.
+#
+# They were not excluded-with-no-installer, which verify_minimality catches. They were
+# UNCLASSIFIED, which it cannot catch, because closing the world against R0.1-R0.12 alone
+# made them invisible to the check. Both are real byte-pinned mechanisms carrying genuine
+# circularity witnesses, so the minimality claim held only over a world that omitted them.
+# Retiring the draft without harvesting these would have destroyed the only record that they
+# were ever kernel candidates -- and an unrecorded candidate is exactly what a closed-world
+# check is supposed to make impossible.
 
 #: mechanism -> the governed act that installs it (why it is NOT kernel)
 EXCLUDED: Mapping[str, str] = {
@@ -398,6 +415,41 @@ EXCLUDED: Mapping[str, str] = {
     ),
     "license-publication-posture": (
         "R0.2 — installed by `ratify` (RATIFIED 2026-07-30). A posture decision, not a mechanism."
+    ),
+    # --- harvested from the superseded draft, 2026-08-10 (operator-accepted: exclude) -------
+    "sovereign-only-mutation": (
+        "draft K0.5 — installed by `install`. The draft's witness ('the act granting only-the-"
+        "sovereign-may-mutate would itself be a mutation') is a real circularity, but it is a "
+        "circularity of the GUARD, not of the acts. Sovereignty itself is kernel already, as "
+        "`identity-seed`: once there is an identity to attribute acts to, discriminating "
+        "sovereign from non-sovereign is a decidable check, and a check is installable. The "
+        "estate's registry-guard is that check, and it is estate-tuned shell that must "
+        "generalise before it ships."
+    ),
+    "bounded-affordance-law": (
+        "draft K0.11 — extent installed by `ratify` (R2.13 forge choice, R1.2 storage row). "
+        "This is the CONTESTABLE one of the three, and the argument against excluding it is "
+        "real: its witness ('no governed act can confer the authority to perform the write that "
+        "installs that authority') has the same shape as `fsm-phase-legality-law`, where the LAW "
+        "is kernel and the executing FSM is installable — see the `bootstrap-phase-fsm` entry "
+        "below. What settles it is that the judgement was already made, one level up: "
+        "LEVER_CLASSES records `affordance-grant` as 'boots mandatory, installable => NOT K0', "
+        "ratified 2026-08-01. This entry RECORDS that ratification at the mechanism level; it "
+        "does not make a new one. Admitting it as a member would move RATIFIED_PIN and is an "
+        "operator act."
+    ),
+    "escape-grant-verify": (
+        "draft K0.6 — installed by `install`, its trust root by `mint`. The draft's witness "
+        "('installing the escape path may itself be blocked by a hold') describes a real dead "
+        "end, but escape-verify is a signature-and-expiry check against a trust root, and that "
+        "root is the kit signing key pre-mint and the ratifier key post-mint — BOTH of which "
+        "are already classified (P-1.1 and `ratifier-signing-key`). A mechanism whose entire "
+        "authority derives from an already-classified root is downstream of the kernel, not in "
+        "it. NOTE the draft's open question travels with this exclusion rather than dying with "
+        "it: `scope_rule` ('governed practice mints scope=\"*\"; at genesis the receipt chain is "
+        "the only witness, which argues for generous-but-bounded scope instead') is an OPERATOR "
+        "decision, still unmade, and it is a decision about the installer — not about kernel "
+        "membership."
     ),
 }
 
