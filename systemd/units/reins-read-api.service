@@ -1,0 +1,81 @@
+[Unit]
+# The Reins API: the estate's unified determinative-state aperture, COMPOSED.
+#
+# TRACKED COPY of ~/.config/systemd/user/reins-read-api.service, added 2026-08-12 with
+# the pinned-generation drop-in beside it. It had lived only in the operator's systemd
+# directory: the unit that decides what the frontdoor runs was itself unreproducible from
+# source, which is the same class of problem as ExecStarting from a working tree.
+#
+# This copy is the reference, not the live file — systemd reads ~/.config/systemd/user.
+# See docs/reins-pinned-generation.md for installing it and the drop-in together.
+#
+# 2026-08-07 REPAIR (kimi lane, operator-approved usability restoration):
+# this unit previously ExecStarted bare reins_read.py under the council venv,
+# which (a) lacked the hapax-spine wheel, so every spine-backed /read/* surface
+# answered dark {"error":"No module named 'hapax'"} since ~2026-08-04, and
+# (b) never served /read/meta, so the cockpit rendered PORT: FOREIGN SERVER for
+# the entire session and /read/commands, /route/*, /command/{verb} could never
+# light up. The composed app (reins_serve.build_serve_app) mounts the read app
+# plus the identity handshake and the command/route surfaces; the reins api venv
+# carries fastapi+uvicorn+hapax-spine (uv sync, 2026-08-07).
+#
+# READ-MOSTLY: reins_serve mounts the K0-gated /command/{verb} router; day-1
+# verbs other than dispatch answer typed 501, and dispatch enqueues via the
+# governed seam only.
+#
+# INTERPRETER: %h/projects/reins/api/.venv (uv-managed; carries hapax-spine) —
+# OVERRIDDEN by reins-read-api.service.d/pinned-generation.conf, which moves the
+# interpreter, the working directory and PYTHONPATH onto a tested generation under
+# ~/.local/share/reins/current. The paths below are what this unit runs WITHOUT that
+# drop-in installed, and they are a mutable developer checkout.
+# HAPAX_SPINE_CONFIG_DIR points the wheel at the council config dir, whose
+# fixture/registry files it loads.
+Description=Reins API — unified determinative estate-state aperture (composed serve app)
+Documentation=file://%h/projects/reins/README.md
+After=hapax-secrets.service
+Wants=network-online.target
+
+# Restart on failure but do not thrash. These are [Unit] keys. They were in [Service],
+# where `systemd-analyze verify` reports "Unknown key 'StartLimitIntervalSec' ... ignoring"
+# and `systemctl show` measured StartLimitIntervalUSec=10s against a file asking for 300s.
+# StartLimitBurst survived on a compat path; the interval did not. Since RestartSec=10s
+# spaces restarts 10s apart, 5-starts-per-10s was unreachable — the limiter could never
+# trip and a persistently failing unit would have restarted every 10s forever, which is
+# precisely the "do not thrash" the comment claimed to buy. Moved 2026-08-12 because the
+# pinned-generation drop-in adds a new way to fail at start (a `current` that resolves to
+# a broken generation), and a rate limit that cannot fire is not a rate limit.
+StartLimitBurst=5
+StartLimitIntervalSec=300s
+
+[Service]
+Type=exec
+ExecStart=%h/projects/reins/api/.venv/bin/python %h/projects/reins/api/reins_serve.py
+WorkingDirectory=%h/projects/reins/api
+Environment=HOME=%h
+Environment=PYTHONPATH=%h/projects/reins/api
+Environment=REINS_PORT=8799
+Environment=REINS_COUNCIL_ROOT=%h/projects/hapax-council
+Environment=HAPAX_SPINE_CONFIG_DIR=%h/projects/hapax-council/config
+EnvironmentFile=-/run/user/1000/hapax-secrets.env
+
+# Bind to loopback only. The module hardcodes host="127.0.0.1"; these settings
+# are defence in depth, not the primary control.
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Restart on failure but do not thrash. The two StartLimit* keys that bound this live in
+# [Unit], above — they are not [Service] keys.
+Restart=on-failure
+RestartSec=10s
+
+# This is an operator-desktop aperture, not a fleet service.
+Nice=5
+MemoryMax=2G
+OOMScoreAdjust=200
+
+[Install]
+WantedBy=default.target
