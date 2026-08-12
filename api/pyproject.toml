@@ -4,3 +4,21 @@ version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "hapax-spine>=0.1.1,<0.2"]
 
+# THE TEST DEPENDENCY WAS UNDECLARED, so the suite was not reproducible from source.
+#
+# `uv run pytest` worked in the developer tree only because that `.venv` had pytest installed by
+# hand at some point. A clean clone of ANY commit could not run the tests at all — found by
+# `scripts/reins-release`, whose whole purpose is to refuse a generation that cannot prove its own
+# tests pass, and which therefore refused every generation including origin/main.
+#
+# An undeclared dependency that happens to be present in one venv is the same defect as a check
+# whose input set is not the subject it describes: the green suite was a property of one machine's
+# history rather than of the source.
+#
+# `httpx` is here for the same reason and was found the same way: after declaring pytest, `uv sync`
+# reset the venv to what the file actually says and four test modules failed to collect with
+# "the starlette.testclient module requires httpx". Two undeclared test dependencies, both present
+# only by accident of that venv's history.
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
