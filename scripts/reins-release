@@ -66,9 +66,12 @@ else
     git clone --quiet --no-checkout "$REPO" "$dest.partial" || die "clone failed"
     git -C "$dest.partial" checkout --quiet --detach "$sha" || die "checkout of $sha failed"
 
+    # `uv sync`, plainly. The first version chained `uv venv` with a fallback to `uv sync`, and
+    # the `uv venv` leg SUCCEEDED while installing nothing — so the fallback never ran and every
+    # generation failed its own test gate with "Failed to spawn: pytest". A fallback that fires
+    # only when the primary reports failure is useless when the primary succeeds at doing nothing.
     echo "reins-release: building venv for $sha"
-    ( cd "$dest.partial/api" && uv venv --quiet .venv && uv pip install --quiet -r <(uv export --no-hashes 2>/dev/null || echo "") ) 2>/dev/null \
-        || ( cd "$dest.partial/api" && uv sync --quiet ) \
+    ( cd "$dest.partial/api" && uv sync --quiet ) \
         || die "venv build failed for $sha; current generation left untouched"
 
     echo "reins-release: running tests for $sha"
