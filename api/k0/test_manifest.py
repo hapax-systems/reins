@@ -6,6 +6,8 @@ Self-contained per the repo testing convention (no shared conftest fixtures).
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +54,7 @@ def test_the_canonical_kernel_verifies():
     assert verify(K0) == K0_DRIFT_PIN
 
 
-def test_the_import_time_drift_check_is_still_armed() -> None:
+def test_the_import_time_drift_check_is_still_armed(tmp_path: Path) -> None:
     """`test_the_pin_is_the_ratified_literal_not_a_recomputation` already anchors the literal.
 
     What nothing asserted is that the ARMING survives: `RATIFIED_PIN` could keep its value and
@@ -73,12 +75,37 @@ def test_the_import_time_drift_check_is_still_armed() -> None:
         "import and this test can no longer prove anything about it"
     )
 
+    # A REAL MODULE LOAD, not a differently-spelled dynamic evaluation.
+    #
+    # The original called the dynamic-evaluation builtin, which tripped this repo's own
+    # model-client scanner in api/test_deterministic_segment.py, so the test failed CI while
+    # testing nothing about model clients.
+    #
+    # The tempting fix was to switch to the sibling builtin: same act, different token, scanner
+    # silenced. That is evasion, and blunting a live guard to accommodate a test is the failure
+    # mode this module exists to prevent. The scanner was doing its job.
+    #
+    # So the neutralised copy is written out and loaded through the import machinery instead. It
+    # is a closer model of the real thing besides — the behaviour under test IS an import-time
+    # side effect. (This comment deliberately does not quote the scanner's pattern: the first
+    # version did, and the comment then matched it, which is the same defect one layer up.)
     neutralized = source.replace("expect_pin=RATIFIED_PIN", "expect_pin=None")
-    namespace: dict[str, Any] = {}
-    exec(compile(neutralized, "manifest.py", "exec"), namespace)  # noqa: S102
+    neutralized_path = tmp_path / "manifest_neutralized.py"
+    neutralized_path.write_text(neutralized, encoding="utf-8")
 
-    assert namespace["K0"].drift_pin() == EXPECTED_RATIFIED_PIN
-    assert namespace["RATIFIED_PIN"] == EXPECTED_RATIFIED_PIN
+    spec = importlib.util.spec_from_file_location("k0_manifest_neutralized", neutralized_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Registered before loading: the module defines dataclasses, and the decorator resolves the
+    # defining module out of sys.modules while the class body runs.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    assert module.K0.drift_pin() == EXPECTED_RATIFIED_PIN
+    assert module.RATIFIED_PIN == EXPECTED_RATIFIED_PIN
 
 
 def test_pin_is_stable_across_member_order():
