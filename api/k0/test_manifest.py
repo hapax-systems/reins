@@ -6,6 +6,8 @@ Self-contained per the repo testing convention (no shared conftest fixtures).
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,6 +20,16 @@ from k0.manifest import (
     KernelMember,
     verify,
 )
+
+K0_ROOT = Path(__file__).resolve().parent
+
+#: The ratified pin as an independent literal, used only by the arming test below.
+#:
+#: `test_the_pin_is_the_ratified_literal_not_a_recomputation` already anchors `RATIFIED_PIN` this
+#: way, so this is not a new anchor and does not pretend to be one. It exists so the arming test
+#: can compare a digest recomputed with the import-time check DISABLED against a value that did
+#: not come through that check.
+EXPECTED_RATIFIED_PIN = "b604b52bfdd9e267b7a5b68f42d020f233065f3c6d77eeb9f244de2d78ee6d59"
 
 
 def _member(**over) -> KernelMember:
@@ -38,6 +50,35 @@ def _manifest(members) -> KernelManifest:
 
 def test_the_canonical_kernel_verifies():
     assert verify(K0) == K0_DRIFT_PIN
+
+
+def test_the_import_time_drift_check_is_still_armed() -> None:
+    """`test_the_pin_is_the_ratified_literal_not_a_recomputation` already anchors the literal.
+
+    What nothing asserted is that the ARMING survives: `RATIFIED_PIN` could keep its value and
+    stay pinned by a test, while `K0_DRIFT_PIN = verify(K0, expect_pin=RATIFIED_PIN)` was quietly
+    softened to `expect_pin=None`. Every existing test would still pass — the constant is
+    unchanged and the recomputation still agrees — and the kernel would no longer be checked at
+    import by anything.
+
+    So this reads the source and requires the arming expression to be present, then re-execs with
+    it neutralised to prove the digest is what the anchored literal says independently of the
+    import-time path. Mirrors
+    `api/test_deterministic_segment.py::test_pin_is_recomputed_independently_of_import`, which the
+    module this one mirrors already had.
+    """
+    source = (K0_ROOT / "manifest.py").read_text(encoding="utf-8")
+    assert "expect_pin=RATIFIED_PIN" in source, (
+        "the import-time drift check was removed or renamed; the kernel is no longer pinned at "
+        "import and this test can no longer prove anything about it"
+    )
+
+    neutralized = source.replace("expect_pin=RATIFIED_PIN", "expect_pin=None")
+    namespace: dict[str, Any] = {}
+    exec(compile(neutralized, "manifest.py", "exec"), namespace)  # noqa: S102
+
+    assert namespace["K0"].drift_pin() == EXPECTED_RATIFIED_PIN
+    assert namespace["RATIFIED_PIN"] == EXPECTED_RATIFIED_PIN
 
 
 def test_pin_is_stable_across_member_order():
