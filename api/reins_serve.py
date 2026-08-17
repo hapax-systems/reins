@@ -26,11 +26,13 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+import reins_authorization
 import reins_command
 import reins_generation
 import reins_ledger
@@ -43,6 +45,7 @@ import reins_route
 # declares surface shape.
 VERB_TABLE: dict[str, dict[str, Any]] = {
     "dispatch": {"wired": True},  # the real apply transport (sqlite enqueue; the lane-launch is downstream)
+    "arm": {"wired": True, "mode": "governed"},  # sdlc.authorization_flip — release auto-arm, not a human checkbox
     "claim": {"wired": False},
     "close": {"wired": False},
     "approve": {"wired": False},
@@ -302,6 +305,49 @@ def _dispatch_closures(submit: Any = None) -> tuple:
     return (verify, preflight, transport)
 
 
+def _arm_closures():
+    """POST /command/arm — sdlc.authorization_flip via the SDLC auto-arm transform.
+
+    Target is a cc-task id. The transport assesses the note and writes
+    release_authorized: true when the row is implementation-authorized and
+    carries the field. This is machinery, not an operator checkbox.
+    """
+
+    def verify(packet: Any, target: str) -> bool:
+        return isinstance(packet, dict) and bool(packet.get("kind")) and bool(target)
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        head = None
+        if isinstance(env.authority_packet, dict):
+            head = env.authority_packet.get("head_sha") or env.authority_packet.get(
+                "release_authorized_head_sha"
+            )
+        status, detail = reins_authorization.arm_task(
+            env.target, now_iso=now_iso, role="reins-command-arm", head_sha=head
+        )
+        if status == "refused":
+            return reins_command.Response(
+                status="arm-refused",
+                http=409,
+                reason=detail,
+                legal_next=detail,
+            )
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"arm-{env.target}",
+            event_seq=None,
+            fold_delta=detail,
+            applied=status == "ok",
+        )
+
+    return verify, preflight, transport
+
+
 def _mount_command_router(
     app: FastAPI, ledger: reins_ledger.CommandLedger, submit_dispatch: Any = None
 ) -> None:
@@ -321,6 +367,7 @@ def _mount_command_router(
         "focus": _focus_closures(),
         "breakglass": _breakglass_closures(),
         "dispatch": _dispatch_closures(submit_dispatch),
+        "arm": _arm_closures(),
     }
 
     @app.post("/command/{verb}")
