@@ -97,7 +97,7 @@ def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch)
     cmd = _endpoint(app, "/command/{verb}")
     req = reins_command.CommandRequest(
         target="demo-task",
-        authority_packet={"kind": "sdlc", "head_sha": "abc123"},
+        authority_packet={"kind": "sdlc", "head_sha": "deadbeef"},
         preflight_receipt={},
         idempotency_key="arm-1",
     )
@@ -106,7 +106,7 @@ def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch)
     text = note.read_text(encoding="utf-8")
     assert "release_authorized: true" in text
     assert "stage: S7_RELEASE" in text
-    assert "release_authorized_head_sha: abc123" in text
+    assert "release_authorized_head_sha: deadbeef" in text
 
 
 def test_arm_refuses_when_implementation_is_not_authorized(tmp_path, monkeypatch):
