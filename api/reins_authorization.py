@@ -31,17 +31,39 @@ def find_task_note(task_id: str, *, root: Path | None = None) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def assess_arm(front: str) -> tuple[bool, str]:
-    """Return (eligible, reason). reason is legal_next when not eligible."""
+_HEAD_SHA_RE = re.compile(r"\A[0-9a-f]{7,64}\Z")
+
+
+def validate_head_sha(head_sha: str | None) -> str | None:
+    """Return the sha if safe to interpolate, else None."""
+
+    if head_sha is None:
+        return None
+    text = str(head_sha).strip().lower()
+    if not _HEAD_SHA_RE.fullmatch(text):
+        return None
+    return text
+
+
+def assess_arm(front: str) -> tuple[bool, str, str]:
+    """Return (eligible, reason, legal_next). legal_next is empty when eligible."""
 
     if not re.search(r"(?m)^release_authorized:", front):
-        return False, "task is not a release-arm subject (no release_authorized field); add the field or use autoqueue"
+        return (
+            False,
+            "task is not a release-arm subject (no release_authorized field)",
+            "add release_authorized to the note, or skip arm and use autoqueue",
+        )
     if re.search(r"(?m)^release_authorized:\s*true\s*$", front, flags=re.I):
-        return True, "already-armed"
+        return True, "already-armed", ""
     impl = re.search(r"(?m)^implementation_authorized:\s*(\S+)\s*$", front)
     if impl is None or impl.group(1).strip().lower() not in {"true", "yes", "1"}:
-        return False, "implementation_authorized is not true; the row is not authorized-in-principle"
-    return True, "eligible"
+        return (
+            False,
+            "implementation_authorized is not true",
+            "set implementation_authorized: true when the slice is authorized-in-principle, then retry arm",
+        )
+    return True, "eligible", ""
 
 
 def apply_arm(
@@ -58,8 +80,9 @@ def apply_arm(
         raise ValueError("cc-task frontmatter must close")
     front, body = note_text[: end + 1], note_text[end + 1 :]
     front = re.sub(r"(?m)^release_authorized:\s*.*$", "release_authorized: true", front, count=1)
-    if head_sha:
-        line = f"release_authorized_head_sha: {head_sha}"
+    safe_sha = validate_head_sha(head_sha)
+    if safe_sha:
+        line = f"release_authorized_head_sha: {safe_sha}"
         if re.search(r"(?m)^release_authorized_head_sha:", front):
             front = re.sub(r"(?m)^release_authorized_head_sha:\s*.*$", line, front, count=1)
         else:
@@ -91,9 +114,9 @@ def arm_task(
     text = path.read_text(encoding="utf-8")
     end = text.find("\n---", 4)
     front = text[: end + 1] if end > 0 else text
-    eligible, reason = assess_arm(front)
+    eligible, reason, legal_next = assess_arm(front)
     if not eligible:
-        return "refused", reason
+        return "refused", legal_next or reason
     if reason == "already-armed":
         return "already-armed", reason
     path.write_text(apply_arm(text, now_iso=now_iso, role=role, head_sha=head_sha), encoding="utf-8")

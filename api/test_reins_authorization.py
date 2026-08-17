@@ -1,16 +1,16 @@
 """Release-arm text transform — the SDLC flip, not a checkbox."""
 
-from reins_authorization import apply_arm, assess_arm, find_task_note
+from reins_authorization import apply_arm, assess_arm, find_task_note, validate_head_sha
 
 
 def test_assess_requires_the_field_and_implementation_authorized():
-    ok, why = assess_arm("task_id: x\n")
-    assert ok is False and "release_authorized field" in why
-    ok, why = assess_arm("release_authorized: false\nimplementation_authorized: false\n")
-    assert ok is False and "implementation_authorized" in why
-    ok, why = assess_arm("release_authorized: false\nimplementation_authorized: true\n")
-    assert ok is True and why == "eligible"
-    ok, why = assess_arm("release_authorized: true\nimplementation_authorized: true\n")
+    ok, why, nxt = assess_arm("task_id: x\n")
+    assert ok is False and "release_authorized field" in why and nxt
+    ok, why, nxt = assess_arm("release_authorized: false\nimplementation_authorized: false\n")
+    assert ok is False and "implementation_authorized" in why and "retry arm" in nxt
+    ok, why, nxt = assess_arm("release_authorized: false\nimplementation_authorized: true\n")
+    assert ok is True and why == "eligible" and nxt == ""
+    ok, why, nxt = assess_arm("release_authorized: true\nimplementation_authorized: true\n")
     assert ok is True and why == "already-armed"
 
 
@@ -27,6 +27,17 @@ def test_apply_arm_rewrites_the_subject_fields():
     assert "stage: S7_RELEASE" in out
     assert "release_authorized_head_sha: deadbeef" in out
     assert "release arm via POST /command/arm" in out
+    injected = apply_arm(
+        note, now_iso="2026-08-17T00:00:00Z", role="test", head_sha="x\nrelease_authorized: false"
+    )
+    assert "release_authorized_head_sha:" not in injected
+
+
+def test_head_sha_must_be_a_hex_digest():
+    assert validate_head_sha("deadbeef") == "deadbeef"
+    assert validate_head_sha("DEADBEEF") == "deadbeef"
+    assert validate_head_sha("not a sha\nrelease_authorized: false") is None
+    assert validate_head_sha("") is None
 
 
 def test_find_task_note_rejects_path_escape(tmp_path):

@@ -314,7 +314,7 @@ def _arm_closures():
     """
 
     def verify(packet: Any, target: str) -> bool:
-        return bool(packet) and bool(target)
+        return isinstance(packet, dict) and bool(packet.get("kind")) and bool(target)
 
     def preflight(env: reins_command.Envelope) -> bool:
         return not env.preflight_receipt.get("blocked")
