@@ -52,7 +52,7 @@ def test_read_meta_identity_handshake():
     # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor
     # inflections (reins-local) — focus (prioritization) + breakglass (sanctioned exit) — plus dispatch (the
     # real apply transport: a sqlite enqueue to the relay MQ; the lane-launch is downstream, no spawn).
-    assert wired == ["breakglass", "dispatch", "focus", "resume", "stage"]
+    assert wired == ["arm", "breakglass", "dispatch", "focus", "resume", "stage"]
     # every wired verb projects its mode so the cockpit renders preview honestly (never-false-green)
     assert all("mode" in s for s in meta["verbs"].values())
 
@@ -78,6 +78,59 @@ def test_unregistered_verb_refuses_typed_501():
     resp = cmd("rm-rf", req)
     assert resp.status_code == 501
     assert "unregistered verb" in resp.body.decode()
+
+
+def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_CC_TASK_ROOT", str(tmp_path))
+    note = tmp_path / "demo-task.md"
+    note.write_text(
+        "---\n"
+        "type: cc-task\n"
+        "task_id: demo-task\n"
+        "implementation_authorized: true\n"
+        "release_authorized: false\n"
+        "stage: S6_IMPLEMENTATION\n"
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="demo-task",
+        authority_packet={"kind": "sdlc", "head_sha": "abc123"},
+        preflight_receipt={},
+        idempotency_key="arm-1",
+    )
+    resp = cmd("arm", req)
+    assert resp.status_code == 200, resp.body
+    text = note.read_text(encoding="utf-8")
+    assert "release_authorized: true" in text
+    assert "stage: S7_RELEASE" in text
+    assert "release_authorized_head_sha: abc123" in text
+
+
+def test_arm_refuses_when_implementation_is_not_authorized(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_CC_TASK_ROOT", str(tmp_path))
+    (tmp_path / "held-task.md").write_text(
+        "---\n"
+        "type: cc-task\n"
+        "task_id: held-task\n"
+        "implementation_authorized: false\n"
+        "release_authorized: false\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    req = reins_command.CommandRequest(
+        target="held-task",
+        authority_packet={"kind": "sdlc"},
+        preflight_receipt={},
+        idempotency_key="arm-2",
+    )
+    resp = cmd("arm", req)
+    assert resp.status_code == 409
+    assert b"implementation_authorized" in resp.body
 
 
 def test_resume_preview_wired_zero_mint():
