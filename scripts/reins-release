@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# reins-release <sha> — build an immutable, tested generation and make it `current`.
+#
+# WHY THIS EXISTS
+#
+# `reins-read-api.service` ExecStarted from `~/projects/reins/api` — a mutable developer checkout.
+# Measured 2026-08-12: the tree was on `beta/k0-closed-world-harvest-20260812` while the live
+# process served `943e6d8` (Aug-9 main). It was serving good code only because nothing had
+# restarted it since 2026-08-09. The next restart, for any reason, would have loaded whatever
+# branch happened to be checked out — into the operator's only frontdoor API.
+#
+# That is a delivery problem, not housekeeping. R2.1 wires a governed WRITE verb; a write verb
+# cannot be trusted while the process serving it is whatever someone last checked out.
+#
+# THE REFUSALS ARE THE FEATURE
+#
+# A generation that cannot prove its own tests pass must never become `current`. Every failure
+# path here does strictly LESS than the success path: it leaves `current` where it is and exits
+# non-zero. There is deliberately no --force. If you need to ship something whose tests fail, the
+# honest act is to fix the tests or move the symlink by hand and own that in the shell history.
+set -euo pipefail
+
+REPO="${REINS_REPO:-$HOME/projects/reins}"
+RELEASES="${REINS_RELEASE_ROOT:-$HOME/.local/share/reins/releases}"
+CURRENT="${REINS_CURRENT_LINK:-$HOME/.local/share/reins/current}"
+
+die() { echo "reins-release: $*" >&2; exit 1; }
+
+[ $# -eq 1 ] || die "usage: reins-release <sha>
+  <sha> must be a commit reachable from origin/main. Next: reins-release \$(git -C $REPO rev-parse origin/main)"
+
+want="$1"
+
+command -v git >/dev/null 2>&1 || die "git not found"
+[ -d "$REPO/.git" ] || die "no git repo at $REPO"
+
+# A dirty tree means the SHA does not describe what a developer is looking at, and the release
+# would silently disagree with their working state. Refuse rather than resolve the ambiguity.
+if [ -n "$(git -C "$REPO" status --porcelain)" ]; then
+    die "working tree at $REPO is dirty; a release must describe a committed state.
+  Next: commit or stash, then re-run"
+fi
+
+git -C "$REPO" rev-parse --verify --quiet "${want}^{commit}" >/dev/null \
+    || die "unknown commit: $want"
+sha="$(git -C "$REPO" rev-parse "${want}^{commit}")"
+
+# Ancestry of origin/main, not merely "exists". A release built from an unmerged branch is exactly
+# the condition this script was written to end.
+git -C "$REPO" fetch --quiet origin main 2>/dev/null || true
+if ! git -C "$REPO" merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
+    die "$sha is not an ancestor of origin/main.
+  A generation built from an unmerged branch is the condition this script exists to prevent.
+  Next: merge it, or serve it by hand and own that choice explicitly"
+fi
+
+dest="$RELEASES/$sha"
+if [ -e "$dest" ] && [ -e "$dest/.reins-release-complete" ]; then
+    echo "reins-release: $sha already built at $dest"
+else
+    rm -rf "$dest" "$dest.partial"
+    mkdir -p "$RELEASES"
+    # A CLEAN CLONE, not a copy of the working tree: nothing untracked or ignored travels into a
+    # generation. `git worktree` would share the parent's object store and its lifetime; a clone
+    # is self-contained and survives the developer deleting a branch.
+    git clone --quiet --no-checkout "$REPO" "$dest.partial" || die "clone failed"
+    git -C "$dest.partial" checkout --quiet --detach "$sha" || die "checkout of $sha failed"
+
+    # `uv sync`, plainly. The first version chained `uv venv` with a fallback to `uv sync`, and
+    # the `uv venv` leg SUCCEEDED while installing nothing — so the fallback never ran and every
+    # generation failed its own test gate with "Failed to spawn: pytest". A fallback that fires
+    # only when the primary reports failure is useless when the primary succeeds at doing nothing.
+    echo "reins-release: building venv for $sha"
+    ( cd "$dest.partial/api" && uv sync --quiet ) \
+        || die "venv build failed for $sha; current generation left untouched"
+
+    echo "reins-release: running tests for $sha"
+    if ! ( cd "$dest.partial/api" && uv run --no-sync pytest -q >/tmp/reins-release-$sha.log 2>&1 ); then
+        tail -5 "/tmp/reins-release-$sha.log" >&2 || true
+        rm -rf "$dest.partial"
+        die "tests FAILED for $sha; this generation is not eligible to be current.
+  Full log: /tmp/reins-release-$sha.log
+  Next: fix the failures and re-run. There is no --force."
+    fi
+
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$dest.partial/.reins-release-complete"
+    mv "$dest.partial" "$dest"
+fi
+
+# Atomic flip: build the new link beside the old one and rename over it, so a reader never sees a
+# missing `current`.
+ln -sfn "$dest" "$CURRENT.new"
+mv -T "$CURRENT.new" "$CURRENT"
+echo "reins-release: current -> $sha"
+echo "next: systemctl --user restart reins-read-api && curl -s :8799/read/meta"
