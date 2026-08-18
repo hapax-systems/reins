@@ -5,6 +5,7 @@ Self-contained per the repo testing convention (no shared conftest fixtures).
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib.util
 import sys
@@ -70,9 +71,24 @@ def test_the_import_time_drift_check_is_still_armed(tmp_path: Path) -> None:
     module this one mirrors already had.
     """
     source = (K0_ROOT / "manifest.py").read_text(encoding="utf-8")
-    assert "expect_pin=RATIFIED_PIN" in source, (
-        "the import-time drift check was removed or renamed; the kernel is no longer pinned at "
-        "import and this test can no longer prove anything about it"
+    tree = ast.parse(source)
+    pin_assign = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "K0_DRIFT_PIN" for t in node.targets):
+            pin_assign = node
+            break
+    assert pin_assign is not None, (
+        "K0_DRIFT_PIN assignment was removed or is no longer a module-level Assign; the kernel "
+        "is no longer pinned at import and this test can no longer prove anything about it"
+    )
+    call = pin_assign.value
+    assert isinstance(call, ast.Call), "K0_DRIFT_PIN must be bound to a verify(...) call"
+    expect = next((kw.value for kw in call.keywords if kw.arg == "expect_pin"), None)
+    assert isinstance(expect, ast.Name) and expect.id == "RATIFIED_PIN", (
+        "the import-time drift check no longer passes expect_pin=RATIFIED_PIN; a comment or "
+        "other call matching the old token would have hidden this"
     )
 
     # A REAL MODULE LOAD, not a differently-spelled dynamic evaluation.
@@ -89,7 +105,20 @@ def test_the_import_time_drift_check_is_still_armed(tmp_path: Path) -> None:
     # is a closer model of the real thing besides — the behaviour under test IS an import-time
     # side effect. (This comment deliberately does not quote the scanner's pattern: the first
     # version did, and the comment then matched it, which is the same defect one layer up.)
-    neutralized = source.replace("expect_pin=RATIFIED_PIN", "expect_pin=None")
+    #
+    # Neutralise only the K0_DRIFT_PIN assignment's expect_pin, not every occurrence of the
+    # token — a later comment or unrelated call must not keep this test green.
+    neutralized = source
+    for kw in call.keywords:
+        if kw.arg == "expect_pin":
+            lines = source.splitlines(keepends=True)
+            start = sum(len(line) for line in lines[: kw.value.lineno - 1]) + kw.value.col_offset
+            end = (
+                sum(len(line) for line in lines[: kw.value.end_lineno - 1])
+                + kw.value.end_col_offset
+            )
+            neutralized = source[:start] + "None" + source[end:]
+            break
     neutralized_path = tmp_path / "manifest_neutralized.py"
     neutralized_path.write_text(neutralized, encoding="utf-8")
 
@@ -351,14 +380,22 @@ def test_every_draft_candidate_is_classified_exactly_once():
     )
 
 
-def test_the_two_harvested_candidates_record_their_provenance():
+def test_the_harvested_candidates_record_their_provenance():
     """Regression pin for the harvest itself, not merely for its presence.
 
-    An exclusion whose reason omits a bootstrap act already fails verify_minimality. These two
+    An exclusion whose reason omits a bootstrap act already fails verify_minimality. These three
     are the entries a later editor is most likely to prune as redundant, because they are the
-    only ones not traceable to an R0.x id.
+    only ones not traceable to an R0.x id. K0.11 is the contestable one; dropping its draft
+    identifier would hide that it was ever a kernel candidate.
     """
     from k0.manifest import EXCLUDED
-    for name in ("sovereign-only-mutation", "escape-grant-verify"):
+    expected_draft_members = {
+        "sovereign-only-mutation": "K0.5",
+        "escape-grant-verify": "K0.6",
+        "bounded-affordance-law": "K0.11",
+    }
+    for name, draft_member in expected_draft_members.items():
         assert name in EXCLUDED, f"{name} was harvested from the draft; do not drop it"
-        assert "draft K0." in EXCLUDED[name], f"{name} must record which draft member it was"
+        assert f"draft {draft_member}" in EXCLUDED[name], (
+            f"{name} must record which draft member it was"
+        )
