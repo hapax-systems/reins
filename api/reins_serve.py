@@ -47,7 +47,7 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     "dispatch": {"wired": True},  # the real apply transport (sqlite enqueue; the lane-launch is downstream)
     "arm": {"wired": True, "mode": "governed"},  # sdlc.authorization_flip — release auto-arm, not a human checkbox
     "claim": {"wired": False},
-    "close": {"wired": False},
+    "close": {"wired": True, "mode": "governed"},  # cc-close note move — same contract, no council import
     "approve": {"wired": False},
     "deny": {"wired": False},
     "handoff": {"wired": False},
@@ -144,6 +144,55 @@ def _resume_preview_closures():
                 "surface — preview (no-op transport; the real rail lands at U3+)"
             ),
             spooled=False,
+        )
+
+    return verify, preflight, transport
+
+
+def _close_closures():
+    """POST /command/close — the cc-close note move as a reins-local transform.
+
+    Target is a cc-task id. The transport assesses the active note and, when
+    claimed, rewrites it to a terminal status and moves it to closed/. It does
+    not import council and does not mint authority. dry_run in the preflight
+    receipt is preview-only (applied stays false).
+    """
+
+    def verify(packet: Any, target: str) -> bool:
+        return isinstance(packet, dict) and bool(packet.get("kind")) and bool(target)
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        packet = env.authority_packet if isinstance(env.authority_packet, dict) else {}
+        dry = bool(
+            (env.preflight_receipt or {}).get("dry_run")
+            or (env.preflight_receipt or {}).get("preview")
+        )
+        pr = packet.get("pr")
+        status, detail = reins_authorization.close_task(
+            env.target,
+            now_iso=now_iso,
+            role="reins-command-close",
+            pr=None if pr is None else str(pr),
+            dry_run=dry,
+        )
+        if status == "refused":
+            return reins_command.Response(
+                status="close-refused",
+                http=409,
+                reason=detail,
+                legal_next=detail,
+            )
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"close-{env.target}",
+            event_seq=None,
+            fold_delta=detail,
+            applied=status == "ok",
         )
 
     return verify, preflight, transport
@@ -368,6 +417,7 @@ def _mount_command_router(
         "breakglass": _breakglass_closures(),
         "dispatch": _dispatch_closures(submit_dispatch),
         "arm": _arm_closures(),
+        "close": _close_closures(),
     }
 
     @app.post("/command/{verb}")

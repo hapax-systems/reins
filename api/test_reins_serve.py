@@ -52,7 +52,7 @@ def test_read_meta_identity_handshake():
     # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor
     # inflections (reins-local) — focus (prioritization) + breakglass (sanctioned exit) — plus dispatch (the
     # real apply transport: a sqlite enqueue to the relay MQ; the lane-launch is downstream, no spawn).
-    assert wired == ["arm", "breakglass", "dispatch", "focus", "resume", "stage"]
+    assert wired == ["arm", "breakglass", "close", "dispatch", "focus", "resume", "stage"]
     # every wired verb projects its mode so the cockpit renders preview honestly (never-false-green)
     assert all("mode" in s for s in meta["verbs"].values())
 
@@ -107,6 +107,94 @@ def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch)
     assert "release_authorized: true" in text
     assert "stage: S7_RELEASE" in text
     assert "release_authorized_head_sha: deadbeef" in text
+
+
+def test_close_moves_a_claimed_task_and_preview_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_CC_TASK_ROOT", str(tmp_path))
+    note = tmp_path / "demo-close.md"
+    note.write_text(
+        "---\n"
+        "task_id: demo-close\n"
+        "status: pr_open\n"
+        "claimed_at: 2026-08-01T00:00:00Z\n"
+        "completed_at: null\n"
+        "---\n\nbody\n\n## Session log\n- minted\n",
+        encoding="utf-8",
+    )
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    preview = cmd(
+        "close",
+        reins_command.CommandRequest(
+            target="demo-close",
+            authority_packet={"kind": "sdlc", "pr": "30"},
+            preflight_receipt={"dry_run": True},
+            idempotency_key="close-preview",
+        ),
+    )
+    assert preview.status_code == 200, preview.body
+    assert b"would close" in preview.body
+    assert note.is_file()
+
+    applied = cmd(
+        "close",
+        reins_command.CommandRequest(
+            target="demo-close",
+            authority_packet={"kind": "sdlc", "pr": "30"},
+            preflight_receipt={},
+            idempotency_key="close-1",
+        ),
+    )
+    assert applied.status_code == 200, applied.body
+    body = applied.body.decode()
+    assert '"applied":true' in body.replace(" ", "")
+    assert not note.exists()
+    closed = tmp_path / "closed" / "demo-close.md"
+    assert closed.is_file()
+    assert "status: done" in closed.read_text(encoding="utf-8")
+
+
+def test_close_refuses_unclaimed_already_done_and_malformed_packet(tmp_path, monkeypatch):
+    monkeypatch.setenv("REINS_CC_TASK_ROOT", str(tmp_path))
+    (tmp_path / "offered.md").write_text(
+        "---\nstatus: offered\nclaimed_at: null\n---\n", encoding="utf-8"
+    )
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    unclaimed = cmd(
+        "close",
+        reins_command.CommandRequest(
+            target="offered",
+            authority_packet={"kind": "sdlc"},
+            preflight_receipt={},
+            idempotency_key="close-u",
+        ),
+    )
+    assert unclaimed.status_code == 409
+    assert b"unclaimed" in unclaimed.body
+    assert b"cc-claim" in unclaimed.body
+
+    missing = cmd(
+        "close",
+        reins_command.CommandRequest(
+            target="ghost",
+            authority_packet={"kind": "sdlc"},
+            preflight_receipt={},
+            idempotency_key="close-m",
+        ),
+    )
+    assert missing.status_code == 409
+
+    bad = cmd(
+        "close",
+        reins_command.CommandRequest(
+            target="offered",
+            authority_packet="not-a-packet",
+            preflight_receipt={},
+            idempotency_key="close-bad",
+        ),
+    )
+    assert bad.status_code == 403
 
 
 def test_arm_refuses_when_implementation_is_not_authorized(tmp_path, monkeypatch):
