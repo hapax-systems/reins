@@ -149,10 +149,11 @@ def test_main_no_args_non_tty_refuses(monkeypatch):
 def test_launcher_script_sshes_without_baked_home():
     text = Path(__file__).resolve().parent.parent.joinpath("scripts/hapax-secret").read_text()
     assert "ssh" in text
-    assert " -t " in text
+    assert " -t -- " in text or " -t --" in text
     assert "/home/" not in text
     assert "hapax-appendix" in text
     assert "python3 -m hapax_secret" in text
+    assert 'HOST == -*' in text or 'HOST" == -*' in text
 
 
 def test_ssh_argv_tty_only_for_put():
@@ -160,9 +161,17 @@ def test_ssh_argv_tty_only_for_put():
     get = hapax_secret.ssh_argv(tty=False, rest=["litellm/master-key"])
     assert put[:4] == ["ssh", "-o", "BatchMode=yes", "-o"]
     assert "-t" in put
-    assert put[-1] == "hapax-secret"
+    assert "--" in put
+    assert put[put.index("--") + 1] == "hapax-appendix"
+    assert "hapax-secret" in put[-1]
     assert "-t" not in get
-    assert get[-1] == "litellm/master-key"
+    assert "litellm/master-key" in get[-1]
+
+
+def test_ssh_argv_rejects_option_like_host(monkeypatch):
+    monkeypatch.setenv("HAPAX_SECRETS_HOST", "-oProxyCommand=evil")
+    with pytest.raises(ValueError, match="must not start"):
+        hapax_secret.ssh_argv(tty=False, rest=["x"])
 
 
 def test_main_get_roundtrip(tmp_path, monkeypatch, capsys):

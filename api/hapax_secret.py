@@ -20,6 +20,7 @@ import getpass
 import json
 import os
 import re
+import shlex
 import sys
 import urllib.error
 import urllib.parse
@@ -86,12 +87,17 @@ def secrets_host() -> str:
 
 
 def ssh_argv(*, tty: bool, rest: list[str]) -> list[str]:
+    host = secrets_host()
+    if host.startswith("-"):
+        raise ValueError(
+            "HAPAX_SECRETS_HOST must not start with '-'. Next action: set a hostname "
+            "like hapax-appendix"
+        )
+    remote = " ".join(shlex.quote(part) for part in ("$HOME/.local/bin/hapax-secret", *rest))
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
     if tty:
         cmd.append("-t")
-    cmd.append(secrets_host())
-    cmd.append("hapax-secret")
-    cmd.extend(rest)
+    cmd.extend(["--", host, remote])
     return cmd
 
 
@@ -153,6 +159,11 @@ def _http_post(url: str, body: bytes) -> bytes:
         except (UnicodeError, json.JSONDecodeError):
             raise RuntimeError(
                 f"reins secret put HTTP {exc.code}. Next action: start reins-read-api on 127.0.0.1:8799"
+            ) from None
+        if not isinstance(parsed, dict):
+            raise RuntimeError(
+                f"reins secret put HTTP {exc.code} with a non-object JSON body. "
+                "Next action: start reins-read-api on 127.0.0.1:8799"
             ) from None
         reason = parsed.get("reason") or f"HTTP {exc.code}"
         nxt = parsed.get("legal_next") or "start reins-read-api on 127.0.0.1:8799"
@@ -271,7 +282,20 @@ def main(argv: list[str] | None = None) -> int:
     rest = args
     if not is_store_host():
         tty = not rest
-        os.execvp("ssh", ssh_argv(tty=tty, rest=rest))
+        try:
+            argv = ssh_argv(tty=tty, rest=rest)
+        except ValueError as exc:
+            print(f"hapax-secret: {exc}", file=sys.stderr)
+            return 2
+        try:
+            os.execvp("ssh", argv)
+        except FileNotFoundError:
+            print(
+                "hapax-secret: ssh not found on PATH. Next action: install OpenSSH and rerun, "
+                "or run hapax-secret on the FileStore host.",
+                file=sys.stderr,
+            )
+            return 2
 
     if not rest:
         if not sys.stdin.isatty() or not sys.stdout.isatty():
