@@ -58,6 +58,8 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     # byte-binding + witnesses the attempt; it does NOT flip the current pointer (staging != swapping —
     # the swap is U6b-swap). Wired-before-swap is safe: staging is inert until a swap mechanism exists.
     "stage": {"wired": True, "mode": "governed"},
+    # secret has/get/put — FileStore backend, not pass. Values never enter the ledger.
+    "secret": {"wired": True, "mode": "governed"},
 }
 
 
@@ -193,6 +195,88 @@ def _close_closures():
             event_seq=None,
             fold_delta=detail,
             applied=status == "ok",
+        )
+
+    return verify, preflight, transport
+
+
+def _secret_closures():
+    """POST /command/secret — has/get/put on SecretStore (FileStore, not pass).
+
+    Target is the secret name. op in authority_packet: has | get | put.
+    put carries value_b64 (or utf-8 value). Values never go in fold_delta or
+    the ledger effect — only a sha256 digest.
+    """
+    import base64
+    import hashlib as _hashlib
+
+    from k0.key_capture import default_store
+
+    def verify(packet: Any, target: str) -> bool:
+        # Same envelope law as close/arm: a minted-looking packet with kind, plus
+        # the secret op. This surface is loopback-only (reins-read-api binds
+        # 127.0.0.1). A new mint is out of scope — COMMAND never mints.
+        if not (isinstance(packet, dict) and bool(target) and bool(packet.get("kind"))):
+            return False
+        return packet.get("op") in ("has", "get", "put")
+
+    def preflight(env: reins_command.Envelope) -> bool:
+        return not env.preflight_receipt.get("blocked")
+
+    def transport(env: reins_command.Envelope) -> reins_command.Response:
+        packet = env.authority_packet if isinstance(env.authority_packet, dict) else {}
+        op = packet.get("op")
+        store = default_store()
+        name = env.target
+        digest = None
+        payload: dict[str, Any] = {"backend_id": store.backend_id, "op": op, "name": name}
+
+        if op == "has":
+            payload["present"] = store.has(name)
+        elif op == "get":
+            raw = store.get(name)
+            payload["present"] = raw is not None
+            if raw is not None:
+                payload["value_b64"] = base64.b64encode(raw).decode("ascii")
+                digest = _hashlib.sha256(raw).hexdigest()
+        elif op == "put":
+            if packet.get("value_b64") is not None:
+                try:
+                    raw = base64.b64decode(str(packet["value_b64"]), validate=True)
+                except Exception:
+                    return reins_command.Response(
+                        status="secret-refused",
+                        http=400,
+                        reason="value_b64 is not valid base64",
+                        legal_next="send value_b64 as standard base64",
+                    )
+            elif isinstance(packet.get("value"), str):
+                raw = packet["value"].encode("utf-8")
+            else:
+                return reins_command.Response(
+                    status="secret-refused",
+                    http=400,
+                    reason="put requires value_b64 or value",
+                    legal_next="retry put with value_b64",
+                )
+            store.put(name, raw)
+            digest = _hashlib.sha256(raw).hexdigest()
+            payload["present"] = True
+        else:
+            return reins_command.Response(
+                status="secret-refused",
+                http=400,
+                reason="op must be has, get, or put",
+                legal_next="set authority_packet.op",
+            )
+
+        return reins_command.Response(
+            status="ok",
+            http=200,
+            receipt_id=f"secret-{op}-{name}",
+            fold_delta=None if digest is None else f"sha256:{digest}",
+            applied=op == "put",
+            payload=payload,
         )
 
     return verify, preflight, transport
@@ -418,6 +502,7 @@ def _mount_command_router(
         "dispatch": _dispatch_closures(submit_dispatch),
         "arm": _arm_closures(),
         "close": _close_closures(),
+        "secret": _secret_closures(),
     }
 
     @app.post("/command/{verb}")

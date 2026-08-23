@@ -4,8 +4,11 @@ The estate pattern that works (pass-backed, tmpfs-env, dependency-rooted) is har
 operator's ~20 entries, UID, and identity strings — a stranger's kit cannot inherit it. The graph
 gap is four claims, and this module is each of them as machinery:
 
-  * PORTABLE, BACKEND-AGNOSTIC STORE. `SecretStore` is the contract; `PassStore` and
-    `MemoryStore` are two backends. Nothing else in the kernel may know which is in use.
+  * PORTABLE, BACKEND-AGNOSTIC STORE. `SecretStore` is the contract; `FileStore`
+    (durable, device-bound files), `PassStore` (legacy CLI), and `MemoryStore`
+    (tests / stranger) are backends. Nothing else in the kernel may know which
+    is in use. The canonical durable backend is `FileStore` (`backend_id=file`),
+    not `pass` (operator 2026-08-23: pass is not the answer; estate≡shipped).
   * THE SECRET SET IS GENERATED, never enumerated. `required_secrets` derives the set from the
     RATIFIED boot profile (R3.6): the existing-agent-harness profile needs nothing (the sanctioned
     harness IS the secret store for entitlement auth — access-bootstrap amendment, 2026-07-09);
@@ -32,11 +35,14 @@ BootstrapReceipt's ref grammar refuses bare-secret shapes on top of that.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 import re
 import secrets
 import shutil
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -81,6 +87,106 @@ class SecretStore(Protocol):
     def has(self, name: str) -> bool: ...
     def get(self, name: str) -> bytes | None: ...
     def put(self, name: str, value: bytes) -> None: ...
+
+
+def _default_file_root() -> Path:
+    env = os.environ.get("REINS_SECRET_STORE", "").strip()
+    if env:
+        return Path(env)
+    return Path.home() / ".config" / "reins" / "secrets"
+
+
+def _file_wrap(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+    """SHAKE-256 stream + HMAC-SHA256 tag. Not a named product; values never argv."""
+    stream = hashlib.shake_256(key + nonce).digest(len(plaintext))
+    ct = bytes(a ^ b for a, b in zip(plaintext, stream, strict=True))
+    tag = hmac.new(key, nonce + ct, hashlib.sha256).digest()
+    return nonce + tag + ct
+
+
+def _file_unwrap(key: bytes, blob: bytes) -> bytes:
+    if len(blob) < 16 + 32:
+        raise ValueError("truncated secret blob")
+    nonce, tag, ct = blob[:16], blob[16:48], blob[48:]
+    expect = hmac.new(key, nonce + ct, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expect):
+        raise ValueError("secret blob MAC mismatch")
+    stream = hashlib.shake_256(key + nonce).digest(len(ct))
+    return bytes(a ^ b for a, b in zip(ct, stream, strict=True))
+
+
+@dataclass
+class FileStore:
+    """Durable device-bound store. Not `pass`. backend_id is `file`.
+
+    Layout: ``root/.key`` (32 random bytes, 0600) and ``root/<safe-name>.bin``.
+    Override root with REINS_SECRET_STORE. Names are path-safe; values never
+    appear on argv, in env, or in raised messages.
+    """
+
+    root: Path = field(default_factory=_default_file_root)
+    backend_id: str = "file"
+
+    def _key(self) -> bytes:
+        root = self.root
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = root / ".key"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(path, flags, 0o600)
+            try:
+                os.write(fd, os.urandom(32))
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            pass
+        return path.read_bytes()
+
+    def _blob_path(self, name: str) -> Path:
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError("secret name must be a single path segment")
+        if re.fullmatch(r"[A-Za-z0-9._-]+", name) is None:
+            raise ValueError(
+                "secret name must match [A-Za-z0-9._-]+ (no normalization, no collisions)"
+            )
+        return self.root / f"{name}.bin"
+
+    def has(self, name: str) -> bool:
+        return self._blob_path(name).is_file()
+
+    def get(self, name: str) -> bytes | None:
+        path = self._blob_path(name)
+        if not path.is_file():
+            return None
+        try:
+            return _file_unwrap(self._key(), path.read_bytes())
+        except ValueError:
+            return None
+
+    def put(self, name: str, value: bytes) -> None:
+        path = self._blob_path(name)
+        nonce = os.urandom(16)
+        blob = _file_wrap(self._key(), nonce, value)
+        fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=self.root)
+        try:
+            os.write(fd, blob)
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            fd = -1
+            os.replace(tmp, path)
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
+
+
+def default_store() -> SecretStore:
+    """The estate path and the shipped path: FileStore, not PassStore."""
+    return FileStore()
 
 
 @dataclass

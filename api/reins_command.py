@@ -68,6 +68,8 @@ class Response:
     # from a k0.Refusal, whose constructor REFUSES to build one with an empty legal_next.
     legal_next: str | None = None
     teaches: str | None = None
+    # HTTP-only extras (secret values). NEVER copied into the command ledger.
+    payload: dict | None = None
 
 
 def _evaluate(predicate: Callable[..., Any], *args: Any) -> tuple[Evaluation | None, str, Refusal | None]:
@@ -254,6 +256,7 @@ def _resp_to_dict(resp: Response) -> dict:
         "applied": resp.applied,
         "legal_next": resp.legal_next,
         "teaches": resp.teaches,
+        "payload": resp.payload,
     }
 
 
