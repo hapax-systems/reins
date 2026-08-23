@@ -153,6 +153,7 @@ def test_launcher_script_sshes_without_baked_home():
     assert "/home/" not in text
     assert "hapax-appendix" in text
     assert "python3 -m hapax_secret" in text
+    assert ".local/share/reins/current/api" in text
     assert 'HOST == -*' in text or 'HOST" == -*' in text
 
 
