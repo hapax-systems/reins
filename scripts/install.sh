@@ -43,6 +43,7 @@ else
 fi
 
 echo ""
-echo "reins $VERSION installed -> $PREFIX/bin/reins"
+echo "reins $VERSION installed -> $PREFIX/bin/reins and $PREFIX/bin/hapax-secret"
 echo "  try it now, no estate needed:   reins --demo"
 echo "  a live instance:                make -C $REPO up   (starts the read API + cockpit)"
+echo "  secrets put (TTY, via reins):   hapax-secret"
