@@ -19,9 +19,12 @@ from k0.egress_consent import EgressAllowlist
 from k0.egress_consent import accept as accept_egress
 from k0.egress_consent import elicit_allowlist
 from k0.key_capture import (
+    FileStore,
     MemoryStore,
+    PassStore,
     SecretSupply,
     decline_capture,
+    default_store,
     elicit_capture,
     needs_elicitation,
     required_secrets,
@@ -425,6 +428,34 @@ def test_pass_store_contract_round_trips_single_line_values(
     )
     with pytest.raises(ValueError, match="single-line"):
         store.put(NAME, b"two\nlines")
+
+
+def test_file_store_round_trip_and_is_not_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FileStore is the durable backend: round-trip, missing is None, no pass(1) argv."""
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "store"))
+    monkeypatch.setenv("PATH", "/usr/bin")  # pass may exist; FileStore must not invoke it
+    store = FileStore(root=tmp_path / "store")
+    assert store.backend_id == "file"
+    assert default_store().backend_id == "file"
+    assert not store.has(NAME)
+    assert store.get(NAME) is None
+    store.put(NAME, b"sk-file-round-trip\nwith-newline")
+    assert store.has(NAME)
+    assert store.get(NAME) == b"sk-file-round-trip\nwith-newline"
+    with pytest.raises(ValueError, match="path segment"):
+        store.put("a/b", b"x")
+
+
+def test_file_store_errors_never_carry_the_value(tmp_path: Path) -> None:
+    store = FileStore(root=tmp_path / "store")
+    store.put(NAME, b"sk-file-canary")
+    blob = (tmp_path / "store" / f"{NAME}.bin").read_bytes()
+    (tmp_path / "store" / f"{NAME}.bin").write_bytes(blob[:-1] + bytes([(blob[-1] ^ 1)]))
+    assert store.get(NAME) is None
+    # the on-disk blob must not be the plaintext
+    assert b"sk-file-canary" not in (tmp_path / "store" / ".key").read_bytes()
+    raw = (tmp_path / "store" / f"{NAME}.bin").read_bytes()
+    assert b"sk-file-canary" not in raw
 
 
 FAILING_PASS = """#!/bin/sh

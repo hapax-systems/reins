@@ -52,7 +52,7 @@ def test_read_meta_identity_handshake():
     # resume preview (read-only) + governed generation staging (U6b) + the two operator-attested frontdoor
     # inflections (reins-local) — focus (prioritization) + breakglass (sanctioned exit) — plus dispatch (the
     # real apply transport: a sqlite enqueue to the relay MQ; the lane-launch is downstream, no spawn).
-    assert wired == ["arm", "breakglass", "close", "dispatch", "focus", "resume", "stage"]
+    assert wired == ["arm", "breakglass", "close", "dispatch", "focus", "resume", "secret", "stage"]
     # every wired verb projects its mode so the cockpit renders preview honestly (never-false-green)
     assert all("mode" in s for s in meta["verbs"].values())
 
@@ -78,6 +78,55 @@ def test_unregistered_verb_refuses_typed_501():
     resp = cmd("rm-rf", req)
     assert resp.status_code == 501
     assert "unregistered verb" in resp.body.decode()
+
+
+def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypatch):
+    import base64
+    import json
+
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    canary = "sk-ledger-canary-never"
+    put = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"op": "put", "value": canary},
+            preflight_receipt={},
+            idempotency_key="sec-put-1",
+        ),
+    )
+    assert put.status_code == 200, put.body
+    put_body = json.loads(put.body)
+    assert put_body["payload"]["backend_id"] == "file"
+    assert put_body["payload"]["present"] is True
+    assert canary not in put.body.decode()
+    got = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"op": "get"},
+            preflight_receipt={},
+            idempotency_key="sec-get-1",
+        ),
+    )
+    assert got.status_code == 200, got.body
+    got_body = json.loads(got.body)
+    assert base64.b64decode(got_body["payload"]["value_b64"]) == canary.encode()
+    has = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"op": "has"},
+            preflight_receipt={},
+            idempotency_key="sec-has-1",
+        ),
+    )
+    assert json.loads(has.body)["payload"]["present"] is True
+    ledger = (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
+    assert canary not in ledger
+    assert "pass" not in json.loads(put.body)["payload"]["backend_id"]
 
 
 def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch):
