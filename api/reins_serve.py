@@ -213,10 +213,12 @@ def _secret_closures():
     from k0.key_capture import default_store
 
     def verify(packet: Any, target: str) -> bool:
-        if not (isinstance(packet, dict) and bool(target)):
+        # Same envelope law as close/arm: a minted-looking packet with kind, plus
+        # the secret op. This surface is loopback-only (reins-read-api binds
+        # 127.0.0.1). A new mint is out of scope — COMMAND never mints.
+        if not (isinstance(packet, dict) and bool(target) and bool(packet.get("kind"))):
             return False
-        op = packet.get("op")
-        return op in ("has", "get", "put")
+        return packet.get("op") in ("has", "get", "put")
 
     def preflight(env: reins_command.Envelope) -> bool:
         return not env.preflight_receipt.get("blocked")

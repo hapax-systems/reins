@@ -92,7 +92,7 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"op": "put", "value": canary},
+            authority_packet={"kind": "secret", "op": "put", "value": canary},
             preflight_receipt={},
             idempotency_key="sec-put-1",
         ),
@@ -106,7 +106,7 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"op": "get"},
+            authority_packet={"kind": "secret", "op": "get"},
             preflight_receipt={},
             idempotency_key="sec-get-1",
         ),
@@ -118,7 +118,7 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"op": "has"},
+            authority_packet={"kind": "secret", "op": "has"},
             preflight_receipt={},
             idempotency_key="sec-has-1",
         ),
@@ -127,6 +127,17 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     ledger = (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
     assert canary not in ledger
     assert "pass" not in json.loads(put.body)["payload"]["backend_id"]
+    naked = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"op": "get"},
+            preflight_receipt={},
+            idempotency_key="sec-naked-1",
+        ),
+    )
+    assert naked.status_code in (401, 403, 422) or b"authority" in naked.body
+    assert canary.encode() not in naked.body
 
 
 def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch):

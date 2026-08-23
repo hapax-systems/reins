@@ -41,6 +41,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -130,16 +131,25 @@ class FileStore:
         root = self.root
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = root / ".key"
-        if not path.exists():
-            path.write_bytes(os.urandom(32))
-            path.chmod(0o600)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(path, flags, 0o600)
+            try:
+                os.write(fd, os.urandom(32))
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            pass
         return path.read_bytes()
 
     def _blob_path(self, name: str) -> Path:
         if not name or name in (".", "..") or "/" in name or "\\" in name:
             raise ValueError("secret name must be a single path segment")
-        safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
-        return self.root / f"{safe}.bin"
+        if re.fullmatch(r"[A-Za-z0-9._-]+", name) is None:
+            raise ValueError(
+                "secret name must match [A-Za-z0-9._-]+ (no normalization, no collisions)"
+            )
+        return self.root / f"{name}.bin"
 
     def has(self, name: str) -> bool:
         return self._blob_path(name).is_file()
@@ -157,10 +167,21 @@ class FileStore:
         path = self._blob_path(name)
         nonce = os.urandom(16)
         blob = _file_wrap(self._key(), nonce, value)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(blob)
-        tmp.chmod(0o600)
-        tmp.replace(path)
+        fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=self.root)
+        try:
+            os.write(fd, blob)
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            fd = -1
+            os.replace(tmp, path)
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
 
 
 def default_store() -> SecretStore:
