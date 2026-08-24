@@ -87,6 +87,7 @@ class SecretStore(Protocol):
     def has(self, name: str) -> bool: ...
     def get(self, name: str) -> bytes | None: ...
     def put(self, name: str, value: bytes) -> None: ...
+    def delete(self, name: str) -> bool: ...
 
 
 def _default_file_root() -> Path:
@@ -183,6 +184,14 @@ class FileStore:
                 pass
             raise
 
+    def delete(self, name: str) -> bool:
+        path = self._blob_path(name)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
 
 def default_store() -> SecretStore:
     """The estate path and the shipped path: FileStore, not PassStore."""
@@ -206,6 +215,9 @@ class MemoryStore:
 
     def put(self, name: str, value: bytes) -> None:
         self._values[name] = value
+
+    def delete(self, name: str) -> bool:
+        return self._values.pop(name, None) is not None
 
 
 @dataclass(frozen=True)
@@ -273,6 +285,25 @@ class PassStore:
                 f"pass insert {self._path(name)!r} failed (rc={rc}); "
                 "backend output deliberately suppressed"
             )
+
+    def delete(self, name: str) -> bool:
+        if not self.has(name):
+            return False
+        rc = None
+        try:
+            subprocess.run(
+                ["pass", "rm", "--force", self._path(name)],
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            rc = exc.returncode
+        if rc is not None:
+            raise RuntimeError(
+                f"pass rm {self._path(name)!r} failed (rc={rc}); "
+                "backend output deliberately suppressed"
+            )
+        return True
 
 
 @dataclass(frozen=True)

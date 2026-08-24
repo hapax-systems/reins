@@ -124,6 +124,30 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         ),
     )
     assert json.loads(has.body)["payload"]["present"] is True
+    deleted = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "delete"},
+            preflight_receipt={},
+            idempotency_key="sec-del-1",
+        ),
+    )
+    del_body = json.loads(deleted.body)
+    assert deleted.status_code == 200, deleted.body
+    assert del_body["payload"]["deleted"] is True
+    assert del_body["payload"]["present"] is False
+    assert canary not in deleted.body.decode()
+    gone = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "has"},
+            preflight_receipt={},
+            idempotency_key="sec-has-2",
+        ),
+    )
+    assert json.loads(gone.body)["payload"]["present"] is False
     ledger = (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
     assert canary not in ledger
     assert "pass" not in json.loads(put.body)["payload"]["backend_id"]

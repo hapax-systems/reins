@@ -3,6 +3,7 @@
 GET (watchdogs/scripts): ``hapax-secret <name>``
 WHERE / LIST: ``--where <name>`` / ``--list``
 PUT (TTY only): ``hapax-secret`` with no args — name, echo-off secret, confirm.
+DELETE (TTY confirm): ``hapax-secret --delete <name>``.
 
 Put never calls FileStore.put and never ``pass insert``. It POSTs
 ``http://127.0.0.1:8799/command/secret`` (kind=secret, op=put). Values
@@ -142,6 +143,35 @@ def put_via_reins(name: str, value: bytes, *, post: Callable[[str, bytes], bytes
     return parsed
 
 
+def delete_via_reins(name: str, *, post: Callable[[str, bytes], bytes] | None = None) -> dict:
+    url = command_url()
+    require_loopback_url(url)
+    body = json.dumps(
+        {
+            "target": name,
+            "authority_packet": {"kind": "secret", "op": "delete"},
+            "preflight_receipt": {},
+            "idempotency_key": f"hapax-secret-delete-{name}-{uuid.uuid4().hex}",
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+    poster = post or _http_post
+    raw = poster(url, body)
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "reins secret delete returned non-JSON. Next action: check reins-read-api on 127.0.0.1:8799"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("reins secret delete returned a non-object JSON body")
+    if parsed.get("status") != "ok":
+        reason = parsed.get("reason") or parsed.get("status") or "secret-refused"
+        nxt = parsed.get("legal_next") or "fix the named reason and rerun hapax-secret --delete"
+        raise RuntimeError(f"{reason}. Next action: {nxt}")
+    return parsed
+
+
 def _http_post(url: str, body: bytes) -> bytes:
     req = urllib.request.Request(
         url,
@@ -218,6 +248,39 @@ def run_put_dialogue(
     return 0
 
 
+def run_delete(
+    raw_name: str,
+    *,
+    confirm: Callable[[str], str],
+    post: Callable[[str, bytes], bytes] | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    try:
+        name = name_of(raw_name)
+    except ValueError as exc:
+        print(f"hapax-secret: {exc}", file=stderr)
+        return 2
+    answer = confirm(f"Delete {name}? [y/N] ").strip().lower()
+    if answer not in {"y", "yes"}:
+        print("hapax-secret: delete aborted", file=stderr)
+        return 1
+    try:
+        result = delete_via_reins(name, post=post)
+    except (ValueError, RuntimeError) as exc:
+        print(f"hapax-secret: {exc}", file=stderr)
+        return 2
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    if payload.get("deleted"):
+        print(f"deleted {name}", file=stdout)
+        return 0
+    print(
+        f"not found in FileStore: {name}. Next action: hapax-secret --list",
+        file=stderr,
+    )
+    return 1
+
+
 def _do_get(name: str) -> int:
     store = default_store()
     if store.backend_id != "file":
@@ -274,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: hapax-secret                 # TTY put: name, secret, confirm (via reins)\n"
             "       hapax-secret <name>          # get\n"
+            "       hapax-secret --delete <name> # TTY confirm, then delete via reins\n"
             "       hapax-secret --where <name>  # presence\n"
             "       hapax-secret --list"
         )
@@ -281,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rest = args
     if not is_store_host():
-        tty = not rest
+        tty = (not rest) or (rest[0] == "--delete")
         try:
             argv = ssh_argv(tty=tty, rest=rest)
         except ValueError as exc:
@@ -307,6 +371,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return run_put_dialogue(prompt=input, get_secret=getpass.getpass)
 
+    if rest[0] == "--delete":
+        if len(rest) < 2:
+            print("usage: hapax-secret --delete <name>", file=sys.stderr)
+            return 2
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print(
+                "hapax-secret: delete requires a TTY confirm. Next action: run "
+                "hapax-secret --delete <name> from a terminal.",
+                file=sys.stderr,
+            )
+            return 2
+        return run_delete(rest[1], confirm=input)
     if rest[0] == "--list":
         return _do_list()
     if rest[0] == "--where":

@@ -442,6 +442,11 @@ def test_file_store_round_trip_and_is_not_pass(tmp_path: Path, monkeypatch: pyte
     store.put(NAME, b"sk-file-round-trip\nwith-newline")
     assert store.has(NAME)
     assert store.get(NAME) == b"sk-file-round-trip\nwith-newline"
+    store.put(NAME, b"sk-file-overwritten")
+    assert store.get(NAME) == b"sk-file-overwritten"
+    assert store.delete(NAME) is True
+    assert not store.has(NAME)
+    assert store.delete(NAME) is False
     with pytest.raises(ValueError, match="path segment"):
         store.put("a/b", b"x")
     with pytest.raises(ValueError, match="no collisions"):

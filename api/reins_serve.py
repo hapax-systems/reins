@@ -201,7 +201,7 @@ def _close_closures():
 
 
 def _secret_closures():
-    """POST /command/secret — has/get/put on SecretStore (FileStore, not pass).
+    """POST /command/secret — has/get/put/delete on SecretStore (FileStore, not pass).
 
     Target is the secret name. op in authority_packet: has | get | put.
     put carries value_b64 (or utf-8 value). Values never go in fold_delta or
@@ -218,7 +218,7 @@ def _secret_closures():
         # 127.0.0.1). A new mint is out of scope — COMMAND never mints.
         if not (isinstance(packet, dict) and bool(target) and bool(packet.get("kind"))):
             return False
-        return packet.get("op") in ("has", "get", "put")
+        return packet.get("op") in ("has", "get", "put", "delete")
 
     def preflight(env: reins_command.Envelope) -> bool:
         return not env.preflight_receipt.get("blocked")
@@ -262,11 +262,15 @@ def _secret_closures():
             store.put(name, raw)
             digest = _hashlib.sha256(raw).hexdigest()
             payload["present"] = True
+        elif op == "delete":
+            removed = store.delete(name)
+            payload["deleted"] = removed
+            payload["present"] = False
         else:
             return reins_command.Response(
                 status="secret-refused",
                 http=400,
-                reason="op must be has, get, or put",
+                reason="op must be has, get, put, or delete",
                 legal_next="set authority_packet.op",
             )
 
@@ -275,7 +279,7 @@ def _secret_closures():
             http=200,
             receipt_id=f"secret-{op}-{name}",
             fold_delta=None if digest is None else f"sha256:{digest}",
-            applied=op == "put",
+            applied=op in ("put", "delete"),
             payload=payload,
         )
 
