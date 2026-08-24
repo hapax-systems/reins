@@ -39,7 +39,8 @@ install: build ## install the cockpit -> $(PREFIX)/bin/reins (on PATH)
 	@# rename-over, never cp-over: a RUNNING cockpit holds the old inode (cp fails ETXTBSY mid-session);
 	@# rename swaps the path atomically while live sessions keep their inode until exit
 	@cp bin/reins $(PREFIX)/bin/.reins.staged && mv -f $(PREFIX)/bin/.reins.staged $(PREFIX)/bin/reins
-	@printf 'reins: installed -> %s/bin/reins\n' "$(PREFIX)"
+	@install -m 755 scripts/hapax-secret $(PREFIX)/bin/hapax-secret
+	@printf 'reins: installed -> %s/bin/reins and %s/bin/hapax-secret\n' "$(PREFIX)" "$(PREFIX)"
 
 test: ## go + python test suites
 	go test ./...
