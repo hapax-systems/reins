@@ -183,3 +183,52 @@ def test_main_get_roundtrip(tmp_path, monkeypatch, capsys):
     rc = hapax_secret.main(["hapax-reviewer/org"])
     assert rc == 0
     assert capsys.readouterr().out == "from-store\n"
+
+
+def test_delete_aborts_without_yes():
+    posts: list[tuple[str, bytes]] = []
+
+    def post(url: str, body: bytes) -> bytes:
+        posts.append((url, body))
+        return b"{}"
+
+    rc = hapax_secret.run_delete(
+        "glmcp",
+        confirm=lambda _: "n",
+        post=post,
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+    assert rc == 1
+    assert posts == []
+
+
+def test_delete_posts_reins_and_maps_slash_name():
+    captured: dict[str, object] = {}
+
+    def post(url: str, body: bytes) -> bytes:
+        captured["url"] = url
+        captured["body"] = json.loads(body)
+        return json.dumps(
+            {"status": "ok", "payload": {"deleted": True, "present": False, "name": "glmcp"}}
+        ).encode()
+
+    out, err = StringIO(), StringIO()
+    rc = hapax_secret.run_delete(
+        "glmcp",
+        confirm=lambda _: "y",
+        post=post,
+        stdout=out,
+        stderr=err,
+    )
+    assert rc == 0, err.getvalue()
+    body = captured["body"]
+    assert body["target"] == "glmcp"
+    assert body["authority_packet"] == {"kind": "secret", "op": "delete"}
+    assert "deleted glmcp" in out.getvalue()
+
+
+def test_ssh_argv_tty_for_delete():
+    argv = hapax_secret.ssh_argv(tty=True, rest=["--delete", "glmcp"])
+    assert "-t" in argv
+    assert "--" in argv
