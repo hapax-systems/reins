@@ -8,8 +8,13 @@ such references exist in kernel production code — `doctrine/host-floor`, `doct
 `doctrine/host-floor` had nowhere to render it from, and a stranger reading that receipt learned
 only that a slug existed.
 
-R0.9's gap names the fix exactly: *"versioned doctrine corpus shipped in the kit; teaches: refs
-resolve ONLY against it (never /home/hapax paths)."*
+R0.9's gap names the fix exactly: a versioned doctrine corpus shipped in the kit, where `teaches`
+references resolve ONLY against that corpus and never against a path on the estate that built it.
+
+(The requirement's own wording quotes a literal home-directory path as its example. It is
+paraphrased here rather than quoted, because this docstring ships in the kit: a stranger reading
+it would otherwise be shown the builder's home directory, and `test_engine_carries_no_baked_home_paths`
+is right to refuse that whether the path is executable or merely quoted.)
 
 WHY A MODULE AND NOT A DATA DIRECTORY
 --------------------------------------
