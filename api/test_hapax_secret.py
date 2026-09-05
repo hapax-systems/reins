@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import errno
 import json
 from io import StringIO
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,7 +24,9 @@ def _isolated_store_and_ledger(tmp_path, monkeypatch):
     # Tests run the store-host path; create a FileStore key so is_store_host can be true.
     from k0.key_capture import FileStore
 
-    FileStore(root=tmp_path / "secrets")._key()
+    store = FileStore(root=tmp_path / "secrets")
+    store._key()
+    return store
 
 
 def test_name_of_maps_slash_and_rejects_illegal():
@@ -183,6 +187,221 @@ def test_main_get_roundtrip(tmp_path, monkeypatch, capsys):
     rc = hapax_secret.main(["hapax-reviewer/org"])
     assert rc == 0
     assert capsys.readouterr().out == "from-store\n"
+
+
+_ENTRY_NAME = "synthetic-entry"
+_ENTRY_VALUE = b"synthetic-value-canary"
+_ERROR_DETAIL = "synthetic-error-detail"
+_GET_MISSING = (
+    b"not found in FileStore: synthetic-entry. "
+    b"legal_next: run hapax-secret (TTY put) via reins.\n"
+)
+
+
+@pytest.fixture(params=[["synthetic/entry"], ["--where", "synthetic/entry"]], ids=["get", "where"])
+def read_argv(request):
+    return request.param
+
+
+@pytest.fixture
+def read_store(_isolated_store_and_ledger, monkeypatch):
+    store = _isolated_store_and_ledger
+    store.put(_ENTRY_NAME, _ENTRY_VALUE)
+    monkeypatch.setattr(hapax_secret, "default_store", lambda: store)
+    monkeypatch.setattr(store, "get", Mock(wraps=store.get))
+    monkeypatch.setattr(store, "has", Mock(wraps=store.has))
+
+    def refuse_remote(*_args):
+        pytest.fail("entry observations must stay on the selected FileStore")
+
+    monkeypatch.setattr(hapax_secret.os, "execvp", refuse_remote)
+    return store
+
+
+def _assert_no_read_leak(captured, store):
+    for stream in (captured.out, captured.err):
+        assert _ENTRY_VALUE not in stream
+        assert str(store.root).encode() not in stream
+        assert _ERROR_DETAIL.encode() not in stream
+
+
+def _assert_missing(rc, captured, argv, store):
+    assert rc == 1
+    if argv[0] == "--where":
+        assert captured.out == b"not found: synthetic-entry\n"
+        assert captured.err == b""
+    else:
+        assert captured.out == b""
+        assert captured.err == _GET_MISSING
+    _assert_no_read_leak(captured, store)
+
+
+def _assert_unreadable(rc, captured, store, exception_class="OSError"):
+    assert rc == 2
+    assert captured.out == b""
+    assert captured.err == f"unreadable: synthetic-entry ({exception_class})\n".encode()
+    _assert_no_read_leak(captured, store)
+
+
+def test_main_read_missing(read_store, read_argv, capsysbinary):
+    read_store._blob_path(_ENTRY_NAME).unlink()
+    rc = hapax_secret.main(read_argv)
+    _assert_missing(rc, capsysbinary.readouterr(), read_argv, read_store)
+    read_store.get.assert_not_called()
+    read_store.has.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error_number", "exception_class"),
+    [(errno.EIO, "OSError"), (errno.EACCES, "PermissionError"), (errno.ELOOP, "OSError")],
+    ids=["EIO", "EACCES", "ELOOP"],
+)
+def test_main_read_entry_stat_failure(
+    read_store, read_argv, monkeypatch, capsysbinary, error_number, exception_class
+):
+    entry = read_store._blob_path(_ENTRY_NAME)
+    original_stat = Path.stat
+    observations = []
+
+    def stat(path, *args, **kwargs):
+        if path == entry:
+            observations.append(path)
+            raise OSError(error_number, _ERROR_DETAIL + _ENTRY_VALUE.decode(), str(entry))
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    rc = hapax_secret.main(read_argv)
+    _assert_unreadable(rc, capsysbinary.readouterr(), read_store, exception_class)
+    assert observations == [entry]
+    read_store.get.assert_not_called()
+    read_store.has.assert_not_called()
+
+
+def test_main_read_present_but_get_returns_none(read_store, read_argv, capsysbinary):
+    read_store.get.return_value = None
+    rc = hapax_secret.main(read_argv)
+    _assert_unreadable(rc, capsysbinary.readouterr(), read_store)
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error_number", "exception_class"),
+    [
+        (errno.EIO, "OSError"),
+        (errno.EACCES, "PermissionError"),
+        (errno.ELOOP, "OSError"),
+        (errno.ENOENT, "FileNotFoundError"),
+    ],
+    ids=["EIO", "EACCES", "ELOOP", "ENOENT-after-stat"],
+)
+def test_main_read_entry_read_failure(
+    read_store, read_argv, monkeypatch, capsysbinary, error_number, exception_class
+):
+    entry = read_store._blob_path(_ENTRY_NAME)
+    original_read = Path.read_bytes
+    reads = []
+
+    def read_bytes(path):
+        if path == entry:
+            reads.append(path)
+            raise OSError(error_number, _ERROR_DETAIL + _ENTRY_VALUE.decode(), str(entry))
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    rc = hapax_secret.main(read_argv)
+    _assert_unreadable(rc, capsysbinary.readouterr(), read_store, exception_class)
+    assert reads == [entry]
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
+
+
+@pytest.mark.parametrize("corruption", ["truncated", "bad-mac", "directory"])
+def test_main_read_corrupt_entry(read_store, read_argv, capsysbinary, corruption):
+    entry = read_store._blob_path(_ENTRY_NAME)
+    if corruption == "truncated":
+        entry.write_bytes(b"synthetic-truncated-blob")
+    elif corruption == "bad-mac":
+        blob = entry.read_bytes()
+        entry.write_bytes(blob[:-1] + bytes([blob[-1] ^ 1]))
+    else:
+        entry.unlink()
+        entry.mkdir()
+    rc = hapax_secret.main(read_argv)
+    _assert_unreadable(rc, capsysbinary.readouterr(), read_store)
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [b"", _ENTRY_VALUE, _ENTRY_VALUE + b"\n", b"\x00\xff"])
+def test_main_read_success_bytes(read_store, read_argv, capsysbinary, value):
+    read_store.put(_ENTRY_NAME, value)
+    rc = hapax_secret.main(read_argv)
+    captured = capsysbinary.readouterr()
+    assert rc == 0
+    assert captured.err == b""
+    if read_argv[0] == "--where":
+        assert captured.out == b"filestore\n"
+        _assert_no_read_leak(captured, read_store)
+    else:
+        assert captured.out == value + (b"" if value.endswith(b"\n") else b"\n")
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
+
+
+def test_main_read_observes_presence_once(read_store, read_argv, monkeypatch, capsysbinary):
+    # Isolate the CLI's observation from the unchanged get implementation's own stat.
+    read_store.get.return_value = _ENTRY_VALUE
+    entry = read_store._blob_path(_ENTRY_NAME)
+    original_stat = Path.stat
+    observations = []
+
+    def stat(path, *args, **kwargs):
+        if path == entry:
+            observations.append(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    rc = hapax_secret.main(read_argv)
+    captured = capsysbinary.readouterr()
+    assert rc == 0
+    assert captured.err == b""
+    assert captured.out == (b"filestore\n" if read_argv[0] == "--where" else _ENTRY_VALUE + b"\n")
+    assert observations == [entry]
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
+
+
+def test_main_where_then_get_entry_disappears(read_store, capsysbinary):
+    rc = hapax_secret.main(["--where", "synthetic/entry"])
+    captured = capsysbinary.readouterr()
+    assert rc == 0
+    assert captured.out == b"filestore\n"
+    assert captured.err == b""
+    _assert_no_read_leak(captured, read_store)
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+
+    read_store._blob_path(_ENTRY_NAME).unlink()
+    read_store.get.reset_mock()
+    argv = ["synthetic/entry"]
+    rc = hapax_secret.main(argv)
+    _assert_missing(rc, capsysbinary.readouterr(), argv, read_store)
+    read_store.get.assert_not_called()
+    read_store.has.assert_not_called()
+
+
+def test_main_read_entry_disappears_after_stat(read_store, read_argv, capsysbinary):
+    original_get = read_store.get._mock_wraps
+
+    def get(name):
+        read_store._blob_path(name).unlink()
+        return original_get(name)
+
+    read_store.get.side_effect = get
+    rc = hapax_secret.main(read_argv)
+    _assert_unreadable(rc, capsysbinary.readouterr(), read_store)
+    read_store.get.assert_called_once_with(_ENTRY_NAME)
+    read_store.has.assert_not_called()
 
 
 def test_delete_aborts_without_yes():
