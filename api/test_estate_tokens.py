@@ -390,6 +390,42 @@ def test_the_scan_skips_caches_and_vendored_trees_but_says_which(tmp_path) -> No
     )
 
 
+@pytest.mark.parametrize("symlinked_lib64", [False, True], ids=["plain-lib", "symlinked-lib64"])
+def test_the_scan_excludes_a_virtualenv_before_refusing_directory_symlinks(
+    tmp_path, symlinked_lib64
+) -> None:
+    """A native virtualenv's `lib64` link is excluded before the source-directory refusal.
+
+    The plain-lib case also pins the exclusion itself: without it, the dependency's token would
+    be reported alongside the source token, even when no directory symlink could stop the scan.
+    """
+    lib = tmp_path / ".venv" / "lib"
+    packages = lib / "site-packages"
+    packages.mkdir(parents=True)
+    (lib / "runtime.py").write_text("x = 1\n", encoding="utf-8")
+    (packages / "leak.py").write_text(f"# {FAKE_2}\n", encoding="utf-8")
+    if symlinked_lib64:
+        (tmp_path / ".venv" / "lib64").symlink_to("lib", target_is_directory=True)
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "module.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+
+    hits = scan_tree_for_tokens(tmp_path, (FAKE, FAKE_2))
+    assert hits == [(pathlib.Path("src/module.py"), 0)], (
+        "the source token must be found; the token inside the virtualenv is excluded by the "
+        "enumerated non-source policy"
+    )
+
+
+def test_the_scan_finds_markdown_in_an_unlisted_dot_directory(tmp_path) -> None:
+    """An unfamiliar dot-directory is source too; the enumeration is not a blanket dot rule."""
+    notes = tmp_path / ".unlisted"
+    notes.mkdir()
+    (notes / "notes.md").write_text(f"{FAKE}\n", encoding="utf-8")
+
+    assert scan_tree_for_tokens(tmp_path, (FAKE,)) == [(pathlib.Path(".unlisted/notes.md"), 0)]
+
+
 def test_an_unreadable_file_refuses_rather_than_reporting_it_clean(tmp_path) -> None:
     """UNREADABLE AND UNDECODABLE ARE DIFFERENT ANSWERS, and they were the same line.
 
@@ -454,6 +490,18 @@ def test_a_symlinked_directory_refuses_rather_than_being_silently_unscanned(tmp_
     with pytest.raises(RuntimeError, match="unscanned is not clean") as exc:
         scan_tree_for_tokens(root, (FAKE,))
     assert "linked" in str(exc.value), "the operator must be told which entry to resolve"
+    assert str(tmp_path) not in str(exc.value), "the containing path leaked into the error"
+
+
+def test_a_directory_symlink_within_the_source_tree_still_refuses(tmp_path) -> None:
+    """A target inside the scan root does not exempt an unenumerated directory symlink."""
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "module.py").write_text(f"# {FAKE}\n", encoding="utf-8")
+    (tmp_path / "vendor_link").symlink_to("vendor", target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match=r"^vendor_link is a symlink to a directory,") as exc:
+        scan_tree_for_tokens(tmp_path, (FAKE,))
     assert str(tmp_path) not in str(exc.value), "the containing path leaked into the error"
 
 
