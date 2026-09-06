@@ -5,6 +5,14 @@ WHERE / LIST: ``--where <name>`` / ``--list``
 PUT (TTY only): ``hapax-secret`` with no args — name, echo-off secret, confirm.
 DELETE (TTY confirm): ``hapax-secret --delete <name>``.
 
+GET / WHERE exit 1 only when the entry's initial stat raises FileNotFoundError;
+their existing not-found responses are unchanged. WHERE reports ``filestore``
+only after a successful read. Stat/read failures exit 2 with empty stdout and
+``unreadable: <mapped-name> (<exception-class>)`` on stderr, never error text.
+A present entry for which FileStore.get returns None (including corruption) is
+reported as OSError. Disappearance after the initial stat is a read failure;
+each invocation observes afresh, so a prior WHERE success does not bind GET.
+
 Put never calls FileStore.put and never ``pass insert``. It POSTs
 ``http://127.0.0.1:8799/command/secret`` (kind=secret, op=put). Values
 never appear on argv. The command ledger records sha256 only.
@@ -31,7 +39,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from k0.key_capture import default_store
+from k0.key_capture import FileStore, default_store
 
 ALIASES = {
     "litellm/master-key": "litellm-master-key",
@@ -281,6 +289,20 @@ def run_delete(
     return 1
 
 
+def _read_entry(store: FileStore, name: str) -> bytes | None:
+    """Only the initial, raising stat may establish absence; never infer it from get."""
+    try:
+        store._blob_path(name).stat()
+    except FileNotFoundError:
+        return None
+    value = store.get(name)
+    if value is None:
+        # get conflates absence and corruption. Presence was already observed, so
+        # neither corruption nor a subsequent disappearance can mean absent here.
+        raise OSError
+    return value
+
+
 def _do_get(name: str) -> int:
     store = default_store()
     if store.backend_id != "file":
@@ -291,7 +313,11 @@ def _do_get(name: str) -> int:
         )
         return 2
     mapped = name_of(name)
-    val = store.get(mapped)
+    try:
+        val = _read_entry(store, mapped)
+    except OSError as exc:
+        print(f"unreadable: {mapped} ({type(exc).__name__})", file=sys.stderr)
+        return 2
     if val is None:
         print(
             f"not found in FileStore: {mapped}. legal_next: run hapax-secret (TTY put) via reins.",
@@ -312,8 +338,16 @@ def _do_where(name: str) -> int:
         )
         return 2
     mapped = name_of(name)
-    print("filestore" if store.has(mapped) else f"not found: {mapped}")
-    return 0 if store.has(mapped) else 1
+    try:
+        val = _read_entry(store, mapped)
+    except OSError as exc:
+        print(f"unreadable: {mapped} ({type(exc).__name__})", file=sys.stderr)
+        return 2
+    if val is None:
+        print(f"not found: {mapped}")
+        return 1
+    print("filestore")
+    return 0
 
 
 def _do_list() -> int:
