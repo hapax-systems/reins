@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import errno
 import json
+import os
+import subprocess
 from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock
@@ -162,7 +164,7 @@ def test_launcher_script_sshes_without_baked_home():
     assert 'HOST == -*' in text or 'HOST" == -*' in text
 
 
-def test_ssh_argv_tty_only_for_put(monkeypatch):
+def test_ssh_argv_tty_for_put_not_get(monkeypatch):
     monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
     put = hapax_secret.ssh_argv(tty=True, rest=[])
     get = hapax_secret.ssh_argv(tty=False, rest=["litellm/master-key"])
@@ -181,11 +183,152 @@ def test_module_docstring_names_ssh_alias_and_override():
     assert "HAPAX_SECRETS_HOST" in hapax_secret.__doc__
 
 
-def test_launcher_default_matches_python(monkeypatch):
+def _launcher_text():
+    return Path(__file__).resolve().parent.parent.joinpath("scripts/hapax-secret").read_text()
+
+
+def _launcher_setup():
+    # Evaluate only host selection, its refusal, and the remote builder. Never
+    # source the wrapper: that would inspect the store or execute ssh/Python.
+    text = _launcher_text()
+    start = text.index("\nHOST=") + 1
+    end = text.index('\nif [[ "${HAPAX_SECRETS_FORCE_REMOTE:-}"')
+    return text[start:end]
+
+
+def _run_bash(script, rest, home, **env):
+    return subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-c", "set -euo pipefail\n" + script, "--", *rest],
+        env={"HOME": str(home), "PATH": os.defpath, "LC_ALL": "C", **env},
+        cwd=home,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        (None, "secrets-store"),
+        ("", "secrets-store"),
+        ("   ", "secrets-store"),
+        (" \t\n\r\v\f ", "secrets-store"),
+        ("secrets.example.internal", "secrets.example.internal"),
+        (" \tsecrets.example.internal\n ", "secrets.example.internal"),
+    ],
+    ids=["unset", "empty", "whitespace", "mixed-whitespace", "override", "padded-override"],
+)
+def test_launcher_host_matches_python(monkeypatch, tmp_path, override, expected):
+    env = {}
+    if override is None:
+        monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
+    else:
+        monkeypatch.setenv("HAPAX_SECRETS_HOST", override)
+        env["HAPAX_SECRETS_HOST"] = override
+    host_lines = "\n".join(line for line in _launcher_text().splitlines() if line.startswith("HOST="))
+    result = _run_bash(host_lines + '\nprintf %s "$HOST"', [], tmp_path, **env)
+    assert result.returncode == 0
+    assert result.stdout == expected
+    assert hapax_secret.secrets_host() == expected
+
+
+_FORWARDING_CASES = [
+    pytest.param(False, ["--where", "name"], "remote", id="where"),
+    pytest.param(
+        False,
+        [
+            "--where",
+            "name; touch NOT_ALLOWED",
+            "'\"$HOME $(touch NOT_ALLOWED) `touch NOT_ALLOWED` \\ * ? [x] & | < > ( ) # ~",
+            "",
+            "tab\tvalue\nnext line",
+        ],
+        "remote",
+        id="metacharacters",
+    ),
+    pytest.param(False, ["--where", "name"], "remote home with spaces", id="home-whitespace"),
+    pytest.param(True, [], "remote", id="put-no-args"),
+    pytest.param(True, ["--delete", "name"], "remote", id="delete"),
+]
+
+
+def _assert_remote_execution(remote, rest, home):
+    helper = home / ".local" / "bin" / "hapax-secret"
+    helper.parent.mkdir(parents=True)
+    helper.write_text('#!/bin/sh\nfor arg do\n  printf \'%s\\n\' "$arg"\ndone\n')
+    helper.chmod(0o700)
+    result = subprocess.run(
+        ["/bin/sh", "-c", remote],
+        env={"HOME": str(home), "PATH": os.defpath},
+        cwd=home,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert not (home / "NOT_ALLOWED").exists(), "forwarded argument executed a command"
+    assert result.returncode == 0, f"remote helper exited {result.returncode}"
+    assert result.stdout == "".join(arg + "\n" for arg in rest)
+    assert result.stderr == ""
+    if not rest:
+        assert remote == '"$HOME/.local/bin/hapax-secret"'
+
+
+@pytest.mark.parametrize(("tty", "rest", "home_name"), _FORWARDING_CASES)
+def test_ssh_argv_remote_execution(monkeypatch, tmp_path, tty, rest, home_name):
     monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
-    text = Path(__file__).resolve().parent.parent.joinpath("scripts/hapax-secret").read_text()
-    host = hapax_secret.secrets_host()
-    assert f'HOST="${{HAPAX_SECRETS_HOST:-{host}}}"' in text
+    argv = hapax_secret.ssh_argv(tty=tty, rest=rest)
+    expected = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+    if tty:
+        expected.append("-t")
+    assert argv[:-1] == expected + ["--", "secrets-store"]
+    _assert_remote_execution(argv[-1], rest, tmp_path / home_name)
+
+
+@pytest.mark.parametrize(("tty", "rest", "home_name"), _FORWARDING_CASES)
+def test_launcher_remote_execution(tmp_path, tty, rest, home_name):
+    text = _launcher_text()
+    construction = next(
+        line.strip() for line in text.splitlines() if line.startswith("  quoted=")
+    )
+    # Evaluate the actual TTY selection with a builtin argv recorder in place of
+    # both exec statements. No ssh executable or store-host detection is run.
+    start = text.index("  if [[ $#")
+    branch = text[start:text.index("\nfi", start)]
+    assert branch.count("exec ssh ") == 2
+    branch = branch.replace("exec ssh ", "capture_argv ")
+    script = "\n".join(
+        [
+            _launcher_setup(),
+            construction,
+            "capture_argv() { printf '%s\\0' \"$@\"; exit; }",
+            branch,
+        ]
+    )
+    result = _run_bash(script, rest, tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.endswith("\0")
+    argv = result.stdout[:-1].split("\0")
+    expected = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
+    if tty:
+        expected.append("-t")
+    assert argv[:-1] == expected + ["--", "secrets-store"]
+    _assert_remote_execution(argv[-1], rest, tmp_path / home_name)
+
+
+@pytest.mark.parametrize(
+    ("rest", "tty"),
+    [([], True), (["--delete", "name"], True), (["--where", "name"], False)],
+    ids=["put-no-args", "delete", "where"],
+)
+def test_main_remote_tty_selection(monkeypatch, rest, tty):
+    monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
+    monkeypatch.setattr(hapax_secret, "is_store_host", lambda: False)
+    forward = Mock(side_effect=SystemExit(0))
+    monkeypatch.setattr(hapax_secret.os, "execvp", forward)
+    with pytest.raises(SystemExit):
+        hapax_secret.main(rest)
+    forward.assert_called_once_with("ssh", hapax_secret.ssh_argv(tty=tty, rest=rest))
 
 
 @pytest.mark.parametrize("tty", [False, True], ids=["get", "put"])

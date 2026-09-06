@@ -18,10 +18,12 @@ Put never calls FileStore.put and never ``pass insert``. It POSTs
 never appear on argv. The command ledger records sha256 only.
 
 On a host that is not the FileStore machine, the same argv is forwarded
-with ``ssh`` (``-t`` only for put) to the logical SSH alias ``secrets-store``.
+with ``ssh`` (``-t`` for put and delete) to the logical SSH alias ``secrets-store``.
 Bind the alias in private SSH configuration, or override it with
-``HAPAX_SECRETS_HOST`` (e.g. ``secrets.example.internal``). ``:8799`` is not
-opened on the tailnet.
+``HAPAX_SECRETS_HOST`` (e.g. ``secrets.example.internal``). Both launchers trim
+surrounding whitespace; an unset, empty, or whitespace-only override uses the
+alias. The remote shell expands HOME inside double quotes, and each forwarded
+argument is quoted separately. ``:8799`` is not opened on the tailnet.
 """
 
 from __future__ import annotations
@@ -104,7 +106,7 @@ def ssh_argv(*, tty: bool, rest: list[str]) -> list[str]:
             "HAPAX_SECRETS_HOST must not start with '-'. Next action: unset it to use "
             "the secrets-store SSH alias, or set a hostname like secrets.example.internal."
         )
-    remote = " ".join(shlex.quote(part) for part in ("$HOME/.local/bin/hapax-secret", *rest))
+    remote = " ".join(['"$HOME/.local/bin/hapax-secret"', *(shlex.quote(part) for part in rest)])
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
     if tty:
         cmd.append("-t")
