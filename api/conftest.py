@@ -276,10 +276,12 @@ def scan_tree_for_tokens(
     Paths are relative to `directory` for the same reason: an absolute path under a home directory
     is a host fingerprint, and these land in failing-assertion output.
     """
+    # Exclude enumerated non-source paths BEFORE checking readability: a virtualenv's directory
+    # symlink is outside the scan by policy, so it must not trigger the source-directory refusal.
     return [
         (path.relative_to(directory), index)
         for path in sorted(directory.rglob(f"*{suffix}"))
-        if _readable_file(path, directory) and not _skipped(path.relative_to(directory))
+        if not _skipped(path.relative_to(directory)) and _readable_file(path, directory)
         for index, token in enumerate(tokens)
         if token in _text_of(path)
     ]
