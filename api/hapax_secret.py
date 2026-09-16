@@ -62,6 +62,7 @@ from typing import TextIO
 from k0.key_capture import (
     INFORMATIONAL_VALUE_FLAGS,
     SECRET_COMMAND_TOKEN_HEADER,
+    SECRET_VALUE_FLAGS,
     FileStore,
     SecretCommandTokenError,
     SecretIntegrityError,
@@ -491,7 +492,15 @@ def _do_audit(as_json: bool = False) -> int:
             continue
         if value is None:
             continue
-        flags = list(secret_value_flags(value))
+        # THE VALUE STOPS HERE. secret_value_flags' result is used only for
+        # membership; every string that goes into the row — and so into stdout —
+        # is an element of the module-level SECRET_VALUE_FLAGS tuple, selected
+        # by that test. Nothing downstream holds an object derived from the
+        # value, which is what makes printing a flag list beside a secret's name
+        # safe, and it is a property of the code rather than of a comment
+        # claiming it. Canonical order comes free.
+        present = set(secret_value_flags(value))
+        flags = [flag for flag in SECRET_VALUE_FLAGS if flag in present]
         if row["format"] == 1:
             flags.append("legacy-format-v1")
         row["flags"] = flags
@@ -503,27 +512,22 @@ def _do_audit(as_json: bool = False) -> int:
     # audit a watchdog learns to ignore.
     defective = [r for r in rows if set(r["flags"]) - _AUDIT_INFORMATIONAL]
     legacy = [r for r in rows if "legacy-format-v1" in r["flags"]]
-    # BOTH output paths below are the same sink, and a taint analyser is right
-    # to look at them: the flags are computed FROM the value. They are not
-    # DERIVED from it. secret_value_flags returns a subset of the closed literal
-    # vocabulary k0.key_capture.SECRET_VALUE_FLAGS and nothing else, which is
-    # pinned by test_secret_value_flags_only_ever_returns_the_closed_vocabulary
-    # — 507 fuzzed inputs, failing on any returned string outside the set, which
-    # is the real regression shape: a future flag that formats part of the value
-    # into its own name. Mutation M20 injects exactly that and turns it red. The
-    # audit tests additionally assert a canary value appears on neither stream.
-    # `rows` carries only name, format, and those flags. The suppressions sit on
-    # the print() calls rather than the expressions that feed them, because that
-    # is where CodeQL reports the alert: annotating the source line just moved
-    # the alert to the sink, twice.
+    # `rows` holds names, formats, and flags selected above from a constant
+    # tuple — no object here is derived from a secret's bytes. An earlier cut of
+    # this carried a suppression comment instead, and the alert simply moved
+    # each time the line did (499 → 507 → 523 → 526): a comment asserting a
+    # property the code did not have. The selection above gives the code the
+    # property, and the fuzz test
+    # test_secret_value_flags_only_ever_returns_the_closed_vocabulary keeps the
+    # tuple closed — 507 inputs, failing on any flag outside it, which is the
+    # real regression shape (a flag that formats part of the value into its own
+    # name; mutation M20 injects exactly that).
     if as_json:
-        payload = json.dumps(rows, indent=2, sort_keys=True)
-        print(payload)  # codeql[py/clear-text-logging-sensitive-data]
+        print(json.dumps(rows, indent=2, sort_keys=True))
     else:
         for row in rows:
             flags = row["flags"] or ["ok"]
-            line = f"{row['name']}\tv{row['format']}\t{','.join(flags)}"
-            print(line)  # codeql[py/clear-text-logging-sensitive-data]
+            print(f"{row['name']}\tv{row['format']}\t{','.join(flags)}")
         if defective:
             print(
                 f"{len(defective)} of {len(rows)} stored values carry a byte shape "

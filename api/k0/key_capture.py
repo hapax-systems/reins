@@ -297,17 +297,17 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
         flags.append("nul")
     if b"\r" in value:
         flags.append("cr")
-    body = value[:-1] if value.endswith(b"\n") else value
     # Multi-line means CONTENT on more than one line, so strip every trailing
     # newline before looking. Stripping only one made "sk-key\n\n" — a
     # single-line value with a blank line pasted onto it — read as a document
     # and slip past the refusal it exists for.
-    multiline = b"\n" in value.rstrip(b"\n")
+    body = value.rstrip(b"\n")
+    multiline = b"\n" in body
     if multiline:
         # INFORMATION. An interior newline means the value is a document, not a
         # credential string, and documents are legitimate here.
         flags.append("multiline")
-    trailing = len(value) - len(value.rstrip(b"\n"))
+    trailing = len(value) - len(body)
     if trailing >= 2:
         # Refusable whatever the value is. One newline ends a file; two mean a
         # blank line nobody intended, and for a document that is as much a
@@ -320,9 +320,15 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
         # service-account JSON and an rclone config are files, and a file ends
         # in a newline. Refusing those refuses the values that matter most.
         flags.append("trailing-newline")
-    if value[:1] in (b" ", b"\t"):
+    # Look for edge whitespace PAST a BOM and PAST the trailing newlines, so one
+    # put reports every shape it carries. Checking value[:1] meant a value of
+    # BOM-then-space reported only `bom`, the operator fixed that, and the space
+    # came back as a second refusal on the retry. A refusal that reveals one
+    # problem at a time is a refusal the operator meets several times.
+    unbommed = body[len(_UTF8_BOM) :] if body.startswith(_UTF8_BOM) else body
+    if unbommed[:1] in (b" ", b"\t"):
         flags.append("leading-whitespace")
-    if body[-1:] in (b" ", b"\t"):
+    if unbommed[-1:] in (b" ", b"\t"):
         flags.append("trailing-whitespace")
     try:
         value.decode("utf-8")

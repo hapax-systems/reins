@@ -1397,3 +1397,27 @@ def test_a_document_that_ends_in_its_newline_round_trips_through_the_store(
     store = FileStore(root=tmp_path / "store")
     store.put("ssh-id-synthetic", pem)
     assert store.get("ssh-id-synthetic") == pem
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(b"\xef\xbb\xbf sk", ("bom", "leading-whitespace"), id="bom-then-space"),
+        pytest.param(b"\xef\xbb\xbfsk ", ("bom", "trailing-whitespace"), id="bom-then-trailing"),
+        pytest.param(b"sk \n\n", ("trailing-blank-line", "trailing-whitespace"), id="space-then-blank-line"),
+        pytest.param(b"sk \n", ("trailing-newline", "trailing-whitespace"), id="space-then-newline"),
+    ],
+)
+def test_every_shape_a_value_carries_is_reported_in_one_pass(value: bytes, expected) -> None:
+    """A refusal that reveals one problem at a time is a refusal the operator
+    meets several times.
+
+    Edge whitespace used to be checked against the raw first byte and against
+    the value minus ONE trailing newline, so a BOM hid a leading space behind it
+    and a blank line hid a trailing one. The operator would fix the reported
+    shape and meet the next on the retry. Both checks now look past the BOM and
+    past every trailing newline.
+    """
+    from k0.key_capture import secret_value_flags
+
+    assert set(secret_value_flags(value)) == set(expected)
