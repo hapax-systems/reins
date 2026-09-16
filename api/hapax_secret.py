@@ -522,6 +522,17 @@ def _do_audit(as_json: bool = False) -> int:
     # tuple closed — 507 inputs, failing on any flag outside it, which is the
     # real regression shape (a flag that formats part of the value into its own
     # name; mutation M20 injects exactly that).
+    #
+    # CodeQL still reports py/clear-text-logging-sensitive-data on the
+    # tab-separated line below, and it is a false positive that is NOT worth a
+    # fifth attempt at silencing. What that line emits is a secret's NAME — the
+    # thing --list has always printed — its format number, and flags selected
+    # above from a constant tuple. The `# codeql[...]` directive does not
+    # suppress in this repo's setup: across four commits the alert simply
+    # followed the line (499, 507, 523, 526), which is how we learned that.
+    # Restructuring DID clear the json sink, so the remaining report is the
+    # query's name-based heuristic on an f-string, not a data path. Classified
+    # here rather than chased; see the PR body.
     if as_json:
         print(json.dumps(rows, indent=2, sort_keys=True))
     else:
