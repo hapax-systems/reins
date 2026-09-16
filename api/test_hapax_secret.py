@@ -23,12 +23,28 @@ def _isolated_store_and_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
     monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
     monkeypatch.delenv("HAPAX_SECRETS_FORCE_REMOTE", raising=False)
+    # the key-file override must not leak in from the developer's environment,
+    # or is_store_host() probes a path these tests never created.
+    monkeypatch.delenv("REINS_SECRET_KEY_FILE", raising=False)
+    monkeypatch.delenv("HAPAX_SECRET_KEY_FILE", raising=False)
+    # the capability token is per-boot in XDG_RUNTIME_DIR; give each test its own
+    # 0700 one so no test reads or writes the operator's live token.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     # Tests run the store-host path; create a FileStore key so is_store_host can be true.
     from k0.key_capture import FileStore
 
     store = FileStore(root=tmp_path / "secrets")
     store._key()
     return store
+
+
+class _StubRequest:
+    """The header map the command endpoint reads; these tests call it directly."""
+
+    def __init__(self, headers: dict[str, str] | None = None):
+        self.headers = dict(headers or {})
 
 
 def test_name_of_maps_slash_and_rejects_illegal():
@@ -134,6 +150,7 @@ def test_put_via_reins_live_router_never_ledgers_value(tmp_path, monkeypatch):
                 preflight_receipt=req["preflight_receipt"],
                 idempotency_key=req["idempotency_key"],
             ),
+            request=_StubRequest(hapax_secret._command_headers()),
         )
         return bytes(resp.body)
 
@@ -415,6 +432,22 @@ def _assert_unreadable(rc, captured, store, exception_class="OSError"):
     _assert_no_read_leak(captured, store)
 
 
+def _assert_integrity_failed(rc, captured, store):
+    """Exit 3, and ONLY 3.
+
+    This used to be exit 1 "not found" — FileStore.get returned None for a
+    tampered blob — and then, briefly, exit 2 "unreadable (OSError)", which at
+    least stopped claiming absence but still put corruption in the same bucket
+    as a permission error. 3 says the blob is present and does not
+    authenticate, which is the only one of the three a caller can act on.
+    """
+    assert rc == 3
+    assert captured.out == b""
+    assert captured.err.startswith(b"integrity_failed: synthetic-entry.")
+    assert b"legal_next:" in captured.err
+    _assert_no_read_leak(captured, store)
+
+
 def test_main_read_missing(read_store, read_argv, capsysbinary):
     read_store._blob_path(_ENTRY_NAME).unlink()
     rc = hapax_secret.main(read_argv)
@@ -500,7 +533,16 @@ def test_main_read_corrupt_entry(read_store, read_argv, capsysbinary, corruption
         entry.unlink()
         entry.mkdir()
     rc = hapax_secret.main(read_argv)
-    _assert_unreadable(rc, capsysbinary.readouterr(), read_store)
+    captured = capsysbinary.readouterr()
+    if corruption == "directory":
+        # Not an integrity question at all. The stat succeeds (a directory has
+        # one), then is_file() is false so get answers None — and _read_entry
+        # raises because presence was already observed. Absence was ruled out by
+        # the stat, so this is a read failure, not "not found" and not a MAC
+        # failure. It stays exit 2, which is what keeps 3 meaningful.
+        _assert_unreadable(rc, captured, read_store, "OSError")
+    else:
+        _assert_integrity_failed(rc, captured, read_store)
     read_store.get.assert_called_once_with(_ENTRY_NAME)
     read_store.has.assert_not_called()
 
@@ -623,3 +665,355 @@ def test_ssh_argv_tty_for_delete():
     argv = hapax_secret.ssh_argv(tty=True, rest=["--delete", "glmcp"])
     assert "-t" in argv
     assert "--" in argv
+
+
+# ---------------------------------------------------------------------------
+# --audit: the byte shapes of what is stored. Names and flags, never values.
+# ---------------------------------------------------------------------------
+
+
+def _seeded_store(tmp_path, values: dict[str, bytes]):
+    """Write values straight through FileStore, bypassing put validation — which
+    is the point: --audit exists for the values already sitting in the store."""
+    from k0.key_capture import FileStore
+
+    store = FileStore(root=tmp_path / "secrets")
+    for name, value in values.items():
+        store.put(name, value)
+    return store
+
+
+def test_audit_flags_a_bom_by_name_and_never_prints_a_value(tmp_path, capsysbinary):
+    """17 of 112 stored values began ef bb bf and nothing was watching."""
+    _seeded_store(
+        tmp_path,
+        {
+            "api-openai": b"\xef\xbb\xbfsk-bom-canary",
+            "api-mistral": b"sk-clean-canary",
+        },
+    )
+    rc = hapax_secret.main(["--audit"])
+    captured = capsysbinary.readouterr()
+    assert rc == 1, "a flagged store exits 1 so a watchdog notices"
+    out = captured.out.decode()
+    assert "api-openai\tv2\tbom" in out
+    assert "api-mistral\tv2\tok" in out
+    assert "sk-bom-canary" not in out and "sk-bom-canary" not in captured.err.decode()
+    assert "sk-clean-canary" not in out and "sk-clean-canary" not in captured.err.decode()
+    assert b"1 of 2 stored values carry a flag" in captured.err
+    assert b"Next action:" in captured.err
+
+
+def test_audit_exits_0_when_every_value_is_clean(tmp_path, capsysbinary):
+    _seeded_store(tmp_path, {"api-openai": b"sk-clean", "api-mistral": b"sk-also-clean"})
+    rc = hapax_secret.main(["--audit"])
+    captured = capsysbinary.readouterr()
+    assert rc == 0
+    assert captured.err == b""
+    assert captured.out.decode().splitlines() == ["api-mistral\tv2\tok", "api-openai\tv2\tok"]
+
+
+@pytest.mark.parametrize(
+    ("value", "flag"),
+    [
+        (b"\xef\xbb\xbfsk", "bom"),
+        (b"sk\r", "cr"),
+        (b"sk\n", "trailing-newline"),
+        (b" sk", "leading-whitespace"),
+        (b"sk ", "trailing-whitespace"),
+        (b"sk\x00", "nul"),
+    ],
+)
+def test_audit_reports_each_breaking_byte_shape(tmp_path, capsysbinary, value, flag):
+    _seeded_store(tmp_path, {"api-openai": value})
+    rc = hapax_secret.main(["--audit"])
+    out = capsysbinary.readouterr().out.decode()
+    assert rc == 1
+    assert flag in out
+
+
+def test_audit_reports_a_legacy_v1_blob_and_an_integrity_failure(tmp_path, capsysbinary):
+    from k0.key_capture import FileStore, _file_wrap
+
+    store = FileStore(root=tmp_path / "secrets")
+    store.put("api-openai", b"sk-clean")
+    store._blob_path("legacy-key").write_bytes(
+        _file_wrap(store._key(), b"\x03" * 16, b"sk-legacy")
+    )
+    store.put("broken-key", b"sk-broken")
+    broken = store._blob_path("broken-key")
+    broken.write_bytes(broken.read_bytes()[:-1] + b"\x00")
+
+    rc = hapax_secret.main(["--audit"])
+    out = capsysbinary.readouterr().out.decode()
+    assert rc == 1
+    assert "legacy-key\tv1\tlegacy-format-v1" in out
+    assert "broken-key\tv2\tintegrity-failed" in out
+    assert "api-openai\tv2\tok" in out
+    assert "sk-legacy" not in out and "sk-broken" not in out
+
+
+def test_audit_json_carries_names_and_flags_and_no_values(tmp_path, capsys):
+    _seeded_store(tmp_path, {"api-openai": b"\xef\xbb\xbfsk-json-canary"})
+    rc = hapax_secret.main(["--audit", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    rows = json.loads(out)
+    assert rows == [{"flags": ["bom"], "format": 2, "name": "api-openai"}]
+    assert "sk-json-canary" not in out
+
+
+# ---------------------------------------------------------------------------
+# --list --json, --history
+# ---------------------------------------------------------------------------
+
+
+def test_list_json_carries_metadata_and_never_a_value(tmp_path, capsys):
+    _seeded_store(tmp_path, {"api-openai": b"sk-list-canary"})
+    rc = hapax_secret.main(["--list", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    rows = json.loads(out)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"] == "api-openai"
+    assert row["format"] == 2
+    assert row["mtime"].endswith("+00:00")
+    # the BLOB size, deliberately — the plaintext length is a fact about the secret
+    assert row["blob_bytes"] > len(b"sk-list-canary")
+    assert "sk-list-canary" not in out
+
+
+def test_list_plain_is_unchanged(tmp_path, capsys):
+    _seeded_store(tmp_path, {"api-openai": b"sk-a", "api-mistral": b"sk-b"})
+    rc = hapax_secret.main(["--list"])
+    assert rc == 0
+    assert capsys.readouterr().out == "api-mistral\napi-openai\n"
+
+
+def test_history_prints_timestamps_only(tmp_path, capsys):
+    store = _seeded_store(tmp_path, {"api-openai": b"sk-v0"})
+    store.put("api-openai", b"sk-v1")
+    store.put("api-openai", b"sk-v2")
+    rc = hapax_secret.main(["--history", "api-openai"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    stamps = out.strip().splitlines()
+    assert len(stamps) == 2, "two superseded versions after three puts"
+    assert all(s.endswith("Z") for s in stamps)
+    assert "sk-v" not in out
+
+
+def test_history_of_an_unknown_name_exits_1_with_a_next_action(tmp_path, capsys):
+    _seeded_store(tmp_path, {"api-openai": b"sk-a"})
+    rc = hapax_secret.main(["--history", "api-mistral"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "legal_next:" in captured.err
+
+
+def test_history_maps_a_slash_name_like_every_other_verb(tmp_path, capsys):
+    store = _seeded_store(tmp_path, {"langfuse-public-key": b"sk-v0"})
+    store.put("langfuse-public-key", b"sk-v1")
+    assert hapax_secret.main(["--history", "langfuse/public-key"]) == 0
+    assert len(capsys.readouterr().out.strip().splitlines()) == 1
+
+
+def test_help_documents_the_exit_codes_and_the_new_verbs(capsys):
+    assert hapax_secret.main(["--help"]) == 0
+    out = capsys.readouterr().out
+    assert "--audit" in out and "--history" in out and "--list [--json]" in out
+    assert "3 integrity_failed" in out
+    assert "--key-file" in out
+
+
+# ---------------------------------------------------------------------------
+# The capability token and put-time validation, from the client side.
+# ---------------------------------------------------------------------------
+
+
+def test_put_via_reins_sends_the_capability_token_header(monkeypatch, tmp_path):
+    """The header, not the body: authority_packet is witnessed data and a
+    credential has no business riding in it."""
+    from k0.key_capture import SECRET_COMMAND_TOKEN_HEADER, mint_secret_command_token
+
+    seen = {}
+
+    class _FakeResponse:
+        def read(self):
+            return json.dumps({"status": "ok", "payload": {"backend_id": "file"}}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen["headers"] = dict(req.headers)
+        seen["body"] = json.loads(req.data.decode())
+        return _FakeResponse()
+
+    monkeypatch.setattr(hapax_secret.urllib.request, "urlopen", fake_urlopen)
+    hapax_secret.put_via_reins("frontier-key", b"sk-header-canary")
+
+    # urllib title-cases header names; compare case-insensitively.
+    lowered = {k.lower(): v for k, v in seen["headers"].items()}
+    assert lowered[SECRET_COMMAND_TOKEN_HEADER] == mint_secret_command_token()
+    assert "sk-header-canary" not in json.dumps(seen["headers"])
+    assert SECRET_COMMAND_TOKEN_HEADER not in json.dumps(seen["body"]).lower(), (
+        "the token must not also be copied into the witnessed packet"
+    )
+
+
+def test_put_via_reins_refuses_when_no_token_can_be_minted(monkeypatch, tmp_path):
+    """A token the CLI cannot mint is not a reason to post anyway: the server
+    would answer a governed refusal and the operator would read it as 'the
+    server rejected me' rather than 'this session has no runtime directory'.
+
+    Driven through the REAL transport, not an injected poster: the token is
+    attached in _http_post, so an injected poster is the caller's own transport
+    and carries its own headers. The server is the enforcement point either
+    way — a poster that omits the token gets a governed refusal, not a write.
+    """
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "gone"))
+    opened = []
+    monkeypatch.setattr(
+        hapax_secret.urllib.request, "urlopen", lambda *a, **k: opened.append(a)
+    )
+    with pytest.raises(RuntimeError) as exc:
+        hapax_secret.put_via_reins("frontier-key", b"sk-never-posted")
+    assert "runtime directory" in str(exc.value)
+    assert "Next action:" in str(exc.value)
+    assert opened == [], "nothing may reach the wire without a token"
+
+
+@pytest.mark.parametrize(
+    ("value", "flag"),
+    [
+        (b"\xef\xbb\xbfsk-abc", "bom"),
+        (b"sk-abc\r\n", "cr"),
+        (b"sk-abc\n", "trailing-newline"),
+        (b" sk-abc", "leading-whitespace"),
+        (b"sk-abc ", "trailing-whitespace"),
+    ],
+)
+def test_put_via_reins_refuses_a_breaking_value_before_posting(value, flag):
+    """A mirror of the server check, so the operator gets the sentence without a
+    round trip. Nothing is posted."""
+    posted = []
+
+    with pytest.raises(ValueError) as exc:
+        hapax_secret.put_via_reins(
+            "frontier-key", value, post=lambda u, b: posted.append((u, b))
+        )
+    assert flag in str(exc.value)
+    assert "Next action:" in str(exc.value)
+    assert posted == [], "a refused value must not reach the wire at all"
+
+
+def test_put_dialogue_refuses_a_bom_and_does_not_post(capsys):
+    out, err = StringIO(), StringIO()
+    posted = []
+    rc = hapax_secret.run_put_dialogue(
+        prompt=lambda _: "api-openai",
+        get_secret=Mock(side_effect=["﻿sk-bom-dialogue", "﻿sk-bom-dialogue"]),
+        post=lambda u, b: posted.append((u, b)),
+        stdout=out,
+        stderr=err,
+    )
+    assert rc == 2
+    assert posted == []
+    assert "bom" in err.getvalue()
+    assert "sk-bom-dialogue" not in err.getvalue()
+    assert out.getvalue() == ""
+
+
+def test_a_clean_value_still_goes_through_the_dialogue():
+    out, err = StringIO(), StringIO()
+    captured = {}
+
+    def post(url, body):
+        captured["body"] = json.loads(body.decode())
+        return json.dumps({"status": "ok", "payload": {"backend_id": "file"}}).encode()
+
+    rc = hapax_secret.run_put_dialogue(
+        prompt=lambda _: "api-openai",
+        get_secret=Mock(side_effect=["sk-proj-clean", "sk-proj-clean"]),
+        post=post,
+        stdout=out,
+        stderr=err,
+    )
+    assert rc == 0, err.getvalue()
+    assert base64.b64decode(captured["body"]["authority_packet"]["value_b64"]) == b"sk-proj-clean"
+    assert "stored api-openai" in out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# --key-file
+# ---------------------------------------------------------------------------
+
+
+def test_key_file_flag_moves_the_key_and_get_still_reads(tmp_path, capsysbinary, monkeypatch):
+    from k0.key_capture import FileStore
+
+    key_file = tmp_path / "elsewhere" / "secret.key"
+    store = FileStore(root=tmp_path / "secrets", key_file=key_file)
+    store.put("api-openai", b"sk-out-of-tree")
+
+    rc = hapax_secret.main(["--key-file", str(key_file), "api-openai"])
+    captured = capsysbinary.readouterr()
+    assert rc == 0, captured.err
+    assert captured.out == b"sk-out-of-tree\n"
+
+
+def test_key_file_forwards_to_the_remote_rather_than_being_swallowed(monkeypatch):
+    """The flag is parsed locally to decide WHICH key path answers 'is the store
+    here', but the forwarded argv must still carry it — an env var set in this
+    process does not cross an ssh connection."""
+    monkeypatch.setenv("HAPAX_SECRETS_FORCE_REMOTE", "1")
+    seen = {}
+    monkeypatch.setattr(hapax_secret.os, "execvp", lambda f, a: seen.setdefault("argv", a))
+
+    hapax_secret.main(["--key-file", "/etc/reins/secret.key", "api-openai"])
+    remote = seen["argv"][-1]
+    assert remote == (
+        '"$HOME/.local/bin/hapax-secret" --key-file /etc/reins/secret.key api-openai'
+    ), "the flag and its path must both survive into the forwarded command"
+
+
+def test_key_file_without_a_path_is_a_usage_error(capsys):
+    assert hapax_secret.main(["--key-file"]) == 2
+    assert "usage:" in capsys.readouterr().err
+
+
+def test_launcher_probes_the_key_file_override_like_the_python(tmp_path, monkeypatch):
+    """The bash launcher and is_store_host() must answer 'is the store here' from
+    the SAME path. If only the Python honours --key-file, an out-of-tree key
+    makes the launcher forward every command to a remote host that does not have
+    the store either."""
+    launcher = Path(__file__).resolve().parent.parent / "scripts" / "hapax-secret"
+    text = launcher.read_text(encoding="utf-8")
+    assert 'KEY_FILE="${REINS_SECRET_KEY_FILE:-${STORE_ROOT}/.key}"' in text
+    assert '! -f "${KEY_FILE}"' in text
+    assert '! -f "${STORE_ROOT}/.key"' not in text, "the stale probe must be gone"
+
+
+def test_is_store_host_follows_the_key_file_override(tmp_path, monkeypatch):
+    key_file = tmp_path / "elsewhere" / "secret.key"
+    monkeypatch.setenv("HAPAX_SECRET_KEY_FILE", str(key_file))
+    assert hapax_secret.is_store_host() is False, "no key there yet — not the store host"
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_bytes(b"k" * 32)
+    assert hapax_secret.is_store_host() is True
+
+
+def test_the_key_boundary_is_documented(tmp_path):
+    """Finding 7 is a boundary plus a measurement, and a measurement nobody
+    wrote down is not one."""
+    doc = Path(__file__).resolve().parent.parent / "docs" / "secret-store-key.md"
+    text = doc.read_text(encoding="utf-8")
+    assert "REINS_SECRET_KEY_FILE" in text and "--key-file" in text
+    assert "hapax-backup-gdrive-critical" in text, "the measured backup sets are named"
+    assert "distro-work" in text, "including the two units that run nothing"

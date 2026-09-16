@@ -1,5 +1,6 @@
 """U1/U3 contract tests — the composed serving surface (reins_serve)."""
 
+import inspect
 import pathlib
 
 import pytest
@@ -16,8 +17,35 @@ def _isolated_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
 
 
+class _StubRequest:
+    """Just the header map the command endpoint reads. The endpoint takes a real
+    starlette Request under uvicorn; these tests call it directly, so they supply
+    the one attribute it touches. No headers by default, which is the fail-closed
+    case for a verb that authenticates its caller."""
+
+    def __init__(self, headers: dict[str, str] | None = None):
+        self.headers = dict(headers or {})
+
+
 def _endpoint(app, path):
-    return next(r.endpoint for r in app.routes if getattr(r, "path", "") == path)
+    fn = next(r.endpoint for r in app.routes if getattr(r, "path", "") == path)
+    if "request" not in inspect.signature(fn).parameters:
+        return fn
+
+    def call(*args, headers=None, **kwargs):
+        return fn(*args, request=_StubRequest(headers), **kwargs)
+
+    return call
+
+
+def _secret_token(monkeypatch, tmp_path) -> str:
+    """Point the capability token at an isolated 0700 runtime dir and mint it."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    from k0.key_capture import mint_secret_command_token
+
+    return mint_secret_command_token()
 
 
 def test_api_tree_sha_framing_matches_go_generation_hash():
@@ -80,11 +108,12 @@ def test_unregistered_verb_refuses_typed_501():
     assert "unregistered verb" in resp.body.decode()
 
 
-def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypatch):
-    import base64
+def test_secret_verb_put_has_delete_and_never_ledgers_the_value(tmp_path, monkeypatch):
     import json
 
     monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    token = _secret_token(monkeypatch, tmp_path)
+    auth = {"x-reins-secret-token": token}
     app = build_serve_app("", [])
     cmd = _endpoint(app, "/command/{verb}")
     canary = "sk-ledger-canary-never"
@@ -96,24 +125,13 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
             preflight_receipt={},
             idempotency_key="sec-put-1",
         ),
+        headers=auth,
     )
     assert put.status_code == 200, put.body
     put_body = json.loads(put.body)
     assert put_body["payload"]["backend_id"] == "file"
     assert put_body["payload"]["present"] is True
     assert canary not in put.body.decode()
-    got = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={"kind": "secret", "op": "get"},
-            preflight_receipt={},
-            idempotency_key="sec-get-1",
-        ),
-    )
-    assert got.status_code == 200, got.body
-    got_body = json.loads(got.body)
-    assert base64.b64decode(got_body["payload"]["value_b64"]) == canary.encode()
     has = cmd(
         "secret",
         reins_command.CommandRequest(
@@ -132,6 +150,7 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
             preflight_receipt={},
             idempotency_key="sec-del-1",
         ),
+        headers=auth,
     )
     del_body = json.loads(deleted.body)
     assert deleted.status_code == 200, deleted.body
@@ -150,18 +169,134 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     assert json.loads(gone.body)["payload"]["present"] is False
     ledger = (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
     assert canary not in ledger
-    assert "pass" not in json.loads(put.body)["payload"]["backend_id"]
     naked = cmd(
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"op": "get"},
+            authority_packet={"op": "put", "value": canary},
             preflight_receipt={},
             idempotency_key="sec-naked-1",
         ),
+        headers=auth,
     )
     assert naked.status_code in (401, 403, 422) or b"authority" in naked.body
     assert canary.encode() not in naked.body
+
+
+def test_secret_verb_has_no_get_op(tmp_path, monkeypatch):
+    """The read verb is gone. It handed value_b64 to anything that could reach
+    loopback, and nothing read it: the CLI reads the store directly on the store
+    host and forwards over ssh elsewhere."""
+    import json
+
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    token = _secret_token(monkeypatch, tmp_path)
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    canary = "sk-no-get-canary"
+    put = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "put", "value": canary},
+            preflight_receipt={},
+            idempotency_key="nog-put",
+        ),
+        headers={"x-reins-secret-token": token},
+    )
+    assert put.status_code == 200, put.body
+    got = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "get"},
+            preflight_receipt={},
+            idempotency_key="nog-get",
+        ),
+        headers={"x-reins-secret-token": token},
+    )
+    assert got.status_code != 200, got.body
+    assert canary.encode() not in got.body
+    assert b"value_b64" not in got.body
+    body = json.loads(got.body)
+    assert body["status"] in ("authority-rejected", "authority-unevaluable")
+    assert body["legal_next"]
+
+
+@pytest.mark.parametrize("op", ["put", "delete"])
+def test_secret_writing_ops_refuse_an_unauthenticated_caller(tmp_path, monkeypatch, op):
+    """Before the token, verify() accepted any dict with a truthy `kind`, so any
+    local account could overwrite or delete any secret over loopback."""
+    import json
+
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    token = _secret_token(monkeypatch, tmp_path)
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    seeded = "sk-seeded-untouched"
+    assert cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "put", "value": seeded},
+            preflight_receipt={},
+            idempotency_key="seed",
+        ),
+        headers={"x-reins-secret-token": token},
+    ).status_code == 200
+
+    for headers in (None, {"x-reins-secret-token": "not-the-token"}):
+        resp = cmd(
+            "secret",
+            reins_command.CommandRequest(
+                target="frontier-key",
+                authority_packet={"kind": "secret", "op": op, "value": "sk-overwritten"},
+                preflight_receipt={},
+                idempotency_key=f"unauth-{op}-{headers is None}",
+            ),
+            headers=headers,
+        )
+        assert resp.status_code == 409, resp.body
+        body = json.loads(resp.body)
+        assert body["status"] in ("preflight-failed", "preflight-unevaluable")
+        assert body["applied"] is False
+        assert body["legal_next"]
+
+    # the refusal must have been a refusal: the seeded value is still the one stored.
+    from k0.key_capture import FileStore
+
+    assert FileStore(root=tmp_path / "secrets").get("frontier-key") == seeded.encode()
+
+
+def test_secret_put_refuses_a_bom_and_stores_nothing(tmp_path, monkeypatch):
+    """17 of 112 stored values began ef bb bf and every consumer 401'd. The
+    surface is the single place a value cannot get past."""
+    import json
+
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    token = _secret_token(monkeypatch, tmp_path)
+    app = build_serve_app("", [])
+    cmd = _endpoint(app, "/command/{verb}")
+    resp = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="bom-key",
+            authority_packet={"kind": "secret", "op": "put", "value": "\ufeffsk-bom"},
+            preflight_receipt={},
+            idempotency_key="bom-put",
+        ),
+        headers={"x-reins-secret-token": token},
+    )
+    assert resp.status_code == 400, resp.body
+    body = json.loads(resp.body)
+    assert body["status"] == "secret-refused"
+    assert "bom" in body["reason"]
+    assert body["legal_next"]
+    assert "sk-bom" not in resp.body.decode()
+
+    from k0.key_capture import FileStore
+
+    assert FileStore(root=tmp_path / "secrets").get("bom-key") is None
 
 
 def test_arm_flips_release_authorized_on_an_eligible_task(tmp_path, monkeypatch):

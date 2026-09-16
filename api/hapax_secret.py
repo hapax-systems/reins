@@ -1,17 +1,32 @@
 """hapax-secret — operator ritual for estate secrets via reins.
 
 GET (watchdogs/scripts): ``hapax-secret <name>``
-WHERE / LIST: ``--where <name>`` / ``--list``
+WHERE / LIST: ``--where <name>`` / ``--list`` (``--list --json`` for metadata)
+AUDIT: ``--audit`` (``--audit --json``) — byte shapes of every stored value.
+HISTORY: ``--history <name>`` — timestamps of superseded versions.
 PUT (TTY only): ``hapax-secret`` with no args — name, echo-off secret, confirm.
 DELETE (TTY confirm): ``hapax-secret --delete <name>``.
 
-GET / WHERE exit 1 only when the entry's initial stat raises FileNotFoundError;
-their existing not-found responses are unchanged. WHERE reports ``filestore``
-only after a successful read. Stat/read failures exit 2 with empty stdout and
-``unreadable: <mapped-name> (<exception-class>)`` on stderr, never error text.
-A present entry for which FileStore.get returns None (including corruption) is
-reported as OSError. Disappearance after the initial stat is a read failure;
-each invocation observes afresh, so a prior WHERE success does not bind GET.
+EXIT CODES. 0 success. 1 the name is absent (GET, WHERE, DELETE) or the
+dialogue was abandoned. 2 the invocation or the store is unusable — bad name,
+unreadable entry, no TTY where one is required, a refused value. 3 and only 3:
+``integrity_failed: <name>`` — the blob is present and does not authenticate.
+3 exists because 1 used to cover it: FileStore.get returned None for a
+tampered blob and every caller printed "not found" and offered to re-enter a
+secret that was, in fact, sitting right there.
+
+GET / WHERE exit 1 only when the entry's initial stat raises FileNotFoundError.
+WHERE reports ``filestore`` only after a successful read. Stat/read failures
+exit 2 with empty stdout and ``unreadable: <mapped-name> (<exception-class>)``
+on stderr, never error text. Disappearance after the initial stat is a read
+failure; each invocation observes afresh, so a prior WHERE success does not
+bind GET.
+
+GET writes the value followed by exactly one newline, adding one only if the
+value does not already end in one. A consumer that must have the exact bytes
+should strip a single trailing newline, not ``tr -d``: ``--audit`` now refuses
+to let a value carry CR or LF in the first place, so a trailing newline on
+stdout is this program's framing and never part of the secret.
 
 Put never calls FileStore.put and never ``pass insert``. It POSTs
 ``http://127.0.0.1:8799/command/secret`` (kind=secret, op=put). Values
@@ -40,10 +55,20 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
-from k0.key_capture import FileStore, default_store
+from k0.key_capture import (
+    SECRET_COMMAND_TOKEN_HEADER,
+    FileStore,
+    SecretCommandTokenError,
+    SecretIntegrityError,
+    default_store,
+    mint_secret_command_token,
+    secret_value_flags,
+    validate_secret_value,
+)
 
 ALIASES = {
     "litellm/master-key": "litellm-master-key",
@@ -86,13 +111,15 @@ def require_loopback_url(url: str) -> urllib.parse.ParseResult:
 
 
 def is_store_host() -> bool:
+    """This host holds the store when the store's KEY is here — which is not
+    necessarily ``root/.key`` any more, since --key-file / REINS_SECRET_KEY_FILE
+    can move it off the backed-up home. Asking the store where its key lives is
+    the difference between honouring the override and silently forwarding every
+    command to another machine."""
     if os.environ.get("HAPAX_SECRETS_FORCE_REMOTE") == "1":
         return False
-    store = default_store()
-    if store.backend_id != "file":
-        return False
-    root = Path(store.root)
-    return (root / ".key").is_file()
+    store = _store()
+    return store.key_path.is_file()
 
 
 def secrets_host() -> str:
@@ -119,6 +146,10 @@ def put_via_reins(name: str, value: bytes, *, post: Callable[[str, bytes], bytes
         raise ValueError(
             f"secret exceeds {_MAX_SECRET_BYTES} bytes. Next action: store a smaller secret"
         )
+    # A MIRROR, not the gate. The command surface validates the same bytes with
+    # the same function and is what a value actually has to get past; this call
+    # only saves a round trip and gives the operator the sentence immediately.
+    validate_secret_value(value)
     url = command_url()
     require_loopback_url(url)
     body = json.dumps(
@@ -184,12 +215,28 @@ def delete_via_reins(name: str, *, post: Callable[[str, bytes], bytes] | None = 
     return parsed
 
 
+def _command_headers() -> dict[str, str]:
+    """The per-boot capability token that the writing ops require.
+
+    A token the CLI cannot mint is not a reason to post anyway and let the
+    server decide: the surface would answer a governed refusal, but the
+    operator would read it as "the server rejected me" rather than "this
+    session has no runtime directory". Refuse here, naming the real cause.
+    """
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        headers[SECRET_COMMAND_TOKEN_HEADER] = mint_secret_command_token()
+    except SecretCommandTokenError as exc:
+        raise RuntimeError(str(exc)) from None
+    return headers
+
+
 def _http_post(url: str, body: bytes) -> bytes:
     req = urllib.request.Request(
         url,
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=_command_headers(),
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -293,6 +340,21 @@ def run_delete(
     return 1
 
 
+def _store() -> FileStore:
+    """The store, honouring --key-file / REINS_SECRET_KEY_FILE.
+
+    The `default_store is not file` branches that used to head every read path
+    are gone with PassStore: `default_store()` is unconditional now, so there
+    is no backend for them to catch and a branch that cannot fire is a branch
+    that will be maintained forever for nothing.
+    """
+    store = default_store()
+    override = os.environ.get("HAPAX_SECRET_KEY_FILE", "").strip()
+    if override:
+        store.key_file = Path(override)
+    return store
+
+
 def _read_entry(store: FileStore, name: str) -> bytes | None:
     """Only the initial, raising stat may establish absence; never infer it from get."""
     try:
@@ -301,24 +363,25 @@ def _read_entry(store: FileStore, name: str) -> bytes | None:
         return None
     value = store.get(name)
     if value is None:
-        # get conflates absence and corruption. Presence was already observed, so
-        # neither corruption nor a subsequent disappearance can mean absent here.
+        # get no longer conflates absence with corruption — corruption raises
+        # SecretIntegrityError and passes straight through. Presence was already
+        # observed, so a None here is a disappearance between stat and read.
         raise OSError
     return value
 
 
 def _do_get(name: str) -> int:
-    store = default_store()
-    if store.backend_id != "file":
-        print(
-            f"hapax-secret: default_store is {store.backend_id!r}, not file. "
-            "legal_next: do not point this CLI at pass.",
-            file=sys.stderr,
-        )
-        return 2
+    store = _store()
     mapped = name_of(name)
     try:
         val = _read_entry(store, mapped)
+    except SecretIntegrityError:
+        print(
+            f"integrity_failed: {mapped}. legal_next: the stored blob does not authenticate "
+            "— restore it from backup or run hapax-secret (TTY put) to replace it.",
+            file=sys.stderr,
+        )
+        return 3
     except OSError as exc:
         print(f"unreadable: {mapped} ({type(exc).__name__})", file=sys.stderr)
         return 2
@@ -333,17 +396,17 @@ def _do_get(name: str) -> int:
 
 
 def _do_where(name: str) -> int:
-    store = default_store()
-    if store.backend_id != "file":
-        print(
-            f"hapax-secret: default_store is {store.backend_id!r}, not file. "
-            "legal_next: do not point this CLI at pass.",
-            file=sys.stderr,
-        )
-        return 2
+    store = _store()
     mapped = name_of(name)
     try:
         val = _read_entry(store, mapped)
+    except SecretIntegrityError:
+        print(
+            f"integrity_failed: {mapped}. legal_next: the stored blob does not authenticate "
+            "— restore it from backup or run hapax-secret (TTY put) to replace it.",
+            file=sys.stderr,
+        )
+        return 3
     except OSError as exc:
         print(f"unreadable: {mapped} ({type(exc).__name__})", file=sys.stderr)
         return 2
@@ -354,38 +417,131 @@ def _do_where(name: str) -> int:
     return 0
 
 
-def _do_list() -> int:
-    store = default_store()
-    if store.backend_id != "file":
+def _do_list(as_json: bool = False) -> int:
+    store = _store()
+    names = store.names()
+    if not as_json:
+        print("\n".join(names))
+        return 0
+    rows = []
+    for name in names:
+        path = store._blob_path(name)
+        try:
+            stat_result = path.stat()
+        except OSError:
+            continue
+        rows.append(
+            {
+                "name": name,
+                # the BLOB size, deliberately: the plaintext length is a fact
+                # about the secret, and this listing must not carry one.
+                "blob_bytes": stat_result.st_size,
+                "format": store.blob_format(name),
+                "mtime": datetime.fromtimestamp(stat_result.st_mtime, UTC).isoformat(),
+            }
+        )
+    print(json.dumps(rows, indent=2, sort_keys=True))
+    return 0
+
+
+def _do_history(name: str) -> int:
+    store = _store()
+    mapped = name_of(name)
+    stamps = store.history(mapped)
+    if not stamps:
         print(
-            f"hapax-secret: default_store is {store.backend_id!r}, not file. "
-            "legal_next: do not point this CLI at pass.",
+            f"no history for {mapped}. legal_next: history begins at the next put; "
+            "hapax-secret --list to see stored names.",
             file=sys.stderr,
         )
-        return 2
-    root = Path(store.root)
-    names = sorted(p.stem for p in root.glob("*.bin")) if root.is_dir() else []
-    print("\n".join(names))
+        return 1
+    print("\n".join(stamps))
     return 0
+
+
+def _do_audit(as_json: bool = False) -> int:
+    """Report the byte shapes of every stored value. Names and flags only.
+
+    THIS EXISTS BECAUSE IT HAPPENED. 17 of 112 stored values began with a UTF-8
+    byte-order mark, carried in when the store was populated from pass, and
+    every consumer of those keys got a 401 that named the provider rather than
+    the store. Put-time refusal stops the next one being written; nothing was
+    watching the ones already there. Exit 1 when any name carries a flag, so a
+    watchdog can run this and notice.
+    """
+    store = _store()
+    rows = []
+    for name in store.names():
+        row: dict[str, object] = {"name": name, "format": store.blob_format(name)}
+        try:
+            value = store.get(name)
+        except SecretIntegrityError:
+            row["flags"] = ["integrity-failed"]
+            rows.append(row)
+            continue
+        except OSError as exc:
+            row["flags"] = [f"unreadable-{type(exc).__name__}"]
+            rows.append(row)
+            continue
+        if value is None:
+            continue
+        flags = list(secret_value_flags(value))
+        if row["format"] == 1:
+            flags.append("legacy-format-v1")
+        row["flags"] = flags
+        rows.append(row)
+    flagged = [r for r in rows if r["flags"]]
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            flags = row["flags"] or ["ok"]
+            print(f"{row['name']}\tv{row['format']}\t{','.join(flags)}")
+        if flagged:
+            print(
+                f"{len(flagged)} of {len(rows)} stored values carry a flag. "
+                "Next action: re-put each flagged name with hapax-secret (TTY put); "
+                "legacy-format-v1 clears itself on that put.",
+                file=sys.stderr,
+            )
+    return 1 if flagged else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in ("-h", "--help"):
         print(
-            "usage: hapax-secret                 # TTY put: name, secret, confirm (via reins)\n"
-            "       hapax-secret <name>          # get\n"
-            "       hapax-secret --delete <name> # TTY confirm, then delete via reins\n"
-            "       hapax-secret --where <name>  # presence\n"
-            "       hapax-secret --list"
+            "usage: hapax-secret                  # TTY put: name, secret, confirm (via reins)\n"
+            "       hapax-secret <name>           # get\n"
+            "       hapax-secret --delete <name>  # TTY confirm, then delete via reins\n"
+            "       hapax-secret --where <name>   # presence\n"
+            "       hapax-secret --list [--json]  # names, or name/size/format/mtime\n"
+            "       hapax-secret --audit [--json] # byte-shape flags per name, never values\n"
+            "       hapax-secret --history <name> # timestamps of superseded versions\n"
+            "\n"
+            "       --key-file <path>  read the store key from <path> instead of\n"
+            "                          <store>/.key (also REINS_SECRET_KEY_FILE)\n"
+            "\n"
+            "exit: 0 ok · 1 absent · 2 unusable invocation or store · 3 integrity_failed"
         )
         return 0
 
-    rest = args
+    # --key-file is read BEFORE is_store_host, because it decides which path is
+    # probed to answer "is the store here". `rest` drops it for local dispatch;
+    # the ssh forward sends the ORIGINAL argv, so the remote gets the flag as
+    # well — an env var set here would not cross the connection.
+    rest = list(args)
+    if "--key-file" in rest:
+        i = rest.index("--key-file")
+        if i + 1 >= len(rest):
+            print("usage: hapax-secret --key-file <path> <verb...>", file=sys.stderr)
+            return 2
+        os.environ["HAPAX_SECRET_KEY_FILE"] = rest[i + 1]
+        del rest[i : i + 2]
     if not is_store_host():
         tty = (not rest) or (rest[0] == "--delete")
         try:
-            argv = ssh_argv(tty=tty, rest=rest)
+            argv = ssh_argv(tty=tty, rest=args)
         except ValueError as exc:
             print(f"hapax-secret: {exc}", file=sys.stderr)
             return 2
@@ -422,7 +578,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return run_delete(rest[1], confirm=input)
     if rest[0] == "--list":
-        return _do_list()
+        return _do_list(as_json="--json" in rest[1:])
+    if rest[0] == "--audit":
+        return _do_audit(as_json="--json" in rest[1:])
+    if rest[0] == "--history":
+        if len(rest) < 2:
+            print("usage: hapax-secret --history <name>", file=sys.stderr)
+            return 2
+        try:
+            return _do_history(rest[1])
+        except ValueError as exc:
+            print(f"hapax-secret: {exc}", file=sys.stderr)
+            return 2
     if rest[0] == "--where":
         if len(rest) < 2:
             print("usage: hapax-secret --where <name>", file=sys.stderr)

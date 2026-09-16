@@ -29,7 +29,7 @@ import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 import reins_authorization
@@ -58,7 +58,8 @@ VERB_TABLE: dict[str, dict[str, Any]] = {
     # byte-binding + witnesses the attempt; it does NOT flip the current pointer (staging != swapping —
     # the swap is U6b-swap). Wired-before-swap is safe: staging is inert until a swap mechanism exists.
     "stage": {"wired": True, "mode": "governed"},
-    # secret has/get/put — FileStore backend, not pass. Values never enter the ledger.
+    # secret has/put/delete on the FileStore. No `get`: the surface never hands a value
+    # back over HTTP. Values never enter the ledger — only a sha256 digest.
     "secret": {"wired": True, "mode": "governed"},
 }
 
@@ -201,16 +202,37 @@ def _close_closures():
 
 
 def _secret_closures():
-    """POST /command/secret — has/get/put/delete on SecretStore (FileStore, not pass).
+    """POST /command/secret — has/put/delete on the FileStore SecretStore.
 
-    Target is the secret name. op in authority_packet: has | get | put.
+    Target is the secret name. op in authority_packet: has | put | delete.
     put carries value_b64 (or utf-8 value). Values never go in fold_delta or
     the ledger effect — only a sha256 digest.
+
+    TWO THINGS CHANGED HERE, both because the surface trusted its caller.
+
+    1. `get` IS GONE. It returned ``value_b64`` over HTTP to anyone who could
+       reach loopback. Nothing needed it: ``hapax-secret`` reads the store
+       directly on the store host, and off-host it forwards over ssh. A read
+       verb that no reader uses is pure attack surface.
+    2. THE CALLER IS AUTHENTICATED for the writing ops. ``verify`` used to
+       accept any dict with a truthy ``kind``, so every local account could
+       overwrite or delete any secret. put and delete now require the per-boot
+       capability token in the X-Reins-Secret-Token header. ``has`` does not:
+       it discloses only presence of a name the caller already had to know, and
+       requiring a token there would break nothing but would claim a
+       confidentiality property this surface does not have.
     """
     import base64
     import hashlib as _hashlib
 
-    from k0.key_capture import default_store
+    from k0.key_capture import (
+        SECRET_COMMAND_TOKEN_HEADER,
+        default_store,
+        secret_command_token_matches,
+        validate_secret_value,
+    )
+
+    _WRITING_OPS = ("put", "delete")
 
     def verify(packet: Any, target: str) -> bool:
         # Same envelope law as close/arm: a minted-looking packet with kind, plus
@@ -218,10 +240,18 @@ def _secret_closures():
         # 127.0.0.1). A new mint is out of scope — COMMAND never mints.
         if not (isinstance(packet, dict) and bool(target) and bool(packet.get("kind"))):
             return False
-        return packet.get("op") in ("has", "get", "put", "delete")
+        return packet.get("op") in ("has", *_WRITING_OPS)
 
     def preflight(env: reins_command.Envelope) -> bool:
-        return not env.preflight_receipt.get("blocked")
+        if env.preflight_receipt.get("blocked"):
+            return False
+        packet = env.authority_packet if isinstance(env.authority_packet, dict) else {}
+        if packet.get("op") not in _WRITING_OPS:
+            return True
+        # The token gates the WRITING ops, and it is checked in preflight rather
+        # than verify so a bad token reads as "this caller may not do this here"
+        # (409) and is distinguishable in the ledger from a malformed packet.
+        return secret_command_token_matches(env.headers.get(SECRET_COMMAND_TOKEN_HEADER))
 
     def transport(env: reins_command.Envelope) -> reins_command.Response:
         packet = env.authority_packet if isinstance(env.authority_packet, dict) else {}
@@ -233,12 +263,6 @@ def _secret_closures():
 
         if op == "has":
             payload["present"] = store.has(name)
-        elif op == "get":
-            raw = store.get(name)
-            payload["present"] = raw is not None
-            if raw is not None:
-                payload["value_b64"] = base64.b64encode(raw).decode("ascii")
-                digest = _hashlib.sha256(raw).hexdigest()
         elif op == "put":
             if packet.get("value_b64") is not None:
                 try:
@@ -259,6 +283,21 @@ def _secret_closures():
                     reason="put requires value_b64 or value",
                     legal_next="retry put with value_b64",
                 )
+            # THE single validation point. The TTY dialogue calls the same
+            # function for a fast local message, but this is the one a value
+            # cannot get past — anything that reaches the store came through
+            # here. No silent stripping: the refusal names the byte shapes.
+            try:
+                validate_secret_value(raw)
+            except ValueError as exc:
+                text = str(exc)
+                reason, _, legal_next = text.partition(". Next action: ")
+                return reins_command.Response(
+                    status="secret-refused",
+                    http=400,
+                    reason=reason,
+                    legal_next=legal_next or "re-enter the value without the named byte shapes",
+                )
             store.put(name, raw)
             digest = _hashlib.sha256(raw).hexdigest()
             payload["present"] = True
@@ -270,7 +309,7 @@ def _secret_closures():
             return reins_command.Response(
                 status="secret-refused",
                 http=400,
-                reason="op must be has, get, put, or delete",
+                reason="op must be has, put, or delete",
                 legal_next="set authority_packet.op",
             )
 
@@ -279,7 +318,7 @@ def _secret_closures():
             http=200,
             receipt_id=f"secret-{op}-{name}",
             fold_delta=None if digest is None else f"sha256:{digest}",
-            applied=op in ("put", "delete"),
+            applied=op in _WRITING_OPS,
             payload=payload,
         )
 
@@ -510,7 +549,7 @@ def _mount_command_router(
     }
 
     @app.post("/command/{verb}")
-    def command(verb: str, req: reins_command.CommandRequest) -> JSONResponse:
+    def command(verb: str, req: reins_command.CommandRequest, request: Request) -> JSONResponse:
         # 1. WITNESS the demand first — durable + idempotent, for every verb (A3.2).
         demand = ledger.record_demand(
             verb, req.target, req.idempotency_key,
@@ -565,6 +604,9 @@ def _mount_command_router(
             authority_packet=req.authority_packet,
             preflight_receipt=req.preflight_receipt,
             idempotency_key=req.idempotency_key,
+            # lower-cased once, here, so a predicate never has to know whether
+            # the client sent X-Reins-Secret-Token or x-reins-secret-token.
+            headers={k.lower(): v for k, v in request.headers.items()},
         )
         # the ledger already deduped the demand, so route_command sees a fresh emitted map. A RAISING
         # verify/preflight/transport must still leave a VERDICT — otherwise the demand strands as an
