@@ -661,7 +661,7 @@ def test_the_key_file_env_var_is_honoured(tmp_path: Path, monkeypatch: pytest.Mo
         pytest.param(b"\xef\xbb\xbfsk-abc", "bom", id="utf8-bom"),
         pytest.param(b"sk-abc\r\n", "cr", id="crlf"),
         pytest.param(b"sk-abc\n", "trailing-newline", id="trailing-newline"),
-        pytest.param(b"sk\nabc", "lf", id="embedded-newline"),
+        pytest.param(b"line-one\nline-two\n", "trailing-newline", id="multiline-trailing-newline"),
         pytest.param(b" sk-abc", "leading-whitespace", id="leading-space"),
         pytest.param(b"sk-abc ", "trailing-whitespace", id="trailing-space"),
         pytest.param(b"sk-abc\t", "trailing-whitespace", id="trailing-tab"),
@@ -688,6 +688,44 @@ def test_a_clean_value_is_accepted_and_binary_is_only_flagged(tmp_path: Path) ->
     # non-utf8 is INFORMATIONAL: a binary secret is legitimate
     assert secret_value_flags(b"\xff\xfe\x01") == ("non-utf8",)
     validate_secret_value(b"\xff\xfe\x01")
+
+
+def test_an_interior_newline_is_information_and_a_trailing_one_is_a_refusal() -> None:
+    """The ruling that corrected the first cut of this change, pinned in both
+    directions as it was stated: a two-line value is ACCEPTED, a value ending in
+    a newline is REFUSED.
+
+    Measured on the 184 live values: 7 carry interior newlines and all 7 are
+    documents — an ssh private key, a GitHub App private key, two Google
+    service-account JSONs, an rclone config, a BitLocker recovery blob, a GPG
+    passphrase file. Refusing interior LF would have failed every one at its
+    next put, which is the replica push failing on exactly the values that
+    matter most.
+    """
+    from k0.key_capture import (
+        INFORMATIONAL_VALUE_FLAGS,
+        REFUSABLE_VALUE_FLAGS,
+        secret_value_flags,
+        validate_secret_value,
+    )
+
+    assert "multiline" in INFORMATIONAL_VALUE_FLAGS
+    assert "multiline" not in REFUSABLE_VALUE_FLAGS
+    assert "trailing-newline" in REFUSABLE_VALUE_FLAGS
+
+    two_line = b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGlj"
+    assert secret_value_flags(two_line) == ("multiline",)
+    validate_secret_value(two_line)  # accepted
+
+    with pytest.raises(ValueError, match="trailing-newline"):
+        validate_secret_value(b"sk-single-line\n")
+
+    # and a multi-line value that ALSO ends in a newline is still refused: the
+    # trailing byte is the hazard, and being a document does not excuse it.
+    both = two_line + b"\n"
+    assert set(secret_value_flags(both)) == {"multiline", "trailing-newline"}
+    with pytest.raises(ValueError, match="trailing-newline"):
+        validate_secret_value(both)
 
 
 def test_the_store_itself_does_not_validate_so_migration_can_rewrite_anything(

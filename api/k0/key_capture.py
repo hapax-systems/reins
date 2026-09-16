@@ -243,15 +243,26 @@ SECRET_VALUE_FLAGS = (
     "nul",
     "cr",
     "trailing-newline",
-    "lf",
+    "multiline",
     "leading-whitespace",
     "trailing-whitespace",
     "non-utf8",
 )
 
-#: non-utf8 is INFORMATIONAL only: a binary secret is legitimate. Everything
-#: else here has been measured to break a consumer.
-REFUSABLE_VALUE_FLAGS = frozenset(set(SECRET_VALUE_FLAGS) - {"non-utf8"})
+#: INFORMATIONAL, not defects — reported by --audit, never refused at put.
+#:
+#: `multiline` was refusable in the first cut of this change and the ruling that
+#: corrected it was measured, not argued: 7 of the 184 live values carry
+#: interior newlines and every one is a document rather than a credential
+#: string — an ssh private key, a GitHub App private key, two Google
+#: service-account JSONs, an rclone config, a BitLocker recovery blob, a GPG
+#: passphrase file. Refusing interior LF would have failed all seven at their
+#: next put. `non-utf8` is here for the same reason: a binary secret is
+#: legitimate.
+INFORMATIONAL_VALUE_FLAGS = frozenset({"multiline", "non-utf8"})
+
+#: Everything else has been measured to break a consumer.
+REFUSABLE_VALUE_FLAGS = frozenset(set(SECRET_VALUE_FLAGS) - INFORMATIONAL_VALUE_FLAGS)
 
 
 def secret_value_flags(value: bytes) -> tuple[str, ...]:
@@ -261,6 +272,11 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
     ``ef bb bf`` (carried in from the pass store), and every consumer of those
     keys authenticated with three junk bytes on the front and got a 401 that
     named the provider, not the store.
+
+    ``multiline`` exists because the opposite happened: refusing interior
+    newlines would have refused seven live values that are documents rather than
+    credential strings. A flag vocabulary that cannot separate "this byte broke
+    a consumer" from "this value is a file" refuses the wrong half.
     """
     flags: list[str] = []
     if not value:
@@ -273,9 +289,13 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
         flags.append("cr")
     body = value[:-1] if value.endswith(b"\n") else value
     if value.endswith(b"\n"):
+        # Refusable. A bearer token sent as "sk-abc\n" gets a 401 that names the
+        # provider rather than the store — the same failure the BOM produced.
         flags.append("trailing-newline")
     if b"\n" in body:
-        flags.append("lf")
+        # INFORMATION. An interior newline means the value is a document, not a
+        # credential string, and documents are legitimate here.
+        flags.append("multiline")
     if value[:1] in (b" ", b"\t"):
         flags.append("leading-whitespace")
     if body[-1:] in (b" ", b"\t"):

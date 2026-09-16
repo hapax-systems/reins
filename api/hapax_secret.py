@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import TextIO
 
 from k0.key_capture import (
+    INFORMATIONAL_VALUE_FLAGS,
     SECRET_COMMAND_TOKEN_HEADER,
     FileStore,
     SecretCommandTokenError,
@@ -69,6 +70,11 @@ from k0.key_capture import (
     secret_value_flags,
     validate_secret_value,
 )
+
+#: Flags --audit prints but does not fail on: the store-level informational
+#: set, plus the migration state, which is a fact about the blob rather than
+#: about the value.
+_AUDIT_INFORMATIONAL = INFORMATIONAL_VALUE_FLAGS | {"legacy-format-v1"}
 
 ALIASES = {
     "litellm/master-key": "litellm-master-key",
@@ -490,7 +496,13 @@ def _do_audit(as_json: bool = False) -> int:
             flags.append("legacy-format-v1")
         row["flags"] = flags
         rows.append(row)
-    flagged = [r for r in rows if r["flags"]]
+    # A DEFECT is a byte shape measured to break a consumer, or a blob that
+    # cannot be read. `multiline`, `non-utf8` and `legacy-format-v1` are
+    # INFORMATION: a document, a binary secret and an unmigrated blob are each
+    # perfectly serviceable, and an audit that exits non-zero for them is an
+    # audit a watchdog learns to ignore.
+    defective = [r for r in rows if set(r["flags"]) - _AUDIT_INFORMATIONAL]
+    legacy = [r for r in rows if "legacy-format-v1" in r["flags"]]
     if as_json:
         print(json.dumps(rows, indent=2, sort_keys=True))
     else:
@@ -503,17 +515,24 @@ def _do_audit(as_json: bool = False) -> int:
             # test_secret_value_flags_only_ever_returns_the_closed_vocabulary,
             # and the audit tests assert the canary appears on neither stream
             # (mutation-covered: making --audit stop flagging turns them red).
-            print(  # codeql[py/clear-text-logging-sensitive-data]
-                f"{row['name']}\tv{row['format']}\t{','.join(flags)}"
-            )
-        if flagged:
+            line = f"{row['name']}\tv{row['format']}\t{','.join(flags)}"  # codeql[py/clear-text-logging-sensitive-data]
+            print(line)
+        if defective:
             print(
-                f"{len(flagged)} of {len(rows)} stored values carry a flag. "
-                "Next action: re-put each flagged name with hapax-secret (TTY put); "
-                "legacy-format-v1 clears itself on that put.",
+                f"{len(defective)} of {len(rows)} stored values carry a byte shape "
+                "that breaks consumers. Next action: re-put each one with "
+                "hapax-secret (TTY put); the value is refused at put until the "
+                "shape is gone.",
                 file=sys.stderr,
             )
-    return 1 if flagged else 0
+        if legacy:
+            print(
+                f"note: {len(legacy)} of {len(rows)} blobs are still format 1. They "
+                "read correctly; each migrates to format 2 on its next put. Not a "
+                "defect.",
+                file=sys.stderr,
+            )
+    return 1 if defective else 0
 
 
 def main(argv: list[str] | None = None) -> int:

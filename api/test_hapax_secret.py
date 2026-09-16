@@ -700,7 +700,7 @@ def test_audit_flags_a_bom_by_name_and_never_prints_a_value(tmp_path, capsysbina
     assert "api-mistral\tv2\tok" in out
     assert "sk-bom-canary" not in out and "sk-bom-canary" not in captured.err.decode()
     assert "sk-clean-canary" not in out and "sk-clean-canary" not in captured.err.decode()
-    assert b"1 of 2 stored values carry a flag" in captured.err
+    assert b"1 of 2 stored values carry a byte shape that breaks consumers" in captured.err
     assert b"Next action:" in captured.err
 
 
@@ -1017,3 +1017,24 @@ def test_the_key_boundary_is_documented(tmp_path):
     assert "REINS_SECRET_KEY_FILE" in text and "--key-file" in text
     assert "hapax-backup-gdrive-critical" in text, "the measured backup sets are named"
     assert "distro-work" in text, "including the two units that run nothing"
+
+
+def test_audit_reports_multiline_as_information_not_a_defect(tmp_path, capsysbinary):
+    """A document is not a defect. The 7 live multi-line values must show up in
+    an audit as information, and must not make the audit exit non-zero on their
+    own account."""
+    _seeded_store(
+        tmp_path,
+        {
+            "ssh-id-synthetic": b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGlj",
+            "api-openai": b"sk-single-line",
+        },
+    )
+    rc = hapax_secret.main(["--audit"])
+    captured = capsysbinary.readouterr()
+    out = captured.out.decode()
+    assert "ssh-id-synthetic\tv2\tmultiline" in out
+    assert "api-openai\tv2\tok" in out
+    assert rc == 0, "multiline alone must not make the audit fail"
+    assert captured.err == b""
+    assert "BEGIN PRIVATE KEY" not in out
