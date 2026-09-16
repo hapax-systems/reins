@@ -1284,3 +1284,35 @@ def test_the_registry_cannot_be_amended_by_a_caller() -> None:
         PROVIDER_PROBE_ENDPOINTS.pop("openai")
     with pytest.raises(AttributeError):
         PROVIDER_PROBE_ENDPOINTS.clear()
+
+
+def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
+    """What makes it safe to print flags beside a secret's name.
+
+    The flags are computed FROM the value, so a taint analyser flags the print.
+    They are not derived from it: every element comes from one closed literal
+    tuple. Fuzzed rather than asserted, so a future flag built by formatting
+    some of the value into a string is caught here rather than in review.
+    """
+    import random
+
+    from k0.key_capture import (
+        REFUSABLE_VALUE_FLAGS,
+        SECRET_VALUE_FLAGS,
+        secret_value_flags,
+    )
+
+    allowed = set(SECRET_VALUE_FLAGS)
+    assert REFUSABLE_VALUE_FLAGS <= allowed
+
+    rng = random.Random(20260916)
+    corpus = [b"", b"sk-plain", b"\xef\xbb\xbfsk", b" sk ", b"sk\r\n", b"sk\x00", b"\xff\xfe"]
+    corpus += [bytes(rng.randrange(256) for _ in range(rng.randrange(0, 40))) for _ in range(500)]
+    seen = set()
+    for value in corpus:
+        flags = secret_value_flags(value)
+        assert set(flags) <= allowed, f"undeclared flag from {len(value)} bytes"
+        seen |= set(flags)
+    assert seen >= {"empty", "bom", "cr", "nul", "leading-whitespace"}, (
+        "the corpus must actually exercise the vocabulary, or the check is vacuous"
+    )

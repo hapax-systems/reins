@@ -232,20 +232,26 @@ def _file_unwrap_any(key: bytes, blob: bytes, name: str) -> bytes:
 #: the ones in REFUSABLE_VALUE_FLAGS. Flag names, never values.
 _UTF8_BOM = b"\xef\xbb\xbf"
 
+#: THE CLOSED VOCABULARY. secret_value_flags returns a subset of exactly these
+#: literals and nothing derived from the value — that is what makes it safe to
+#: print a flag list beside a secret's name. Pinned by
+#: test_secret_value_flags_only_ever_returns_the_closed_vocabulary, which fuzzes
+#: the function and asserts no returned string is absent from this set.
+SECRET_VALUE_FLAGS = (
+    "empty",
+    "bom",
+    "nul",
+    "cr",
+    "trailing-newline",
+    "lf",
+    "leading-whitespace",
+    "trailing-whitespace",
+    "non-utf8",
+)
+
 #: non-utf8 is INFORMATIONAL only: a binary secret is legitimate. Everything
 #: else here has been measured to break a consumer.
-REFUSABLE_VALUE_FLAGS = frozenset(
-    {
-        "empty",
-        "bom",
-        "nul",
-        "cr",
-        "lf",
-        "trailing-newline",
-        "leading-whitespace",
-        "trailing-whitespace",
-    }
-)
+REFUSABLE_VALUE_FLAGS = frozenset(set(SECRET_VALUE_FLAGS) - {"non-utf8"})
 
 
 def secret_value_flags(value: bytes) -> tuple[str, ...]:

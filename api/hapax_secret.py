@@ -496,7 +496,16 @@ def _do_audit(as_json: bool = False) -> int:
     else:
         for row in rows:
             flags = row["flags"] or ["ok"]
-            print(f"{row['name']}\tv{row['format']}\t{','.join(flags)}")
+            # CodeQL taints `flags` because it is computed FROM the value. It is
+            # not derived from it: secret_value_flags returns a subset of the
+            # closed literal vocabulary k0.key_capture.SECRET_VALUE_FLAGS and
+            # nothing else, pinned by
+            # test_secret_value_flags_only_ever_returns_the_closed_vocabulary,
+            # and the audit tests assert the canary appears on neither stream
+            # (mutation-covered: making --audit stop flagging turns them red).
+            print(  # codeql[py/clear-text-logging-sensitive-data]
+                f"{row['name']}\tv{row['format']}\t{','.join(flags)}"
+            )
         if flagged:
             print(
                 f"{len(flagged)} of {len(rows)} stored values carry a flag. "
