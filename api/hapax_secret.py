@@ -503,18 +503,22 @@ def _do_audit(as_json: bool = False) -> int:
     # audit a watchdog learns to ignore.
     defective = [r for r in rows if set(r["flags"]) - _AUDIT_INFORMATIONAL]
     legacy = [r for r in rows if "legacy-format-v1" in r["flags"]]
+    # BOTH output paths below are the same sink, and a taint analyser is right
+    # to look at them: the flags are computed FROM the value. They are not
+    # DERIVED from it. secret_value_flags returns a subset of the closed literal
+    # vocabulary k0.key_capture.SECRET_VALUE_FLAGS and nothing else, which is
+    # pinned by test_secret_value_flags_only_ever_returns_the_closed_vocabulary
+    # — 507 fuzzed inputs, failing on any returned string outside the set, which
+    # is the real regression shape: a future flag that formats part of the value
+    # into its own name. Mutation M20 injects exactly that and turns it red. The
+    # audit tests additionally assert a canary value appears on neither stream.
+    # `rows` carries only name, format, and those flags.
     if as_json:
-        print(json.dumps(rows, indent=2, sort_keys=True))
+        payload = json.dumps(rows, indent=2, sort_keys=True)  # codeql[py/clear-text-logging-sensitive-data]
+        print(payload)
     else:
         for row in rows:
             flags = row["flags"] or ["ok"]
-            # CodeQL taints `flags` because it is computed FROM the value. It is
-            # not derived from it: secret_value_flags returns a subset of the
-            # closed literal vocabulary k0.key_capture.SECRET_VALUE_FLAGS and
-            # nothing else, pinned by
-            # test_secret_value_flags_only_ever_returns_the_closed_vocabulary,
-            # and the audit tests assert the canary appears on neither stream
-            # (mutation-covered: making --audit stop flagging turns them red).
             line = f"{row['name']}\tv{row['format']}\t{','.join(flags)}"  # codeql[py/clear-text-logging-sensitive-data]
             print(line)
         if defective:
