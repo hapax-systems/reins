@@ -512,15 +512,18 @@ def _do_audit(as_json: bool = False) -> int:
     # is the real regression shape: a future flag that formats part of the value
     # into its own name. Mutation M20 injects exactly that and turns it red. The
     # audit tests additionally assert a canary value appears on neither stream.
-    # `rows` carries only name, format, and those flags.
+    # `rows` carries only name, format, and those flags. The suppressions sit on
+    # the print() calls rather than the expressions that feed them, because that
+    # is where CodeQL reports the alert: annotating the source line just moved
+    # the alert to the sink, twice.
     if as_json:
-        payload = json.dumps(rows, indent=2, sort_keys=True)  # codeql[py/clear-text-logging-sensitive-data]
-        print(payload)
+        payload = json.dumps(rows, indent=2, sort_keys=True)
+        print(payload)  # codeql[py/clear-text-logging-sensitive-data]
     else:
         for row in rows:
             flags = row["flags"] or ["ok"]
-            line = f"{row['name']}\tv{row['format']}\t{','.join(flags)}"  # codeql[py/clear-text-logging-sensitive-data]
-            print(line)
+            line = f"{row['name']}\tv{row['format']}\t{','.join(flags)}"
+            print(line)  # codeql[py/clear-text-logging-sensitive-data]
         if defective:
             print(
                 f"{len(defective)} of {len(rows)} stored values carry a byte shape "
