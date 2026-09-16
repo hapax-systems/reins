@@ -243,6 +243,7 @@ SECRET_VALUE_FLAGS = (
     "nul",
     "cr",
     "trailing-newline",
+    "trailing-blank-line",
     "multiline",
     "leading-whitespace",
     "trailing-whitespace",
@@ -277,6 +278,15 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
     newlines would have refused seven live values that are documents rather than
     credential strings. A flag vocabulary that cannot separate "this byte broke
     a consumer" from "this value is a file" refuses the wrong half.
+
+    THE TRAILING-NEWLINE POLICY, stated once, here:
+
+      * a single-line value ends at its last non-whitespace byte;
+      * a multi-line value may end in exactly one LF;
+      * two trailing LFs are a defect either way.
+
+    The refusal exists to catch the single-line key pasted with its Enter, not
+    to reject files for being files.
     """
     flags: list[str] = []
     if not value:
@@ -288,14 +298,28 @@ def secret_value_flags(value: bytes) -> tuple[str, ...]:
     if b"\r" in value:
         flags.append("cr")
     body = value[:-1] if value.endswith(b"\n") else value
-    if value.endswith(b"\n"):
-        # Refusable. A bearer token sent as "sk-abc\n" gets a 401 that names the
-        # provider rather than the store — the same failure the BOM produced.
-        flags.append("trailing-newline")
-    if b"\n" in body:
+    # Multi-line means CONTENT on more than one line, so strip every trailing
+    # newline before looking. Stripping only one made "sk-key\n\n" — a
+    # single-line value with a blank line pasted onto it — read as a document
+    # and slip past the refusal it exists for.
+    multiline = b"\n" in value.rstrip(b"\n")
+    if multiline:
         # INFORMATION. An interior newline means the value is a document, not a
         # credential string, and documents are legitimate here.
         flags.append("multiline")
+    trailing = len(value) - len(value.rstrip(b"\n"))
+    if trailing >= 2:
+        # Refusable whatever the value is. One newline ends a file; two mean a
+        # blank line nobody intended, and for a document that is as much a
+        # transcription artefact as a BOM.
+        flags.append("trailing-blank-line")
+    elif trailing == 1 and not multiline:
+        # Refusable. A bearer token sent as "sk-abc\n" gets a 401 that names the
+        # provider rather than the store — the same failure the BOM produced.
+        # A DOCUMENT ending in one newline is not this: a PEM key, a
+        # service-account JSON and an rclone config are files, and a file ends
+        # in a newline. Refusing those refuses the values that matter most.
+        flags.append("trailing-newline")
     if value[:1] in (b" ", b"\t"):
         flags.append("leading-whitespace")
     if body[-1:] in (b" ", b"\t"):
@@ -321,9 +345,10 @@ def validate_secret_value(value: bytes) -> None:
             "secret value refused ("
             + ", ".join(bad)
             + "). Next action: re-enter the value with no byte-order mark, no "
-            "carriage return or newline (a trailing newline included), and no "
-            "leading or trailing space or tab; run hapax-secret --audit to see "
-            "which stored names carry the same shapes"
+            "carriage return, and no leading or trailing space or tab. A "
+            "single-line value must end at its last non-whitespace byte; a "
+            "multi-line value may end in exactly one newline, never two. Run "
+            "hapax-secret --audit to see which stored names carry the same shapes"
         )
 
 

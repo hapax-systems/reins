@@ -661,7 +661,7 @@ def test_the_key_file_env_var_is_honoured(tmp_path: Path, monkeypatch: pytest.Mo
         pytest.param(b"\xef\xbb\xbfsk-abc", "bom", id="utf8-bom"),
         pytest.param(b"sk-abc\r\n", "cr", id="crlf"),
         pytest.param(b"sk-abc\n", "trailing-newline", id="trailing-newline"),
-        pytest.param(b"line-one\nline-two\n", "trailing-newline", id="multiline-trailing-newline"),
+        pytest.param(b"line-one\nline-two\n\n", "trailing-blank-line", id="multiline-blank-line"),
         pytest.param(b" sk-abc", "leading-whitespace", id="leading-space"),
         pytest.param(b"sk-abc ", "trailing-whitespace", id="trailing-space"),
         pytest.param(b"sk-abc\t", "trailing-whitespace", id="trailing-tab"),
@@ -719,13 +719,6 @@ def test_an_interior_newline_is_information_and_a_trailing_one_is_a_refusal() ->
 
     with pytest.raises(ValueError, match="trailing-newline"):
         validate_secret_value(b"sk-single-line\n")
-
-    # and a multi-line value that ALSO ends in a newline is still refused: the
-    # trailing byte is the hazard, and being a document does not excuse it.
-    both = two_line + b"\n"
-    assert set(secret_value_flags(both)) == {"multiline", "trailing-newline"}
-    with pytest.raises(ValueError, match="trailing-newline"):
-        validate_secret_value(both)
 
 
 def test_the_store_itself_does_not_validate_so_migration_can_rewrite_anything(
@@ -1354,3 +1347,53 @@ def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
     assert seen >= {"empty", "bom", "cr", "nul", "leading-whitespace"}, (
         "the corpus must actually exercise the vocabulary, or the check is vacuous"
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted", "expected"),
+    [
+        pytest.param(b"sk-single", True, (), id="single-line-clean"),
+        pytest.param(b"sk-single\n", False, ("trailing-newline",), id="single-line-one-lf"),
+        pytest.param(b"sk-single\n\n", False, ("trailing-blank-line",), id="single-line-two-lf"),
+        pytest.param(b"line\nline", True, ("multiline",), id="multi-line-no-lf"),
+        pytest.param(b"line\nline\n", True, ("multiline",), id="multi-line-one-lf"),
+        pytest.param(
+            b"line\nline\n\n", False, ("multiline", "trailing-blank-line"), id="multi-line-two-lf"
+        ),
+        pytest.param(b"\n", False, ("trailing-newline",), id="bare-lf"),
+    ],
+)
+def test_the_trailing_newline_policy(value: bytes, accepted: bool, expected: tuple) -> None:
+    """Stated once in secret_value_flags' docstring, pinned once here:
+
+      * a single-line value ends at its last non-whitespace byte;
+      * a multi-line value may end in exactly one LF;
+      * two trailing LFs are a defect either way.
+
+    The refusal catches the single-line key pasted with its Enter. It is not for
+    rejecting files for being files — measured, three live values are a GitHub
+    App private key, a Google service-account JSON and an rclone config, and all
+    three end in the newline their format ends in.
+    """
+    from k0.key_capture import secret_value_flags, validate_secret_value
+
+    assert secret_value_flags(value) == expected
+    if accepted:
+        validate_secret_value(value)
+    else:
+        with pytest.raises(ValueError):
+            validate_secret_value(value)
+
+
+def test_a_document_that_ends_in_its_newline_round_trips_through_the_store(
+    tmp_path: Path,
+) -> None:
+    """The end-to-end the ruling is about: a PEM-shaped value stores and reads
+    back byte-identically, trailing newline included."""
+    from k0.key_capture import validate_secret_value
+
+    pem = b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGljLW5vdC1hLWtleQ==\n-----END PRIVATE KEY-----\n"
+    validate_secret_value(pem)
+    store = FileStore(root=tmp_path / "store")
+    store.put("ssh-id-synthetic", pem)
+    assert store.get("ssh-id-synthetic") == pem
