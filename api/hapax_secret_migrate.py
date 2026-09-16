@@ -19,6 +19,7 @@ Usage:
   python3 -m hapax_secret_migrate --source local [--dry-run]
   python3 -m hapax_secret_migrate --source ssh:hapax-podium.local [--dry-run]
   python3 -m hapax_secret_migrate --source local --tool gopass
+  <device exporter> | ssh hapax-appendix 'PYTHONPATH=… python3 -m hapax_secret_migrate --source stdin'
 Exit 0 = every entry is now in the FileStore or on the conflict list; 1 = some entry failed.
 """
 
@@ -67,10 +68,30 @@ def _remote_prefix(source: str) -> list[str]:
         if not host or host.startswith("-"):
             raise ValueError("ssh source must be ssh:<host>")
         return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", host]
-    raise ValueError("source must be 'local' or 'ssh:<host>'")
+    raise ValueError("source must be 'local', 'ssh:<host>' or 'stdin'")
+
+
+_STDIN_CACHE: dict[str, bytes] = {}
+
+
+def _load_stdin() -> None:
+    """Device-push mode: JSON lines {"path": "<store path>", "value_b64": "..."} on stdin,
+    produced on the device by the exporter in the handoff (values never on argv)."""
+    import base64
+    if _STDIN_CACHE:
+        return
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        item = json.loads(line)
+        _STDIN_CACHE[str(item["path"])] = base64.b64decode(str(item["value_b64"]), validate=True)
 
 
 def list_entries(source: str, tool: str) -> list[str]:
+    if source == "stdin":
+        _load_stdin()
+        return sorted(_STDIN_CACHE)
     prefix = _remote_prefix(source)
     if tool == "pass":
         out = _run(prefix + [_LIST_PASS]) if prefix else _run(["sh", "-c", _LIST_PASS])
@@ -80,6 +101,9 @@ def list_entries(source: str, tool: str) -> list[str]:
 
 
 def read_entry(source: str, tool: str, path: str) -> bytes:
+    if source == "stdin":
+        _load_stdin()
+        return _STDIN_CACHE[path]
     prefix = _remote_prefix(source)
     cmd = ["pass", "show", path] if tool == "pass" else ["gopass", "show", "-n", path]
     if prefix:
@@ -94,7 +118,7 @@ def normalize(raw: bytes) -> bytes:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="hapax-secret-migrate")
-    ap.add_argument("--source", required=True, help="local | ssh:<host>")
+    ap.add_argument("--source", required=True, help="local | ssh:<host> | stdin (device push: JSON lines)")
     ap.add_argument("--tool", choices=("pass", "gopass"), default="pass")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only", action="append", default=[], help="restrict to these store paths")
