@@ -1041,17 +1041,17 @@ def test_audit_reports_multiline_as_information_not_a_defect(tmp_path, capsysbin
 
 
 def test_audit_prints_flags_in_the_canonical_vocabulary_order(tmp_path, capsysbinary):
-    """The flags printed are elements of k0.key_capture.SECRET_VALUE_FLAGS
-    selected by membership, not the strings secret_value_flags returned. That is
+    """The flags printed are elements of k0.key_capture.VALUE_SHAPE_FLAGS
+    selected by membership, not the strings value_shape_flags returned. That is
     what keeps a secret's bytes out of stdout as a property of the code rather
     than of a comment — and it makes the order canonical, which is pinned here
     so a refactor back to the passthrough is visible."""
-    from k0.key_capture import SECRET_VALUE_FLAGS
+    from k0.key_capture import VALUE_SHAPE_FLAGS
 
     _seeded_store(tmp_path, {"api-openai": b"\xef\xbb\xbf line\nline\n\n"})
     hapax_secret.main(["--audit"])
     printed = capsysbinary.readouterr().out.decode().strip().split("\t")[-1].split(",")
     assert printed == ["bom", "trailing-blank-line", "multiline", "leading-whitespace"]
     assert set(printed) == {"bom", "trailing-blank-line", "multiline", "leading-whitespace"}
-    order = [SECRET_VALUE_FLAGS.index(f) for f in printed]
+    order = [VALUE_SHAPE_FLAGS.index(f) for f in printed]
     assert order == sorted(order), "printed order must follow the declared vocabulary"

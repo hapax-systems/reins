@@ -421,13 +421,13 @@ def test_the_pass_backend_is_gone(tmp_path: Path) -> None:
 
 def test_put_writes_format_2_and_get_still_reads_a_format_1_blob(tmp_path: Path) -> None:
     """A v1 store keeps working through the rollout, and the first put migrates."""
-    from k0.key_capture import _file_wrap, secret_blob_format
+    from k0.key_capture import _file_wrap, blob_format_of
 
     store = FileStore(root=tmp_path / "store")
     key = store._key()
     blob_path = store._blob_path(NAME)
     blob_path.write_bytes(_file_wrap(key, b"\x00" * 16, b"sk-legacy-v1"))
-    assert secret_blob_format(blob_path.read_bytes()) == 1
+    assert blob_format_of(blob_path.read_bytes()) == 1
     assert store.blob_format(NAME) == 1
     assert store.get(NAME) == b"sk-legacy-v1", "a v1 blob must still read"
 
@@ -548,13 +548,13 @@ def test_a_v1_blob_whose_nonce_opens_with_the_v2_header_refuses_rather_than_lyin
     it is why there is no "retry as v1" arm: that fallback would give a genuine
     v2 tamper a second, weaker path instead of refusing.
     """
-    from k0.key_capture import _SECRET_MAGIC_V2, _file_wrap, secret_blob_format
+    from k0.key_capture import _SECRET_MAGIC_V2, _file_wrap, blob_format_of
 
     store = FileStore(root=tmp_path / "store")
     key = store._key()
     collide_nonce = _SECRET_MAGIC_V2 + b"\x07" * 12
     blob = _file_wrap(key, collide_nonce, b"sk-unlucky")
-    assert secret_blob_format(blob) == 2, "by construction it looks like v2"
+    assert blob_format_of(blob) == 2, "by construction it looks like v2"
     store._blob_path(NAME).write_bytes(blob)
 
     with pytest.raises(SecretIntegrityError):
@@ -619,6 +619,43 @@ def test_history_files_are_not_listed_as_secrets(tmp_path: Path) -> None:
     assert store.names() == (NAME,)
 
 
+def test_a_dotted_name_is_not_a_prefix_of_another_names_history(tmp_path: Path) -> None:
+    """Names may contain dots, so ``api`` and ``api.openai`` are both legal and
+    the glob ``api.*.bin`` matches the longer name's archives too. Found in
+    review of PR 44: history("api") reported api.openai's stamps, put("api")
+    pruned api.openai's archives toward api's cap, and delete("api") destroyed
+    api.openai's archived ciphertext. Each of the three call sites is pinned
+    here; the live store has no dotted names today, so this is the grammar's
+    hazard rather than a measured incident."""
+    store = FileStore(root=tmp_path / "store")
+    for i in range(3):
+        store.put("api", f"sk-short-{i}".encode())
+    for i in range(3):
+        store.put("api.openai", f"sk-long-{i}".encode())
+    hdir = tmp_path / "store" / ".history"
+    long_archives = sorted(hdir.glob("api.openai.*.bin"))
+    assert len(long_archives) == 2, "the longer name has exactly its own two supersessions"
+
+    # history(): the short name reports only its own stamps.
+    assert len(store.history("api")) == 2
+    assert all("openai" not in stamp for stamp in store.history("api"))
+    assert len(store.history("api.openai")) == 2
+
+    # _archive() pruning: the short name's cap counts only its own archives.
+    for i in range(3, 10):
+        store.put("api", f"sk-short-{i}".encode())
+    assert len(store.history("api")) == 5, "bounded by ITS OWN supersessions"
+    assert sorted(hdir.glob("api.openai.*.bin")) == long_archives, "prune touched another name"
+
+    # delete(): purging the short name's history leaves the longer name whole.
+    assert store.delete("api") is True
+    assert sorted(hdir.glob("api.openai.*.bin")) == long_archives, "delete purged another name"
+    assert store.get("api.openai") == b"sk-long-2"
+    assert len(store.history("api.openai")) == 2
+    short = store.history("api")
+    assert len(short) == 1 and short[0].endswith("(deleted)")
+
+
 # ---------------------------------------------------------------------------
 # The key boundary.
 # ---------------------------------------------------------------------------
@@ -670,9 +707,9 @@ def test_the_key_file_env_var_is_honoured(tmp_path: Path, monkeypatch: pytest.Mo
     ],
 )
 def test_a_value_with_a_known_breaking_byte_shape_is_refused(value: bytes, flag: str) -> None:
-    from k0.key_capture import secret_value_flags, validate_secret_value
+    from k0.key_capture import validate_secret_value, value_shape_flags
 
-    assert flag in secret_value_flags(value)
+    assert flag in value_shape_flags(value)
     with pytest.raises(ValueError) as exc:
         validate_secret_value(value)
     assert flag in str(exc.value)
@@ -681,12 +718,12 @@ def test_a_value_with_a_known_breaking_byte_shape_is_refused(value: bytes, flag:
 
 
 def test_a_clean_value_is_accepted_and_binary_is_only_flagged(tmp_path: Path) -> None:
-    from k0.key_capture import secret_value_flags, validate_secret_value
+    from k0.key_capture import validate_secret_value, value_shape_flags
 
     validate_secret_value(b"sk-proj-abcdef0123456789")
-    assert secret_value_flags(b"sk-proj-abcdef0123456789") == ()
+    assert value_shape_flags(b"sk-proj-abcdef0123456789") == ()
     # non-utf8 is INFORMATIONAL: a binary secret is legitimate
-    assert secret_value_flags(b"\xff\xfe\x01") == ("non-utf8",)
+    assert value_shape_flags(b"\xff\xfe\x01") == ("non-utf8",)
     validate_secret_value(b"\xff\xfe\x01")
 
 
@@ -705,8 +742,8 @@ def test_an_interior_newline_is_information_and_a_trailing_one_is_a_refusal() ->
     from k0.key_capture import (
         INFORMATIONAL_VALUE_FLAGS,
         REFUSABLE_VALUE_FLAGS,
-        secret_value_flags,
         validate_secret_value,
+        value_shape_flags,
     )
 
     assert "multiline" in INFORMATIONAL_VALUE_FLAGS
@@ -714,7 +751,7 @@ def test_an_interior_newline_is_information_and_a_trailing_one_is_a_refusal() ->
     assert "trailing-newline" in REFUSABLE_VALUE_FLAGS
 
     two_line = b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGlj"
-    assert secret_value_flags(two_line) == ("multiline",)
+    assert value_shape_flags(two_line) == ("multiline",)
     validate_secret_value(two_line)  # accepted
 
     with pytest.raises(ValueError, match="trailing-newline"):
@@ -1317,7 +1354,7 @@ def test_the_registry_cannot_be_amended_by_a_caller() -> None:
         PROVIDER_PROBE_ENDPOINTS.clear()
 
 
-def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
+def test_value_shape_flags_only_ever_returns_the_closed_vocabulary() -> None:
     """What makes it safe to print flags beside a secret's name.
 
     The flags are computed FROM the value, so a taint analyser flags the print.
@@ -1329,11 +1366,11 @@ def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
 
     from k0.key_capture import (
         REFUSABLE_VALUE_FLAGS,
-        SECRET_VALUE_FLAGS,
-        secret_value_flags,
+        VALUE_SHAPE_FLAGS,
+        value_shape_flags,
     )
 
-    allowed = set(SECRET_VALUE_FLAGS)
+    allowed = set(VALUE_SHAPE_FLAGS)
     assert REFUSABLE_VALUE_FLAGS <= allowed
 
     rng = random.Random(20260916)
@@ -1341,7 +1378,7 @@ def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
     corpus += [bytes(rng.randrange(256) for _ in range(rng.randrange(0, 40))) for _ in range(500)]
     seen = set()
     for value in corpus:
-        flags = secret_value_flags(value)
+        flags = value_shape_flags(value)
         assert set(flags) <= allowed, f"undeclared flag from {len(value)} bytes"
         seen |= set(flags)
     assert seen >= {"empty", "bom", "cr", "nul", "leading-whitespace"}, (
@@ -1364,7 +1401,7 @@ def test_secret_value_flags_only_ever_returns_the_closed_vocabulary() -> None:
     ],
 )
 def test_the_trailing_newline_policy(value: bytes, accepted: bool, expected: tuple) -> None:
-    """Stated once in secret_value_flags' docstring, pinned once here:
+    """Stated once in value_shape_flags' docstring, pinned once here:
 
       * a single-line value ends at its last non-whitespace byte;
       * a multi-line value may end in exactly one LF;
@@ -1375,9 +1412,9 @@ def test_the_trailing_newline_policy(value: bytes, accepted: bool, expected: tup
     App private key, a Google service-account JSON and an rclone config, and all
     three end in the newline their format ends in.
     """
-    from k0.key_capture import secret_value_flags, validate_secret_value
+    from k0.key_capture import validate_secret_value, value_shape_flags
 
-    assert secret_value_flags(value) == expected
+    assert value_shape_flags(value) == expected
     if accepted:
         validate_secret_value(value)
     else:
@@ -1418,6 +1455,6 @@ def test_every_shape_a_value_carries_is_reported_in_one_pass(value: bytes, expec
     shape and meet the next on the retry. Both checks now look past the BOM and
     past every trailing newline.
     """
-    from k0.key_capture import secret_value_flags
+    from k0.key_capture import value_shape_flags
 
-    assert set(secret_value_flags(value)) == set(expected)
+    assert set(value_shape_flags(value)) == set(expected)

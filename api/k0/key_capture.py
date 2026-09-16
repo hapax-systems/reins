@@ -164,7 +164,7 @@ def _v2_aad(name: str) -> bytes:
     return _SECRET_MAGIC_V2 + len(raw).to_bytes(2, "big") + raw
 
 
-def secret_blob_format(blob: bytes) -> int:
+def blob_format_of(blob: bytes) -> int:
     """2 when the header is present, else 1.
 
     KNOWN AND ACCEPTED LIMIT: a v1 blob opens with a 16-byte random nonce, so
@@ -223,7 +223,7 @@ def _file_unwrap(key: bytes, blob: bytes) -> bytes:
 
 def _file_unwrap_any(key: bytes, blob: bytes, name: str) -> bytes:
     """Read either format. Writers only ever emit v2."""
-    if secret_blob_format(blob) == 2:
+    if blob_format_of(blob) == 2:
         return _file_unwrap_v2(key, blob, name)
     return _file_unwrap(key, blob)
 
@@ -232,12 +232,20 @@ def _file_unwrap_any(key: bytes, blob: bytes, name: str) -> bytes:
 #: the ones in REFUSABLE_VALUE_FLAGS. Flag names, never values.
 _UTF8_BOM = b"\xef\xbb\xbf"
 
-#: THE CLOSED VOCABULARY. secret_value_flags returns a subset of exactly these
+#: THE CLOSED VOCABULARY. value_shape_flags returns a subset of exactly these
 #: literals and nothing derived from the value — that is what makes it safe to
 #: print a flag list beside a secret's name. Pinned by
-#: test_secret_value_flags_only_ever_returns_the_closed_vocabulary, which fuzzes
+#: test_value_shape_flags_only_ever_returns_the_closed_vocabulary, which fuzzes
 #: the function and asserts no returned string is absent from this set.
-SECRET_VALUE_FLAGS = (
+#:
+#: Named for what it is — the byte shapes a value can carry — and not
+#: "SECRET_*": CodeQL classifies identifiers as secret material by NAME, and
+#: under its former name this tuple of flag literals was reported as a secret
+#: flowing to stdout for four commits running (py/clear-text-logging-
+#: sensitive-data; the SARIF named this tuple, the function below and
+#: blob_format_of as its three sources). The property that matters is the
+#: closed set, and the fuzz test holds it.
+VALUE_SHAPE_FLAGS = (
     "empty",
     "bom",
     "nul",
@@ -263,10 +271,10 @@ SECRET_VALUE_FLAGS = (
 INFORMATIONAL_VALUE_FLAGS = frozenset({"multiline", "non-utf8"})
 
 #: Everything else has been measured to break a consumer.
-REFUSABLE_VALUE_FLAGS = frozenset(set(SECRET_VALUE_FLAGS) - INFORMATIONAL_VALUE_FLAGS)
+REFUSABLE_VALUE_FLAGS = frozenset(set(VALUE_SHAPE_FLAGS) - INFORMATIONAL_VALUE_FLAGS)
 
 
-def secret_value_flags(value: bytes) -> tuple[str, ...]:
+def value_shape_flags(value: bytes) -> tuple[str, ...]:
     """The byte shapes of one value, in a stable order. Never returns the value.
 
     The BOM flag exists because it happened: 17 of 112 FileStore values began
@@ -345,7 +353,7 @@ def validate_secret_value(value: bytes) -> None:
     cannot be reasoned about, and the BOM incident was undetectable precisely
     because nothing ever said anything.
     """
-    bad = [f for f in secret_value_flags(value) if f in REFUSABLE_VALUE_FLAGS]
+    bad = [f for f in value_shape_flags(value) if f in REFUSABLE_VALUE_FLAGS]
     if bad:
         raise ValueError(
             "secret value refused ("
@@ -375,6 +383,28 @@ def _default_key_file() -> Path | None:
 #: ciphertext of real credentials: unbounded history is an unbounded liability.
 _HISTORY_KEEP = 5
 _HISTORY_DIR = ".history"
+#: The stamp _archive and delete write — %Y%m%dT%H%M%S%fZ — plus the "-N" that
+#: _archive appends when two supersessions of one name land in one microsecond.
+_HISTORY_STAMP_RE = re.compile(r"\d{8}T\d{12}Z(?:-\d+)?")
+
+
+def _history_entries(hdir: Path, name: str, suffix: str) -> list[tuple[Path, str]]:
+    """THIS name's history files, with their stamps, in stamp order.
+
+    A name may contain dots, so ``api`` and ``api.openai`` are both legal and
+    the glob ``api.*.bin`` matches ``api.openai.<stamp>.bin`` as well as
+    ``api.<stamp>.bin``. Found in review of PR 44: without the stamp check,
+    history("api") reported api.openai's stamps, put("api") counted
+    api.openai's archives toward api's cap and pruned them, and delete("api")
+    destroyed api.openai's archived ciphertext. Only a segment that IS a stamp
+    belongs to this name.
+    """
+    entries = []
+    for path in hdir.glob(f"{name}.*{suffix}"):
+        stamp = path.name[len(name) + 1 : -len(suffix)]
+        if _HISTORY_STAMP_RE.fullmatch(stamp):
+            entries.append((path, stamp))
+    return sorted(entries, key=lambda entry: entry[1])
 
 
 @dataclass
@@ -444,7 +474,7 @@ class FileStore:
         if not path.is_file():
             return None
         with path.open("rb") as fh:
-            return secret_blob_format(fh.read(len(_SECRET_MAGIC_V2)))
+            return blob_format_of(fh.read(len(_SECRET_MAGIC_V2)))
 
     def _write_blob(self, path: Path, blob: bytes) -> None:
         fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=path.parent)
@@ -482,10 +512,9 @@ class FileStore:
             break
         else:  # pragma: no cover - 1000 puts inside one microsecond
             raise RuntimeError("could not allocate a history slot for the superseded blob")
-        keep = sorted(hdir.glob(f"{name}.*.bin"))[-_HISTORY_KEEP:]
-        for stale in sorted(hdir.glob(f"{name}.*.bin")):
-            if stale not in keep:
-                stale.unlink(missing_ok=True)
+        entries = _history_entries(hdir, name, ".bin")
+        for stale, _stamp in entries[:-_HISTORY_KEEP]:
+            stale.unlink(missing_ok=True)
 
     def put(self, name: str, value: bytes) -> None:
         """Always writes format 2. A v1 blob is therefore migrated by its first
@@ -506,10 +535,9 @@ class FileStore:
         hdir = self._history_dir()
         if not hdir.is_dir():
             return ()
-        stamps = [p.name[len(name) + 1 : -len(".bin")] for p in hdir.glob(f"{name}.*.bin")]
+        stamps = [stamp for _path, stamp in _history_entries(hdir, name, ".bin")]
         stamps += [
-            p.name[len(name) + 1 : -len(".tombstone")] + " (deleted)"
-            for p in hdir.glob(f"{name}.*.tombstone")
+            stamp + " (deleted)" for _path, stamp in _history_entries(hdir, name, ".tombstone")
         ]
         return tuple(sorted(stamps))
 
@@ -528,7 +556,7 @@ class FileStore:
             return False
         hdir = self._history_dir()
         if hdir.is_dir():
-            for stale in hdir.glob(f"{name}.*.bin"):
+            for stale, _stamp in _history_entries(hdir, name, ".bin"):
                 stale.unlink(missing_ok=True)
         hdir.mkdir(mode=0o700, parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")

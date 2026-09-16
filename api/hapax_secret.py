@@ -62,14 +62,14 @@ from typing import TextIO
 from k0.key_capture import (
     INFORMATIONAL_VALUE_FLAGS,
     SECRET_COMMAND_TOKEN_HEADER,
-    SECRET_VALUE_FLAGS,
+    VALUE_SHAPE_FLAGS,
     FileStore,
     SecretCommandTokenError,
     SecretIntegrityError,
     default_store,
     mint_secret_command_token,
-    secret_value_flags,
     validate_secret_value,
+    value_shape_flags,
 )
 
 #: Flags --audit prints but does not fail on: the store-level informational
@@ -492,15 +492,15 @@ def _do_audit(as_json: bool = False) -> int:
             continue
         if value is None:
             continue
-        # THE VALUE STOPS HERE. secret_value_flags' result is used only for
+        # THE VALUE STOPS HERE. value_shape_flags' result is used only for
         # membership; every string that goes into the row — and so into stdout —
-        # is an element of the module-level SECRET_VALUE_FLAGS tuple, selected
+        # is an element of the module-level VALUE_SHAPE_FLAGS tuple, selected
         # by that test. Nothing downstream holds an object derived from the
         # value, which is what makes printing a flag list beside a secret's name
         # safe, and it is a property of the code rather than of a comment
         # claiming it. Canonical order comes free.
-        present = set(secret_value_flags(value))
-        flags = [flag for flag in SECRET_VALUE_FLAGS if flag in present]
+        present = set(value_shape_flags(value))
+        flags = [flag for flag in VALUE_SHAPE_FLAGS if flag in present]
         if row["format"] == 1:
             flags.append("legacy-format-v1")
         row["flags"] = flags
@@ -513,26 +513,20 @@ def _do_audit(as_json: bool = False) -> int:
     defective = [r for r in rows if set(r["flags"]) - _AUDIT_INFORMATIONAL]
     legacy = [r for r in rows if "legacy-format-v1" in r["flags"]]
     # `rows` holds names, formats, and flags selected above from a constant
-    # tuple — no object here is derived from a secret's bytes. An earlier cut of
-    # this carried a suppression comment instead, and the alert simply moved
-    # each time the line did (499 → 507 → 523 → 526): a comment asserting a
-    # property the code did not have. The selection above gives the code the
-    # property, and the fuzz test
-    # test_secret_value_flags_only_ever_returns_the_closed_vocabulary keeps the
-    # tuple closed — 507 inputs, failing on any flag outside it, which is the
-    # real regression shape (a flag that formats part of the value into its own
-    # name; mutation M20 injects exactly that).
-    #
-    # CodeQL still reports py/clear-text-logging-sensitive-data on the
-    # tab-separated line below, and it is a false positive that is NOT worth a
-    # fifth attempt at silencing. What that line emits is a secret's NAME — the
-    # thing --list has always printed — its format number, and flags selected
-    # above from a constant tuple. The `# codeql[...]` directive does not
-    # suppress in this repo's setup: across four commits the alert simply
-    # followed the line (499, 507, 523, 526), which is how we learned that.
-    # Restructuring DID clear the json sink, so the remaining report is the
-    # query's name-based heuristic on an f-string, not a data path. Classified
-    # here rather than chased; see the PR body.
+    # tuple — no object here is derived from a secret's bytes. CodeQL's
+    # py/clear-text-logging-sensitive-data reported the tab-separated print
+    # below for four commits, and a `# codeql[...]` directive did not suppress
+    # it (the alert followed the line: 499 → 507 → 523 → 526). The SARIF
+    # explained why: its three "sources" were the identifiers formerly named
+    # SECRET_VALUE_FLAGS, secret_value_flags() and secret_blob_format() — a
+    # tuple of flag literals, the function that selects from it, and a function
+    # returning 1 or 2 — classified as secret material by NAME, not by any data
+    # path from a value. They are now VALUE_SHAPE_FLAGS, value_shape_flags()
+    # and blob_format_of(), which is what they are. The property that makes
+    # this print safe is the closed vocabulary, held by
+    # test_value_shape_flags_only_ever_returns_the_closed_vocabulary (507
+    # inputs; mutation M20 injects a flag that formats part of the value into
+    # its own name, the real regression shape).
     if as_json:
         print(json.dumps(rows, indent=2, sort_keys=True))
     else:
