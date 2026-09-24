@@ -19,6 +19,17 @@ func TestSessionGlyphForAStaleProducerRowIsDarkNotAbsent(t *testing.T) {
 	}
 }
 
+// Only a measured state=offline earns ○. A row that is not alive with any other state — empty,
+// missing, or a value this build does not know — has no measured offline behind it.
+func TestSessionGlyphNeverShowsMeasuredOfflineWithoutAnOfflineState(t *testing.T) {
+	for _, state := range []string{"", "idle", "somethingnew"} {
+		s := Session{Role: "lane-x", State: state}
+		if got := sessionGlyph(s, false); got == "○" {
+			t.Fatalf("state=%q alive=false rendered ○ (measured offline) without a measured offline", state)
+		}
+	}
+}
+
 func TestSessionGlyphForAMeasuredOfflineRowStaysAbsent(t *testing.T) {
 	s := Session{Role: "lane-18", Platform: "codex", State: "offline", Readiness: "off", Blocker: "offline"}
 	if got := sessionGlyph(s, false); got != "○" {
