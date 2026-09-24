@@ -125,6 +125,17 @@ def test_an_unmeasurable_producer_age_is_stale():
     assert reins_read._producer_verdict(None) == "stale"
 
 
+def test_a_future_producer_mtime_is_unmeasurable_not_fresh(tmp_path, monkeypatch):
+    """A negative age (mtime ahead of the clock: skew, a clock stepped back, a touched file) measures
+    nothing; `age <= threshold` would call it live and let last-tick rows assert alive again."""
+    assert reins_read._producer_verdict(-0.001) == "stale"
+    capture = _load(CAPTURES[0])
+    client = _replay(capture, tmp_path, monkeypatch, producer_age_s=-3600)
+    body = client.get("/read/sessions").json()
+    assert body["producer"]["state"] == "stale"
+    assert not any(row["alive"] for row in body["sessions"])
+
+
 # ── threshold: derived from the producer's measured cadence, boundary pinned ─────────────────────
 #
 # The coordinator's loop sleeps max(1, tick_s - elapsed) with tick_s = 30 (code default and the
