@@ -730,7 +730,8 @@ _now = time.time
 
 
 def _producer_verdict(age_s: float | None) -> str:
-    return "live" if age_s is not None and age_s <= _PRODUCER_STALE_S else "stale"
+    # A negative age (mtime ahead of this clock) measures nothing; it is not fresher than fresh.
+    return "live" if age_s is not None and 0.0 <= age_s <= _PRODUCER_STALE_S else "stale"
 
 
 def _session_snapshot() -> tuple[list[tuple[str, dict]], dict]:
