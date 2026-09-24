@@ -1178,6 +1178,10 @@ func sessionGlyph(s Session, airOn bool) string {
 		return "▒"
 	}
 	switch {
+	case s.State == "unknown":
+		// The API's stale-producer row: alive=false means "cannot assert alive", not a measured
+		// offline. ▒ is the starved-producer mark; ○ is the measured negative (dark != absent).
+		return "▒"
 	case s.Stalled:
 		return "!"
 	case !s.Alive:
