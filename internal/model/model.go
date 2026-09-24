@@ -441,9 +441,9 @@ func (m Model) yankSessionField(key string) (field, val string, ok bool) {
 	case "e":
 		return "route_evidence_ref", s.RouteEvidenceRef, true
 	case "o":
-		return "output_age_s", fmt.Sprintf("%.1f", s.OutputAgeS), true
+		return "output_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1f", s.OutputAgeS)), true
 	case "l":
-		return "relay_age_s", fmt.Sprintf("%.1f", s.RelayAgeS), true
+		return "relay_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1f", s.RelayAgeS)), true
 	}
 	return "", "", false
 }
@@ -3603,11 +3603,11 @@ func sessionFieldValue(s grammar.Session, field string) string {
 	case "attention":
 		return fmt.Sprintf("%.2f", s.Attention)
 	case "alive":
-		return fmt.Sprintf("%t", s.Alive)
+		return grammar.LivenessText(s, fmt.Sprintf("%t", s.Alive))
 	case "idle":
-		return fmt.Sprintf("%t", s.Idle)
+		return grammar.LivenessText(s, fmt.Sprintf("%t", s.Idle))
 	case "stalled":
-		return fmt.Sprintf("%t", s.Stalled)
+		return grammar.LivenessText(s, fmt.Sprintf("%t", s.Stalled))
 	case "claimed_task":
 		return s.ClaimedTask
 	case "route_id":
@@ -3621,9 +3621,9 @@ func sessionFieldValue(s grammar.Session, field string) string {
 	case "route_evidence_ref":
 		return s.RouteEvidenceRef
 	case "output_age_s":
-		return fmt.Sprintf("%.1f", s.OutputAgeS)
+		return grammar.LivenessText(s, fmt.Sprintf("%.1f", s.OutputAgeS))
 	case "relay_age_s":
-		return fmt.Sprintf("%.1f", s.RelayAgeS)
+		return grammar.LivenessText(s, fmt.Sprintf("%.1f", s.RelayAgeS))
 	}
 	return ""
 }

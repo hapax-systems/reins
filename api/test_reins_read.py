@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import reins_read
 from reins_read import (
     _page_before,
-    _raw_sessions,
+    _session_snapshot,
     to_trace_row,
     _route_binding_index,
     _session_route_binding,
@@ -590,7 +590,7 @@ def test_to_session_shape_state_precedence_and_air():
         "alive": True, "idle": True, "stalled": True, "claimed_task": "private-task",
         "output_age_s": "12.34", "relay_age_s": None,
     }
-    out = to_session("cx-p0", lane, allowlist=["role", "platform", "state", "output_age_s"])
+    out = to_session("cx-p0", lane, allowlist=["role", "platform", "state", "output_age_s"], producer_live=True)
     assert out["role"] == "cx-p0" and out["state"] == "stalled"
     assert out["output_age_s"] == 12.3 and out["relay_age_s"] == 0.0
     assert out["readiness"] == "stall" and out["blocker"] == "stalled" and out["attention"] >= 0.95
@@ -601,11 +601,11 @@ def test_to_session_shape_state_precedence_and_air():
 
 def test_session_attention_sort_prioritizes_cutover_lanes():
     sessions = [
-        to_session("alpha", {"role": "alpha", "platform": "codex", "alive": False}, EXPECTED_DEFAULT_ALLOW),
+        to_session("alpha", {"role": "alpha", "platform": "codex", "alive": False}, EXPECTED_DEFAULT_ALLOW, producer_live=True),
         to_session("beta", {
             "role": "beta", "session": "tmux-beta", "platform": "codex",
             "alive": True, "claimed_task": "task-beta", "output_age_s": 30, "relay_age_s": 40,
-        }, EXPECTED_DEFAULT_ALLOW),
+        }, EXPECTED_DEFAULT_ALLOW, producer_live=True),
     ]
     ranked = sorted(sessions, key=_session_sort_key)
     assert [s["role"] for s in ranked] == ["beta", "alpha"]
@@ -621,8 +621,9 @@ def test_read_sessions_uses_configured_state_path(monkeypatch, tmp_path):
         }
     }))
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state))
-    raw = _raw_sessions()
-    sessions = [to_session(name, lane, ["role", "platform", "state"]) for name, lane in raw]
+    raw, producer = _session_snapshot()
+    assert producer["state"] == "live"
+    sessions = [to_session(name, lane, ["role", "platform", "state"], producer_live=True) for name, lane in raw]
     assert [s["role"] for s in sessions] == ["alpha", "beta"]
     assert sessions[0]["state"] == "active"
     assert sessions[0]["air"]["session"] == "deny"
@@ -718,6 +719,7 @@ def test_session_route_binding_prefers_launch_receipt_and_marks_policy_only(tmp_
         {**alpha, "alive": True},
         ["role", "platform", "state", "route_id", "mode", "profile", "route_binding_state"],
         _session_route_binding("alpha", alpha, bindings, source_state, source_path),
+        producer_live=True,
     )
     assert session["route_id"] == "codex.headless.full"
     assert session["route_binding_state"] == "bound"
@@ -785,7 +787,7 @@ body is not parsed
     detail = to_session_detail("cx-p0", lane, allowlist=["role", "platform", "state", "evidence_count"], cfg={
         "cc_tasks_active": str(tasks),
         "session_transcript_roots": [str(transcripts)],
-    })
+    }, producer_live=True)
     assert detail["task"]["status"] == "claimed"
     assert detail["readiness"] == "claim" and detail["blocker"] == "none"
     assert detail["resume"]["ready"] is False

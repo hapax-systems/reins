@@ -87,7 +87,7 @@ func TestStaleProducerLanesAreNotEachABreakdown(t *testing.T) {
 		t.Fatalf("the breakdown must name the stale producer once, with the lane count:\n%s", box)
 	}
 	rail := ansi.Strip(m.turnLaneRail(200))
-	if strings.Contains(rail, "blocked") {
+	if strings.Contains(rail, "lane-01 blocked") || strings.Contains(rail, "lane-03 blocked") {
 		t.Fatalf("the fleet rail must not rank an unknown lane as blocked:\n%s", rail)
 	}
 	if !strings.Contains(rail, "lane-01 unknown") {

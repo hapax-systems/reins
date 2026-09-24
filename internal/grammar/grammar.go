@@ -1173,19 +1173,33 @@ func sessionHealthVisible(s Session, airOn bool) bool {
 	return true
 }
 
+// LivenessUnknown reports the API's stale-producer row (state=unknown): the producer's last tick is not
+// now, so alive/idle/stalled and the ages arrive null and decode to false/0. They must render as
+// unknown, never as a measured false or a zero age.
+func LivenessUnknown(s Session) bool { return s.State == "unknown" }
+
+// LivenessText is v, or "unknown" for a stale-producer row.
+func LivenessText(s Session, v string) string {
+	if LivenessUnknown(s) {
+		return "unknown"
+	}
+	return v
+}
+
 func sessionGlyph(s Session, airOn bool) string {
 	if !sessionHealthVisible(s, airOn) {
 		return "▒"
 	}
 	switch {
-	case s.State == "unknown":
-		// The API's stale-producer row: alive=false means "cannot assert alive", not a measured
-		// offline. ▒ is the starved-producer mark; ○ is the measured negative (dark != absent).
-		return "▒"
 	case s.Stalled:
 		return "!"
-	case !s.Alive:
+	case !s.Alive && s.State == "offline":
 		return "○"
+	case !s.Alive:
+		// Not alive, but not measured offline either: the API's stale-producer row (state=unknown),
+		// or a state this build does not know. ▒ is the starved-producer mark; ○ is reserved for the
+		// measured negative (dark != absent).
+		return "▒"
 	case s.Idle:
 		return "·"
 	default:
@@ -1256,8 +1270,8 @@ func RenderSessionRow(s Session, airOn bool) string {
 	}
 	attn := C("pri", dotsOr(attnText, 5))
 
-	out := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: compactAge(s.OutputAgeS), Denied: d("output_age_s"), Width: 7}, airOn))
-	relay := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: compactAge(s.RelayAgeS), Denied: d("relay_age_s"), Width: 7}, airOn))
+	out := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: LivenessText(s, compactAge(s.OutputAgeS)), Denied: d("output_age_s"), Width: 7}, airOn))
+	relay := C("mut", traceGlyphLabel(reg, "time", CellValue{Text: LivenessText(s, compactAge(s.RelayAgeS)), Denied: d("relay_age_s"), Width: 7}, airOn))
 
 	taskTok := "2nd"
 	if airOn && d("claimed_task") {

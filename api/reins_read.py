@@ -665,20 +665,30 @@ def to_session(
     lane: dict,
     allowlist: list[str],
     route_binding: dict | None = None,
-    producer_live: bool = True,
+    *,
+    producer_live: bool,
 ) -> dict:
-    output_age_s = _age_float(lane.get("output_age_s"))
-    relay_age_s = _age_float(lane.get("relay_age_s"))
+    """One lane row. `producer_live` has no default: a caller that never consulted the producer's
+    freshness (`_session_snapshot`) must not get live semantics by omission."""
+    alive: bool | None
+    idle: bool | None
+    stalled: bool | None
+    output_age_s: float | None
+    relay_age_s: float | None
     if producer_live:
+        output_age_s = _age_float(lane.get("output_age_s"))
+        relay_age_s = _age_float(lane.get("relay_age_s"))
         state = _session_state(lane)
         alive, idle, stalled = bool(lane.get("alive")), bool(lane.get("idle")), bool(lane.get("stalled"))
         blocker = _session_blocker(lane, state, relay_age_s)
         readiness = _session_readiness(lane, state, blocker)
     else:
         # A stale producer's lane verdicts are its last tick, not now: the lane may be alive, idle or
-        # gone, and this row cannot say which. Unknown, never the last word read as current.
-        state, alive, idle, stalled = "unknown", False, False, False
-        blocker, readiness = "stale_producer", "unknown"
+        # gone, and this row cannot say which. Unknown reads unknown — null, never a measured false
+        # or a last-tick age served as current.
+        state, readiness, blocker = "unknown", "unknown", "stale_producer"
+        alive = idle = stalled = None
+        output_age_s = relay_age_s = None
     fields = {
         "role": str(lane.get("role") or name),
         "session": str(lane.get("session") or ""),
@@ -692,7 +702,7 @@ def to_session(
         "relay_age_s": relay_age_s,
         "readiness": readiness,
         "blocker": blocker,
-        "attention": _session_attention(lane, state, readiness, blocker, output_age_s, relay_age_s),
+        "attention": _session_attention(lane, state, readiness, blocker, output_age_s or 0.0, relay_age_s or 0.0),
     }
     if route_binding:
         fields.update(route_binding)
@@ -707,39 +717,43 @@ def _session_state_path() -> str:
     return os.path.expanduser(os.environ.get("REINS_COORDINATOR_STATE", "/dev/shm/hapax-coordinator/state.json"))
 
 
-#: Older than this, the coordinator's snapshot is its last tick, not now.
+#: Older than this, the coordinator's snapshot is its last tick, not now. Derived from the producer's
+#: measured cadence: its loop sleeps max(1, tick_s - elapsed) with tick_s = 30s, so it writes every
+#: max(30s, tick duration). Over 765 consecutive in-run intervals from its journal (run ending
+#: 2026-09-24T08:00:52Z): p50 47.3s, p99 97.8s, p99.9 128.6s, max 139.0s. 300s is >= 2x that max, so a
+#: live producer never reads stale, and <= 10 nominal ticks, so a dead one is named within 5 minutes.
+#: Inclusive: an age of exactly the threshold is live. Pinned by test_read_sessions_producer_staleness.
 _PRODUCER_STALE_S = 300.0
 
-
-def _producer_age_s(path: str) -> float | None:
-    try:
-        return time.time() - os.path.getmtime(path)
-    except OSError:
-        return None
+#: The clock the producer's age is measured against (a seam for boundary tests).
+_now = time.time
 
 
-def _producer_stanza() -> dict:
-    """The one freshness verdict for a sessions response: the envelope reports it and every row
-    derives its liveness from it, so the rows can never contradict the envelope they arrive in."""
+def _producer_verdict(age_s: float | None) -> str:
+    return "live" if age_s is not None and age_s <= _PRODUCER_STALE_S else "stale"
+
+
+def _session_snapshot() -> tuple[list[tuple[str, dict]], dict]:
+    """The lanes AND the producer stanza, from ONE file generation. The age is the fstat of the handle
+    the lanes were read from, not a later stat of the path: the producer writes by atomic rename, so a
+    fresh generation landing between read and stat would otherwise launder the stale rows as live.
+
+    Every lane surface derives its rows' liveness from this stanza — there is deliberately no
+    lanes-only reader, so no caller can build rows without the producer's verdict in hand."""
     path = _session_state_path()
-    age_s = _producer_age_s(path)
-    return {
-        "source": path,
-        "age_s": age_s,
-        "state": "live" if age_s is not None and age_s <= _PRODUCER_STALE_S else "stale",
-    }
-
-
-def _raw_sessions() -> list[tuple[str, dict]]:
-    with open(_session_state_path(), encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
+        mtime = os.fstat(fh.fileno()).st_mtime
         state = json.load(fh)
+    age_s = _now() - mtime
+    producer = {"source": path, "age_s": age_s, "state": _producer_verdict(age_s)}
     lanes = state.get("lanes") or {}
     if not isinstance(lanes, dict):
-        return []
-    return sorted(
+        return [], producer
+    raw = sorted(
         [(str(name), lane) for name, lane in lanes.items() if isinstance(lane, dict)],
         key=lambda x: x[0],
     )
+    return raw, producer
 
 
 def _iso_mtime(path: Path) -> str:
@@ -2550,17 +2564,28 @@ def read_gate_summary(council_root: str, allowlist: list[str], cfg: dict | None 
     sessions: list[dict] = []
     session_path = Path(_session_state_path())
     try:
+        raw, producer = _session_snapshot()
+        producer_live = producer["state"] == "live"
         bindings, binding_source, binding_path = _route_binding_index(cfg)
         sessions = [
-            to_session(name, lane, allowlist, _session_route_binding(name, lane, bindings, binding_source, binding_path))
-            for name, lane in _raw_sessions()
+            to_session(
+                name,
+                lane,
+                allowlist,
+                _session_route_binding(name, lane, bindings, binding_source, binding_path),
+                producer_live=producer_live,
+            )
+            for name, lane in raw
         ]
+        session_detail = "coordinator lane readiness/blockers"
+        if not producer_live:
+            session_detail = f"producer stale (age {producer['age_s']:.0f}s): lane readiness/blockers unknown"
         sources.append(_gate_source(
             "session_state",
             "observed",
             len(sessions),
             allowlist,
-            detail="coordinator lane readiness/blockers",
+            detail=session_detail,
             age_bucket=_path_age_bucket(session_path),
             path=str(session_path),
         ))
@@ -3212,7 +3237,8 @@ def to_session_detail(
     allowlist: list[str],
     cfg: dict | None = None,
     route_binding: dict | None = None,
-    producer_live: bool = True,
+    *,
+    producer_live: bool,
 ) -> dict:
     cfg = cfg or {}
     base = to_session(name, lane, allowlist, route_binding, producer_live=producer_live)
@@ -3268,8 +3294,9 @@ def to_session_detail(
         },
         "tmux": {
             "session": base["session"],
-            "exists": bool(base["session"] and base["alive"]),
-            "attached": False,
+            # Under a stale producer the lane's liveness is unknown (None), and so is the tmux session's.
+            "exists": None if base["alive"] is None else bool(base["session"] and base["alive"]),
+            "attached": None if base["alive"] is None else False,
             "activity_age_s": base["output_age_s"],
         },
         "task": task,
@@ -3484,9 +3511,13 @@ def _observe_from_http(cfg: dict | None, key: str) -> dict:
 
 def _observe_session_dimensions() -> tuple[dict, dict]:
     try:
-        raw = _raw_sessions()
+        raw, producer = _session_snapshot()
     except Exception as e:
         reason = str(e)
+        return _observe_dark("health", reason), _observe_dark("agents", reason)
+    if producer["state"] != "live":
+        # The counts would be the dead producer's last tick. The dimension is live|dark: dark, named.
+        reason = f"coordinator_state stale (producer age {producer['age_s']:.0f}s): lane liveness unknown"
         return _observe_dark("health", reason), _observe_dark("agents", reason)
 
     total = len(raw)
@@ -4461,17 +4492,17 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
 
     @app.get("/read/sessions")
     def read_sessions() -> dict:
-        try:
-            raw = _raw_sessions()
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "sessions": []}
         # PRODUCER LIVENESS (2026-08-08, found dead 27 days serving a plausible snapshot):
         # the coordinator writes state.json every tick; an aged file means every row is its
         # LAST tick, not now — that is data without valid context, and the honest render is
         # partial with the producer's age named, never a clean dark:false.
         # PER ROW (2026-09-24, captured stale for ~11h with 17 of 18 rows alive:true): the
-        # envelope's verdict is computed first and each row derives its liveness from it.
-        producer = _producer_stanza()
+        # envelope's verdict comes from the same file generation as the lanes, and each row
+        # derives its liveness from it.
+        try:
+            raw, producer = _session_snapshot()
+        except Exception as e:  # honest-dark
+            return {"dark": True, "error": str(e), "sessions": []}
         producer_live = producer["state"] == "live"
         bindings, binding_source, binding_path = _route_binding_index(session_cfg)
         sessions = [
@@ -4492,13 +4523,13 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     @app.get("/read/session/{role}")
     def read_session_detail(role: str) -> dict:
         try:
-            raw = dict(_raw_sessions())
-            lane = raw.get(role)
+            raw_rows, producer = _session_snapshot()
+            lane = dict(raw_rows).get(role)
             if lane is None:
                 return {"dark": True, "error": f"unknown session role: {role}", "detail": {}}
             bindings, binding_source, binding_path = _route_binding_index(session_cfg)
             route_binding = _session_route_binding(role, lane, bindings, binding_source, binding_path)
-            producer_live = _producer_stanza()["state"] == "live"
+            producer_live = producer["state"] == "live"
             detail = to_session_detail(role, lane, allowlist, session_cfg, route_binding, producer_live=producer_live)
             return {"dark": False, "detail": detail}
         except Exception as e:  # honest-dark
