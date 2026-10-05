@@ -10,11 +10,21 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import facet_registry as fr
 from reins_read import build_app, instance_config, read_lanebus_summary
 
 #: A fixed clock: ``now`` is a parameter, so the ages below are exact.
 NOW = 1_800_000_000.0
+
+#: ``chmod 000`` does not deny root, so an unreadable input cannot be CONSTRUCTED there: the scan
+#: succeeds, the row is not "unknown", and the test would report a pass it did not earn. Skip rather
+#: than assert something the runner cannot set up.
+requires_non_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="chmod 000 does not deny root: the unreadable-input cases cannot be constructed",
+)
 
 
 def _inbox(tmp_path: Path, name: str = "lane") -> Path:
@@ -199,6 +209,7 @@ def test_count_only_withholds_names_but_keeps_counts(tmp_path):
     assert all("basename" not in u for u in _row(only)["unread"])
 
 
+@requires_non_root
 def test_projection_never_reads_a_body(tmp_path):
     """A body that CANNOT be read still projects: a stat-only read cannot fail here, while opening
     the message raises or drops it."""
@@ -316,6 +327,7 @@ def test_an_unrecognized_filename_policy_narrows_to_count_only(tmp_path):
     assert all("basename" not in u for u in _row(read_lanebus_summary(cfg, [], now=NOW))["unread"])
 
 
+@requires_non_root
 def test_an_unreadable_inbox_is_unknown_never_a_false_clear(tmp_path):
     """An unreadable inbox is UNKNOWN, not clear: `clear` with zero counts asserts "no unread mail"
     about a directory never read."""
@@ -348,6 +360,7 @@ def test_an_unreadable_inbox_is_unknown_never_a_false_clear(tmp_path):
         sealed.chmod(0o700)
 
 
+@requires_non_root
 def test_an_unreadable_receipt_dir_is_unknown_not_missing(tmp_path):
     """The inbox lists fine but ``read/`` cannot be read: an empty ack set would turn every message
     into unread."""
