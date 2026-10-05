@@ -40,6 +40,39 @@ func TestLoadReadsInstanceValues(t *testing.T) {
 	}
 }
 
+func TestLoadReadsLanebusInboxes(t *testing.T) {
+	// The lanebus unread projection (Reins slice 1) takes its inbox list from instance config. Both
+	// keys are plain path lists — the same shape the Python READ API decodes — so the cockpit must
+	// decode them rather than treating the file as malformed.
+	t.Setenv("REINS_LANEBUS_INBOXES", "") // hermetic: the file read is the subject here
+	t.Setenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", "")
+	dir := t.TempDir()
+	p := dir + "/c.toml"
+	if err := writeFile(p, "lanebus_inboxes=['/lane/a','/lane/b']\nlanebus_count_only_inboxes=['/lane/b']\n"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(c.LanebusInboxes) != 2 || c.LanebusInboxes[0] != "/lane/a" || c.LanebusInboxes[1] != "/lane/b" {
+		t.Fatalf("lanebus inboxes not read: %+v", c.LanebusInboxes)
+	}
+	if len(c.LanebusCountOnlyInboxes) != 1 || c.LanebusCountOnlyInboxes[0] != "/lane/b" {
+		t.Fatalf("count-only inboxes not read: %+v", c.LanebusCountOnlyInboxes)
+	}
+
+	t.Setenv("REINS_LANEBUS_INBOXES", "/env/a:/env/b")
+	t.Setenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", "/env/a")
+	c, err = Load("/no/such/file.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.LanebusInboxes) != 2 || len(c.LanebusCountOnlyInboxes) != 1 || c.LanebusCountOnlyInboxes[0] != "/env/a" {
+		t.Fatalf("lanebus inbox env override not applied: %+v %+v", c.LanebusInboxes, c.LanebusCountOnlyInboxes)
+	}
+}
+
 func TestLoadMissingFileFallsBackToDefaults(t *testing.T) {
 	c, err := Load("/no/such/file.toml")
 	if err != nil {

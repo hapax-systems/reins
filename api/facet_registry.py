@@ -68,6 +68,7 @@ BODIES: set[str] = {
 ENVELOPES: set[str] = {
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
+    "inboxes", "unread",   # lanebus projection: the per-inbox list and its unread-set list
     "workbench_contract", "layers", "nodes", "edges", "package", "health", "tmux", "task",
     "evidence_refs", "evidence_summary", "resume", "defaults", "inquiry_modes", "audience_modes",
     "explanation_paths", "follow_on_tranches", "scenes", "by_kind", "scene_count",
@@ -84,6 +85,10 @@ FACET_BY_NAME: dict[str, str] = {
     "capability_id": "identity", "tool_id": "identity", "map_id": "identity",
     "label": "identity", "kind": "identity", "subject_kind": "identity", "map_kind": "identity",
     "family": "identity", "subject": "identity", "title": "identity",
+    # basename is a filename — free-text-capable, so it is an identity attr that DENIES on air
+    # (see SENSITIVE): the lanebus projection may show a message name to the operator surface,
+    # never to a broadcast.
+    "basename": "identity",
     # posture (current condition / health / admission)
     "state": "posture", "no_go": "posture", "readiness": "posture", "criticality": "posture",
     "severity": "posture", "blocker": "posture", "route_state": "posture", "quota_state": "posture",
@@ -92,6 +97,8 @@ FACET_BY_NAME: dict[str, str] = {
     "resume_ready": "posture", "truncated": "posture", "freshness_ok": "posture",
     "parity": "posture", "posture": "posture", "maturity": "posture", "coverage": "posture",
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
+    # the ack-receipt directory's condition: ok / missing / rejected (a symlink escape is refused)
+    "read_dir": "posture",
     # action (lifecycle motion)
     "stage": "action", "prior_stage": "action", "predicted_stage": "action", "intent": "action",
     # ownership (the "whose" labels)
@@ -99,12 +106,17 @@ FACET_BY_NAME: dict[str, str] = {
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
+    # a lanebus inbox NAME is a lane role (the same class as `role`, which airs) — not the lane's
+    # filesystem path, which is `path` and denies. The full inbox path never airs.
+    "inbox": "place",
     # posture (gate result is a state)
     "gate": "posture",
     # time
     "ts": "time", "freshness": "time", "mtime": "time", "updated_at": "time", "observed_at": "time",
     "stale_after": "time", "generated_at": "time", "output_age_s": "time", "relay_age_s": "time",
     "activity_age_s": "time", "age_bucket": "time",
+    # unread age (now - mtime): per message (`age_s`) and per inbox (`oldest_unread_age_s`)
+    "age_s": "time", "oldest_unread_age_s": "time",
     # provenance (evidence / authority / egress / permission)
     "authority": "provenance", "authority_case": "provenance", "authority_ceiling": "provenance",
     "claim_ceiling": "provenance", "claim_surface": "provenance", "mutation_surface": "provenance",
@@ -118,6 +130,8 @@ FACET_BY_NAME: dict[str, str] = {
     "attention": "measure", "route_count": "measure", "ok_count": "measure", "blocked_count": "measure",
     "evidence_count": "measure", "rel_count": "measure", "receipt_count": "measure", "count": "measure",
     "total": "measure", "depth_count": "measure",
+    # lanebus inbox counts: messages present / acked / unread
+    "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
     # variant (capability/mode variant — the sub-faceted dimensional cross-product)
     "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
     "quantization": "variant", "demand_vector": "variant", "hardening": "variant",
@@ -169,6 +183,11 @@ SENSITIVE: set[str] = {
     "path", "session",          # filesystem / tmux PII
     "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
+    # a message FILENAME is free-text chosen by a sender and may carry a name, a subject or an
+    # identifier. It is the one field of the lanebus projection an inbox can populate with
+    # anything, so it denies on air regardless of the identity facet (muse narrowing 5: redact or
+    # go count-only per inbox — count-only omits it entirely, this denies it to any broadcast).
+    "basename",
 }
 
 # There are TWO independent reasons to deny a field on air, and SENSITIVE models only the first.
