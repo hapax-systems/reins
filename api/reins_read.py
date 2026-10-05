@@ -3308,51 +3308,90 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
 
 
 # ── lanebus unread projection (Reins convergence slice 1) ─────────────────────────────────────
-# The unread fact is the lanebus protocol's OWN filesystem fact: a message is a ``*.md`` file
-# directly in a lane's inbox, and it is ACKED when a same-named file exists under that inbox's
-# ``read/``. There is no index to keep in sync, so this projection is read-only by construction —
-# it re-derives the fact from the filesystem on every read and never opens a message (metadata
-# only: name + mtime). Nothing here writes to an inbox, the bus, or any vault path.
+# The unread fact is the protocol's OWN filesystem fact: a ``*.md`` file directly in a lane's inbox,
+# ACKED when a same-named file exists under ``read/``. Nothing is indexed and nothing is written, so
+# it is re-derived on every read and no message is opened (name + mtime only).
+
+#: The registry denies these by CATEGORY (SENSITIVE = PII, FINANCIAL = spend) as per-attribute
+#: policy, not a default — but classify_air() consults only the instance allowlist, so an explicit
+#: REINS_AIR_ALLOWLIST entry would re-expose a path, a message name or an inbox name. (The same hole
+#: exists estate-wide on every classify_air() endpoint.)
+_LANEBUS_NEVER_AIR = facet_registry.SENSITIVE | facet_registry.FINANCIAL
+
 
 def _lanebus_stamp(now: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
 
 
-def _lanebus_path_list(raw: Any) -> list[str]:
-    """A configured path list, tolerating a single bare value and dropping empty entries."""
+def _lanebus_air(fields: dict, allowlist: list[str]) -> dict:
+    air = classify_air(fields, allowlist)
+    for name in fields:
+        if name in _LANEBUS_NEVER_AIR:
+            air[name] = "deny"
+    return air
+
+
+def _lanebus_canonical_path(raw: Any) -> str:
+    """A configured inbox path with ``~`` expanded and ``.``/``..``/symlinks resolved.
+
+    Canonicalizing BEFORE the count-only test is load-bearing: ``/lane`` and ``/lane/.`` are one
+    directory, so a spelling must not escape a narrowing.
+    """
+    text = str(raw or "").strip()
+    return os.path.realpath(os.path.expanduser(text)) if text else ""
+
+
+def _lanebus_entries(raw: Any) -> list[Any]:
     if not isinstance(raw, list):
         raw = [raw] if raw else []
-    return [str(item or "").strip() for item in raw if str(item or "").strip()]
+    return [item for item in raw if item not in (None, "")]
+
+
+def _lanebus_entry_path(item: Any) -> str:
+    return _lanebus_canonical_path(item.get("path") if isinstance(item, dict) else item)
+
+
+def _lanebus_entry_policy(item: Any, from_count_only_list: bool) -> str:
+    """``count-only`` withholds message names. An unrecognized ``filenames`` value NARROWS to it:
+    a policy this build does not know must never expose more than the safe default."""
+    if from_count_only_list:
+        return "count-only"
+    if isinstance(item, dict) and str(item.get("filenames") or "").strip() not in ("", "metadata"):
+        return "count-only"
+    return "metadata"
 
 
 def _lanebus_inbox_specs(inboxes: Any, count_only: Any = None) -> list[dict[str, str]]:
-    """Normalize the instance's configured inboxes.
+    """Normalize the configured inboxes into ``[{path, filenames}]``.
 
-    ``lanebus_inboxes`` names the inboxes; ``lanebus_count_only_inboxes`` names the subset whose
-    message names are withheld entirely (an inbox whose filenames may carry PII). Both are plain
-    path lists — the uniform shape BOTH halves of the engine decode — and the NARROWER policy wins
-    wherever they overlap. Unconfigured stays empty, so the projection denies by default rather
-    than guessing or globbing an inbox into existence.
+    Accepts what ``instance_config()`` hands the app (entries shaped ``{path, filenames}``) as well
+    as bare strings. The NARROWER policy wins where the count-only list overlaps, and unconfigured
+    stays empty — nothing is guessed into existence.
     """
-    count_only_set = set(_lanebus_path_list(count_only))
     ordered: list[str] = []
-    for path in _lanebus_path_list(inboxes) + _lanebus_path_list(count_only):
-        if path not in ordered:
-            ordered.append(path)
-    return [
-        {"path": path, "filenames": "count-only" if path in count_only_set else "metadata"}
-        for path in ordered
-    ]
+    policies: dict[str, str] = {}
+    pairs = [(item, False) for item in _lanebus_entries(inboxes)]
+    pairs += [(item, True) for item in _lanebus_entries(count_only)]
+    for item, from_count_only in pairs:
+        path = _lanebus_entry_path(item)
+        if not path:
+            continue
+        policy = _lanebus_entry_policy(item, from_count_only)
+        if path in policies:
+            if policy == "count-only":
+                policies[path] = "count-only"
+            continue
+        ordered.append(path)
+        policies[path] = policy
+    return [{"path": path, "filenames": policies[path]} for path in ordered]
 
 
 def _lanebus_messages(directory: Path) -> list[tuple[str, float]]:
     """Top-level regular ``*.md`` files as (basename, mtime): never recursive, never a symlink.
 
-    ``os.scandir`` is one directory deep and yields BARE names, so no entry name can be a path —
-    there is no traversal or absolute path to reject here because no path is ever built from an
-    entry name. ``is_file(follow_symlinks=False)`` is the single load-bearing guard: it is False
-    for a symlink (the way an entry inside the root reaches a file outside it) and for a
-    directory, so neither can enter the unread set.
+    ``os.scandir`` is one directory deep and yields BARE names, so no path is ever built from an
+    entry name. ``is_file(follow_symlinks=False)`` is the single load-bearing guard: False for a
+    symlink (how an entry reaches outside the root) and for a directory.
     """
     out: list[tuple[str, float]] = []
     with os.scandir(directory) as entries:
@@ -3368,18 +3407,17 @@ def _lanebus_messages(directory: Path) -> list[tuple[str, float]]:
 def _lanebus_read_dir(inbox: Path) -> tuple[Path | None, str]:
     """The ack-receipt directory and its condition: ok / missing / rejected.
 
-    ``rejected`` is a ``read/`` that does not resolve to ``<inbox>/read`` — the symlink-escape
-    case. It is not followed and therefore acks nothing; reporting the rejection keeps the refusal
-    visible instead of letting it read as an ordinary "no acks yet".
+    ``rejected`` is a ``read/`` that does not resolve to ``<inbox>/read`` — the symlink-escape case.
+    It is not followed and acks nothing, and reporting it keeps the refusal visible instead of
+    reading as an ordinary "no acks yet". There is no error branch on purpose: ``Path.is_dir()``
+    answers False rather than raising when the parent is unreadable, so an unlistable inbox is
+    caught by its own scan failing — the caller then reports ``read_dir: unknown``.
     """
     read_dir = inbox / "read"
-    try:
-        if not read_dir.is_dir():
-            return None, "missing"
-        if Path(os.path.realpath(read_dir)) != Path(os.path.realpath(inbox)) / "read":
-            return None, "rejected"
-    except OSError:
+    if not read_dir.is_dir():
         return None, "missing"
+    if Path(os.path.realpath(read_dir)) != inbox / "read":
+        return None, "rejected"
     return read_dir, "ok"
 
 
@@ -3391,53 +3429,65 @@ def _lanebus_unread_row(basename: str, mtime: float, policy: str, now: float, al
     }
     if policy == "metadata":
         fields = {"basename": basename, **fields}
-    return {**fields, "air": classify_air(fields, allowlist)}
+    return {**fields, "air": _lanebus_air(fields, allowlist)}
 
 
 def _lanebus_inbox_row(spec: dict[str, str], now: float, allowlist: list[str]) -> dict:
-    # canonicalize the configured root so the `read/` containment check below compares real paths
-    inbox = Path(os.path.realpath(os.path.expanduser(spec["path"])))
+    inbox = Path(spec["path"])  # canonical: _lanebus_inbox_specs resolved it once
     name = inbox.name or spec["path"]
-    present: list[tuple[str, float]] = []
-    read_dir_state = "missing"
     exists = inbox.is_dir()
     if exists:
         try:
-            present = _lanebus_messages(inbox)
+            present: list[tuple[str, float]] | None = _lanebus_messages(inbox)
         except OSError:
-            present = []
-        _, read_dir_state = _lanebus_read_dir(inbox)
+            present = None  # unreadable: NOT the same answer as "no messages"
+        # an unlistable inbox cannot have its receipt dir examined either: unknown, not the
+        # "missing" that is_dir()'s False-on-error would imply
+        read_dir_state = "unknown" if present is None else _lanebus_read_dir(inbox)[1]
+    else:
+        present, read_dir_state = [], "missing"  # no inbox at all: genuinely no messages
     acked: set[str] = set()
     if read_dir_state == "ok":
         try:
             acked = {n for n, _ in _lanebus_messages(inbox / "read")}
         except OSError:
-            acked = set()
+            read_dir_state = "unknown"
 
-    unread = [(n, m) for n, m in present if n not in acked]
-    ages = [max(0.0, now - m) for _, m in unread]
+    unknown = present is None or read_dir_state == "unknown"
+    unread = None if unknown else [(n, m) for n, m in present if n not in acked]
+    ages = [max(0.0, now - m) for _, m in (unread or [])]
     fields: dict[str, Any] = {
         "inbox": name,
         "path": str(inbox),  # SENSITIVE: the filesystem path never airs
         "exists": bool(exists),
-        "state": "missing" if not exists else ("unread" if unread else "clear"),
+        "state": "missing" if not exists else ("unknown" if unknown else ("unread" if unread else "clear")),
         "read_dir": read_dir_state,
-        "files_present": len(present),
-        "files_acked": sum(1 for n, _ in present if n in acked),
-        "unread_count": len(unread),
-        # the MAXIMUM age over the unread set == now - min(mtime); null when the set is empty
+        # a failed scan is UNKNOWN, never a fabricated zero (absence is not evidence of absence)
+        "files_present": None if present is None else len(present),
+        "files_acked": None if unknown else sum(1 for n, _ in present if n in acked),
+        "unread_count": None if unread is None else len(unread),
+        # max age over the unread set == now - min(mtime); null when empty OR unmeasured (the
+        # `state` field distinguishes "clear" from "unknown")
         "oldest_unread_age_s": max(ages) if ages else None,
     }
-    rows = [_lanebus_unread_row(n, m, spec["filenames"], now, allowlist) for n, m in unread]
-    return {**fields, "unread": rows, "air": classify_air(fields, allowlist)}
+    rows = [] if unread is None else [
+        _lanebus_unread_row(n, m, spec["filenames"], now, allowlist) for n, m in unread
+    ]
+    return {**fields, "unread": rows, "air": _lanebus_air(fields, allowlist)}
+
+
+def _lanebus_total(rows: list[dict], key: str) -> int | None:
+    """Sum a per-inbox count over the MEASURED inboxes; None if none were (0 for a set never read
+    is the absence-into-zero defect). ``unknown_inboxes`` travels with it."""
+    values = [row[key] for row in rows if row[key] is not None]
+    return sum(values) if values else None
 
 
 def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = None, now: float | None = None) -> dict:
     """Read-only lanebus inbox state for the inboxes named in the instance config.
 
-    Per inbox: messages present, messages acked (a same-named file under ``read/``), the unread
-    set, and the age of the oldest unread. Metadata only — a message body is never opened — and
-    nothing is written anywhere: the projection recomputes from the filesystem on every read.
+    Per inbox: messages present, acked (a same-named file under ``read/``), the unread set, and the
+    age of the oldest unread. Metadata only — no body is opened, nothing is written.
     """
     allowlist = allowlist or []
     cfg = cfg or {}
@@ -3451,7 +3501,7 @@ def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = 
             "generated_at": _lanebus_stamp(now),
             "inboxes": [],
             "totals": {
-                "inboxes": 0, "files_present": 0, "files_acked": 0,
+                "inboxes": 0, "unknown_inboxes": 0, "files_present": 0, "files_acked": 0,
                 "unread_count": 0, "oldest_unread_age_s": None,
             },
         }
@@ -3463,9 +3513,10 @@ def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = 
         "inboxes": rows,
         "totals": {
             "inboxes": len(rows),
-            "files_present": sum(r["files_present"] for r in rows),
-            "files_acked": sum(r["files_acked"] for r in rows),
-            "unread_count": sum(r["unread_count"] for r in rows),
+            "unknown_inboxes": sum(1 for r in rows if r["state"] == "unknown"),
+            "files_present": _lanebus_total(rows, "files_present"),
+            "files_acked": _lanebus_total(rows, "files_acked"),
+            "unread_count": _lanebus_total(rows, "unread_count"),
             "oldest_unread_age_s": max(ages) if ages else None,
         },
     }

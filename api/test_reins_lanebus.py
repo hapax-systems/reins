@@ -1,14 +1,7 @@
 """Lanebus unread projection (Reins slice 1) — read-only, metadata-only, fixture tree.
 
-The unread fact is the EXISTING filesystem fact: a ``*.md`` file directly in the inbox with no
-same-named file under ``read/``. There is no index and no state model — the projection recomputes
-from the filesystem on every read and writes nothing, ever (no bus writes).
-
-Scope is pinned here rather than assumed: basename-only join, no recursion outside the inbox root,
-symlink/traversal rejection, configured inboxes only (an empty config denies), metadata only (a
-message body is never opened), and the oldest-unread age is the MAXIMUM age over the unread set
-(``now - min(mtime)``) — null when the unread set is empty.
-"""
+The unread fact is the EXISTING filesystem fact, recomputed on every read: no index, no state
+model, no bus writes."""
 
 from __future__ import annotations
 
@@ -20,8 +13,7 @@ from pathlib import Path
 import facet_registry as fr
 from reins_read import build_app, instance_config, read_lanebus_summary
 
-#: A fixed clock. ``read_lanebus_summary`` takes ``now`` as a parameter (this codebase threads time
-#: rather than reading a global), so ages below are exact and not merely monotonic.
+#: A fixed clock: ``now`` is a parameter, so the ages below are exact.
 NOW = 1_800_000_000.0
 
 
@@ -44,7 +36,7 @@ def _row(data: dict, inbox: str = "lane") -> dict:
 
 
 def _tree(root: Path) -> list[tuple[str, int, int, int]]:
-    """Every path under ``root`` with (relpath, size, mtime_ns, inode) — a write anywhere changes it."""
+    """(relpath, size, mtime_ns, inode) per path: a write anywhere changes it."""
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         for name in sorted(dirnames) + sorted(filenames):
@@ -74,11 +66,8 @@ def test_unread_is_present_minus_acked(tmp_path):
 
 
 def test_oldest_unread_age_is_the_maximum_age_over_the_unread_set(tmp_path):
-    """The steward disambiguation: age(f) = now - mtime(f); oldest == max age == now - MIN(mtime).
-
-    The literal opposite reading (now - max(mtime)) would report the NEWEST unread file, so the two
-    readings are numerically distinct here and this test fails under the wrong one.
-    """
+    """age(f) = now - mtime(f), oldest == max age == now - MIN(mtime). The opposite reading
+    (now - max(mtime)) reports the NEWEST unread file, so the two differ here."""
     root = _inbox(tmp_path)
     _msg(root, "oldest.md", NOW - 900)   # the oldest unread
     _msg(root, "middle.md", NOW - 300)
@@ -93,7 +82,6 @@ def test_oldest_unread_age_is_the_maximum_age_over_the_unread_set(tmp_path):
     by_name = {u["basename"]: u for u in row["unread"]}
     assert by_name["oldest.md"]["age_s"] == 900.0
     assert by_name["newest.md"]["age_s"] == 60.0
-    # the ISO mtime round-trips to the exact instant that produced the age
     stamp = datetime.strptime(by_name["oldest.md"]["mtime"], "%Y-%m-%dT%H:%M:%SZ")
     assert stamp.replace(tzinfo=timezone.utc).timestamp() == NOW - 900
 
@@ -139,7 +127,6 @@ def test_missing_inbox_is_reported_without_darkening_the_rest(tmp_path):
 
 
 def test_only_top_level_markdown_files_are_counted(tmp_path):
-    """No recursion outside the inbox root, and only ``*.md`` — a nested note is not an inbox message."""
     root = _inbox(tmp_path)
     _msg(root, "top.md", NOW - 10)
     _msg(root, "notes.txt", NOW - 10)
@@ -167,7 +154,6 @@ def test_symlinked_message_is_rejected(tmp_path):
 
 
 def test_symlinked_read_dir_is_rejected_not_followed(tmp_path):
-    """A ``read/`` that resolves outside the inbox root is an escape: it must not ack anything."""
     root = _inbox(tmp_path)
     _msg(root, "a.md", NOW - 10)
     (root / "read").rmdir()
@@ -194,7 +180,7 @@ def test_a_directory_named_like_a_message_is_not_an_ack(tmp_path):
     assert row["unread_count"] == 1
 
 
-def test_count_only_policy_omits_basenames_but_keeps_counts(tmp_path):
+def test_count_only_withholds_names_but_keeps_counts(tmp_path):
     root = _inbox(tmp_path)
     _msg(root, "operator-name-20260101.md", NOW - 10)
 
@@ -206,29 +192,16 @@ def test_count_only_policy_omits_basenames_but_keeps_counts(tmp_path):
     assert all("basename" not in u for u in row["unread"])
     assert "operator-name-20260101.md" not in json.dumps(row)
 
-
-def test_an_inbox_named_only_as_count_only_is_still_configured_and_withholds_names(tmp_path):
-    """The two lists are a union, and the NARROWER policy wins — never the wider one."""
-    root = _inbox(tmp_path)
-    _msg(root, "a.md", NOW - 10)
-
-    cfg = {"lanebus_count_only_inboxes": [str(root)]}
-    data = read_lanebus_summary(cfg, [], now=NOW)
-    row = _row(data)
-
-    assert data["dark"] is False
-    assert row["unread_count"] == 1
-    assert all("basename" not in u for u in row["unread"])
+    # an inbox named ONLY in the count-only list is still configured, and still withheld
+    only = read_lanebus_summary({"lanebus_count_only_inboxes": [str(root)]}, [], now=NOW)
+    assert only["dark"] is False
+    assert _row(only)["unread_count"] == 1
+    assert all("basename" not in u for u in _row(only)["unread"])
 
 
 def test_projection_never_reads_a_body(tmp_path):
-    """Metadata only, measured at the read itself: a message whose body CANNOT be read still projects.
-
-    A stat-only projection cannot fail here; an implementation that opens the message either raises
-    (PermissionError) or silently drops it from the counts — both visible below. Asserting only that
-    the body text is absent from the payload would pass for a projection that reads every body and
-    discards it, which is why the body is sealed instead.
-    """
+    """A body that CANNOT be read still projects: a stat-only read cannot fail here, while opening
+    the message raises or drops it."""
     root = _inbox(tmp_path)
     sealed = _msg(root, "a.md", NOW - 10)
     sealed.chmod(0o000)
@@ -242,7 +215,6 @@ def test_projection_never_reads_a_body(tmp_path):
 
 
 def test_projection_writes_nothing(tmp_path):
-    """Read-only is a measured property: the tree (names, sizes, mtimes, inodes) is identical after."""
     root = _inbox(tmp_path)
     _msg(root, "a.md", NOW - 10)
     _msg(root / "read", "b.md", NOW - 10)
@@ -253,24 +225,147 @@ def test_projection_writes_nothing(tmp_path):
     assert _tree(tmp_path) == before
 
 
-def test_basename_never_airs_and_the_registry_denies_it():
+def test_the_three_name_bearing_fields_never_air_in_the_registry():
+    """A filename and a configured directory name are free-text-chosen by whoever made them, so
+    both deny on air whatever facet they classify into; the inbox path already did."""
     assert fr.classify("LanebusUnread", "basename") == "identity"
-    assert fr.air_policy("LanebusUnread", "basename") == "deny"
-    assert "basename" not in set(fr.air_allowlist())
+    assert fr.classify("LanebusInbox", "inbox") == "place"
+    assert fr.classify("LanebusInbox", "path") == "place"
+    for domain, attr in (("LanebusUnread", "basename"), ("LanebusInbox", "inbox"), ("LanebusInbox", "path")):
+        assert fr.air_policy(domain, attr) == "deny"
+        assert attr not in set(fr.air_allowlist())
 
 
-def test_endpoint_serves_the_projection(tmp_path):
+def test_an_allowlist_entry_cannot_re_air_the_path_filename_or_inbox_name(tmp_path):
+    """classify_air() consults only the allowlist, so an explicit entry would re-expose these
+    three; the registry deny is per-attribute policy, re-applied here."""
     root = _inbox(tmp_path)
     _msg(root, "a.md", NOW - 10)
-    app = build_app("", [], {"lanebus_inboxes": [str(root)]})
-    endpoint = next(
-        route.endpoint for route in app.routes if getattr(route, "path", "") == "/read/lanebus"
+    allowlist = ["basename", "path", "inbox", "mtime", "age_s", "unread_count"]
+
+    row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, allowlist, now=NOW))
+
+    assert row["air"]["path"] == "deny"
+    assert row["air"]["inbox"] == "deny"
+    assert row["unread"][0]["air"]["basename"] == "deny"
+    assert row["air"]["unread_count"] == "ok"  # a non-sensitive override still wins
+
+
+def test_normalized_config_entries_are_scanned_not_reported_missing(tmp_path):
+    """The LIVE seam: instance_config() hands the app {path, filenames} entries, not bare strings.
+    Stringifying one turns a real inbox into a reported-missing one."""
+    root = _inbox(tmp_path)
+    _msg(root, "a.md", NOW - 10)
+
+    data = read_lanebus_summary(
+        {"lanebus_inboxes": [{"path": str(root), "filenames": "metadata"}]}, [], now=NOW
     )
+    row = _row(data)
 
-    data = endpoint()
+    assert row["exists"] is True
+    assert row["state"] == "unread"
+    assert row["unread_count"] == 1
+    withheld = read_lanebus_summary(
+        {"lanebus_inboxes": [{"path": str(root), "filenames": "count-only"}]}, [], now=NOW
+    )
+    assert all("basename" not in u for u in _row(withheld)["unread"])
 
-    assert data["dark"] is False
-    assert _row(data)["unread_count"] == 1
+
+def test_the_whole_seam_from_config_file_to_endpoint(tmp_path, monkeypatch):
+    """config.toml -> instance_config() -> build_app() -> /read/lanebus. The projection normalizes
+    to {path, filenames} and the app hands those entries straight back in, so a projection taking
+    only bare strings reported every inbox as missing while every unit test passed."""
+    root = _inbox(tmp_path)
+    _msg(root, "a.md", NOW - 10)
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(f'lanebus_inboxes = ["{root}"]\n', encoding="utf-8")
+    monkeypatch.setenv("REINS_CONFIG", str(cfg_file))
+    monkeypatch.delenv("REINS_LANEBUS_INBOXES", raising=False)
+    monkeypatch.delenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", raising=False)
+
+    cfg = instance_config()
+    # the config-file path AND the normalized shape the app is handed directly
+    for session_cfg in (cfg, {"lanebus_inboxes": [{"path": str(root), "filenames": "metadata"}]}):
+        app = build_app(cfg["council_root"], cfg["allowlist"], session_cfg)
+        endpoint = next(
+            r.endpoint for r in app.routes if getattr(r, "path", "") == "/read/lanebus"
+        )
+        row = _row(endpoint())
+        assert row["exists"] is True
+        assert row["state"] == "unread"
+        assert row["unread_count"] == 1
+
+
+def test_a_non_canonical_spelling_cannot_escape_the_count_only_narrowing(tmp_path):
+    root = _inbox(tmp_path)
+    _msg(root, "a.md", NOW - 10)
+
+    cfg = {"lanebus_inboxes": [f"{root}/."], "lanebus_count_only_inboxes": [str(root)]}
+    row = _row(read_lanebus_summary(cfg, [], now=NOW))
+
+    assert row["unread_count"] == 1
+    assert all("basename" not in u for u in row["unread"])
+
+
+def test_an_unrecognized_filename_policy_narrows_to_count_only(tmp_path):
+    root = _inbox(tmp_path)
+    _msg(root, "a.md", NOW - 10)
+
+    cfg = {"lanebus_inboxes": [{"path": str(root), "filenames": "everything"}]}
+
+    assert all("basename" not in u for u in _row(read_lanebus_summary(cfg, [], now=NOW))["unread"])
+
+
+def test_an_unreadable_inbox_is_unknown_never_a_false_clear(tmp_path):
+    """An unreadable inbox is UNKNOWN, not clear: `clear` with zero counts asserts "no unread mail"
+    about a directory never read."""
+    good = _inbox(tmp_path, "good")
+    _msg(good, "a.md", NOW - 10)
+    sealed = _inbox(tmp_path, "sealed")
+    _msg(sealed, "b.md", NOW - 10)
+    sealed.chmod(0o000)
+    try:
+        data = read_lanebus_summary({"lanebus_inboxes": [str(good), str(sealed)]}, [], now=NOW)
+        row = _row(data, "sealed")
+
+        assert row["exists"] is True
+        assert row["state"] == "unknown"
+        assert row["read_dir"] == "unknown"
+        assert row["files_present"] is None
+        assert row["files_acked"] is None
+        assert row["unread_count"] is None
+        assert row["oldest_unread_age_s"] is None
+        assert row["unread"] == []
+        assert data["totals"]["unknown_inboxes"] == 1
+        assert data["totals"]["unread_count"] == 1  # only the MEASURED inbox contributed
+
+        # and a summary whose ONLY inbox is unmeasured reports no total at all, never zero
+        alone = read_lanebus_summary({"lanebus_inboxes": [str(sealed)]}, [], now=NOW)
+        assert alone["totals"]["unknown_inboxes"] == 1
+        assert alone["totals"]["unread_count"] is None
+        assert alone["totals"]["files_present"] is None
+    finally:
+        sealed.chmod(0o700)
+
+
+def test_an_unreadable_receipt_dir_is_unknown_not_missing(tmp_path):
+    """The inbox lists fine but ``read/`` cannot be read: an empty ack set would turn every message
+    into unread."""
+    root = _inbox(tmp_path)
+    _msg(root, "a.md", NOW - 10)
+    _msg(root / "read", "b.md", NOW - 10)
+    (root / "read").chmod(0o000)
+    try:
+        row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, [], now=NOW))
+
+        assert row["files_present"] == 1
+        assert row["read_dir"] == "unknown"
+        assert row["files_acked"] is None
+        assert row["unread_count"] is None
+        assert row["oldest_unread_age_s"] is None
+        assert row["state"] == "unknown"
+    finally:
+        (root / "read").chmod(0o700)
 
 
 def test_instance_config_reads_lanebus_inboxes_from_toml_and_env(tmp_path, monkeypatch):
