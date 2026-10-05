@@ -394,13 +394,182 @@ def test_instance_config_reads_lanebus_inboxes_from_toml_and_env(tmp_path, monke
 
     from_file = instance_config()["lanebus_inboxes"]
     assert from_file == [
-        {"path": "/toml/one", "filenames": "metadata"},
-        {"path": "/toml/two", "filenames": "count-only"},
+        {"path": "/toml/one", "filenames": "metadata", "ack": "read-dir"},
+        {"path": "/toml/two", "filenames": "count-only", "ack": "read-dir"},
     ]
 
     monkeypatch.setenv("REINS_LANEBUS_INBOXES", "/env/one:/env/two")
     monkeypatch.setenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", "/env/two")
     assert instance_config()["lanebus_inboxes"] == [
-        {"path": "/env/one", "filenames": "metadata"},
-        {"path": "/env/two", "filenames": "count-only"},
+        {"path": "/env/one", "filenames": "metadata", "ack": "read-dir"},
+        {"path": "/env/two", "filenames": "count-only", "ack": "read-dir"},
     ]
+
+
+def _bare_inbox(tmp_path: Path, name: str) -> Path:
+    """An inbox with NO ``read/`` directory — a lane that acks somewhere else."""
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    return root
+
+
+def test_ack_none_reports_unmeasured_never_unread(tmp_path):
+    """The D5 major. A lane whose acks are recorded elsewhere (hapax-mq, not a read/ copy) must not be
+    reported as unread: with 4,316 messages and no receipt directory, ``unread_count: 4316`` would be a
+    confident wrong number on the inbox Reins most needs to get right."""
+    root = _bare_inbox(tmp_path, "acked-elsewhere")
+    for i in range(5):
+        _msg(root, f"m{i}.md", NOW - 10 * (i + 1))
+
+    cfg = {"lanebus_inboxes": [str(root)], "lanebus_ack_none_inboxes": [str(root)]}
+    row = _row(read_lanebus_summary(cfg, [], now=NOW), "acked-elsewhere")
+
+    assert row["ack"] == "none"
+    assert row["state"] == "unmeasured"
+    assert row["files_present"] == 5  # counts stay complete
+    assert row["files_acked"] is None
+    assert row["unread_count"] is None
+    assert row["oldest_unread_age_s"] is None
+    assert row["unread"] == []
+    assert row["unread_rows_truncated"] is None
+
+
+def test_ack_none_wins_even_when_a_stale_read_dir_exists(tmp_path):
+    """Live ``lanebus/dev1`` shape: a ``read/`` directory that exists but is not the ack record (24 files
+    against 4,316 messages). The DECLARATION decides; a stale receipt directory must not produce a number."""
+    root = _inbox(tmp_path, "stale-receipts")
+    for i in range(5):
+        _msg(root, f"m{i}.md", NOW - 10 * (i + 1))
+    _msg(root / "read", "m0.md", NOW - 1)
+
+    cfg = {"lanebus_inboxes": [str(root)], "lanebus_ack_none_inboxes": [str(root)]}
+    row = _row(read_lanebus_summary(cfg, [], now=NOW), "stale-receipts")
+
+    assert row["state"] == "unmeasured"
+    assert row["unread_count"] is None
+    assert row["unread"] == []
+
+
+def test_a_read_dir_inbox_with_a_large_backlog_and_no_receipts_is_unmeasured(tmp_path):
+    """The undeclared-but-contradicted case: `ack: read-dir` (the default) with no receipt directory at
+    all and a backlog past the threshold. A large inbox with no receipts contradicts its own declaration,
+    so the projection refuses to assert rather than reporting every message unread."""
+    root = _bare_inbox(tmp_path, "contradicted")
+    for i in range(101):
+        _msg(root, f"m{i:03d}.md", NOW - 10 * (i + 1))
+
+    row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, [], now=NOW), "contradicted")
+
+    assert row["ack"] == "read-dir"
+    assert row["read_dir"] == "missing"
+    assert row["state"] == "unmeasured"
+    assert row["files_present"] == 101
+    assert row["unread_count"] is None
+    assert row["oldest_unread_age_s"] is None
+
+
+def test_a_read_dir_inbox_with_a_small_backlog_and_no_receipts_still_reports_unread(tmp_path):
+    """The other side of the threshold: a young inbox with no receipts yet IS unread, and saying so is
+    the whole point. The backstop must not swallow that."""
+    root = _bare_inbox(tmp_path, "young")
+    _msg(root, "a.md", NOW - 10)
+    _msg(root, "b.md", NOW - 20)
+    _msg(root, "c.md", NOW - 30)
+
+    row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, [], now=NOW), "young")
+
+    assert row["state"] == "unread"
+    assert row["unread_count"] == 3
+    assert row["oldest_unread_age_s"] == 30.0
+
+
+def test_unread_rows_are_capped_to_the_oldest_fifty(tmp_path):
+    """F2: the row list is bounded while the counts stay complete, and the rows kept are the OLDEST —
+    the actionable end of the list."""
+    root = _inbox(tmp_path, "backlog")
+    for i in range(1, 61):  # m001 newest (NOW-1) .. m060 oldest (NOW-60)
+        _msg(root, f"m{i:03d}.md", NOW - i)
+
+    row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, [], now=NOW), "backlog")
+
+    assert row["unread_count"] == 60  # the count is complete
+    assert len(row["unread"]) == 50   # the list is not
+    assert row["unread_rows_truncated"] is True
+    assert row["unread"][0]["basename"] == "m060.md"   # oldest first
+    assert row["unread"][-1]["basename"] == "m011.md"  # the 50 oldest
+    assert "m001.md" not in {u["basename"] for u in row["unread"]}
+
+
+def test_exactly_the_cap_is_not_truncated(tmp_path):
+    root = _inbox(tmp_path, "exact")
+    for i in range(1, 51):
+        _msg(root, f"m{i:03d}.md", NOW - i)
+
+    row = _row(read_lanebus_summary({"lanebus_inboxes": [str(root)]}, [], now=NOW), "exact")
+
+    assert row["unread_count"] == 50
+    assert len(row["unread"]) == 50
+    assert row["unread_rows_truncated"] is False
+
+
+def test_an_unrecognized_ack_value_narrows_to_none(tmp_path):
+    """A protocol this build does not know must never be assumed to be the asserting one."""
+    root = _bare_inbox(tmp_path, "odd")
+    _msg(root, "a.md", NOW - 10)
+
+    cfg = {"lanebus_inboxes": [{"path": str(root), "filenames": "metadata", "ack": "read-dir-or-mq"}]}
+    row = _row(read_lanebus_summary(cfg, [], now=NOW), "odd")
+
+    assert row["ack"] == "none"
+    assert row["state"] == "unmeasured"
+    assert row["unread_count"] is None
+
+
+def test_an_unmeasured_inbox_makes_the_totals_partial_and_says_so(tmp_path):
+    measured = _inbox(tmp_path, "measured")
+    _msg(measured, "a.md", NOW - 10)
+    elsewhere = _bare_inbox(tmp_path, "elsewhere")
+    _msg(elsewhere, "b.md", NOW - 10)
+
+    cfg = {"lanebus_inboxes": [str(measured), str(elsewhere)],
+           "lanebus_ack_none_inboxes": [str(elsewhere)]}
+    data = read_lanebus_summary(cfg, [], now=NOW)
+
+    assert data["totals"]["unmeasured_inboxes"] == 1
+    assert data["totals"]["unread_count"] == 1  # only the MEASURED inbox contributed
+    assert data["totals"]["unknown_inboxes"] == 0
+
+
+def test_instance_config_reads_the_ack_none_list_from_toml_and_env(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        'lanebus_inboxes = ["/toml/one", "/toml/two"]\n'
+        'lanebus_ack_none_inboxes = ["/toml/two"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REINS_CONFIG", str(cfg_file))
+    for var in ("REINS_LANEBUS_INBOXES", "REINS_LANEBUS_COUNT_ONLY_INBOXES", "REINS_LANEBUS_ACK_NONE_INBOXES"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert instance_config()["lanebus_inboxes"] == [
+        {"path": "/toml/one", "filenames": "metadata", "ack": "read-dir"},
+        {"path": "/toml/two", "filenames": "metadata", "ack": "none"},
+    ]
+
+    monkeypatch.setenv("REINS_LANEBUS_INBOXES", "/env/one:/env/two")
+    monkeypatch.setenv("REINS_LANEBUS_ACK_NONE_INBOXES", "/env/two")
+    assert instance_config()["lanebus_inboxes"] == [
+        {"path": "/env/one", "filenames": "metadata", "ack": "read-dir"},
+        {"path": "/env/two", "filenames": "metadata", "ack": "none"},
+    ]
+
+
+def test_the_example_config_carries_the_ack_key():
+    """F3: the example names a real seat inbox, so it must carry the declaration that keeps it honest."""
+    example = Path(__file__).resolve().parent.parent / "config.example.toml"
+    import tomllib
+
+    parsed = tomllib.loads(example.read_text(encoding="utf-8"))
+    assert "lanebus_ack_none_inboxes" in parsed
+    assert parsed["lanebus_ack_none_inboxes"] == []
+    assert "lanebus_inboxes" in parsed

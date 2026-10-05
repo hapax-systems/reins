@@ -3318,6 +3318,21 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
 #: exists estate-wide on every classify_air() endpoint.)
 _LANEBUS_NEVER_AIR = facet_registry.SENSITIVE | facet_registry.FINANCIAL
 
+#: The ack protocols an inbox may declare. ``read-dir``: a same-named file under ``read/`` is the
+#: receipt. ``none``: acks are recorded elsewhere (e.g. a message queue's processed set), so the
+#: read-dir join does not apply and the unread set is NOT measurable here.
+_LANEBUS_ACK_PROTOCOLS = ("read-dir", "none")
+
+#: Past this many messages, a ``read-dir`` inbox with NO receipt directory at all contradicts its own
+#: declaration: a large backlog with no receipts means the acks are recorded somewhere else. Below
+#: it, "no receipts yet" is the ordinary reading of a young inbox. A judgement threshold, not a
+#: measured law — the declaration is the real control; this catches an undeclared protocol.
+_LANEBUS_READ_DIR_CONTRADICTION_N = 100
+
+#: The unread ROW list is bounded; the counts are not. The rows kept are the OLDEST — the actionable
+#: end of the list — because a thousand-row payload helps nobody.
+_LANEBUS_UNREAD_ROW_CAP = 50
+
 
 def _lanebus_stamp(now: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
@@ -3361,8 +3376,19 @@ def _lanebus_entry_policy(item: Any, from_count_only_list: bool) -> str:
     return "metadata"
 
 
-def _lanebus_inbox_specs(inboxes: Any, count_only: Any = None) -> list[dict[str, str]]:
-    """Normalize the configured inboxes into ``[{path, filenames}]``.
+def _lanebus_entry_ack(item: Any, from_ack_none_list: bool) -> str:
+    """The inbox's declared ack protocol: ``read-dir`` or ``none``. An unrecognized value NARROWS to
+    ``none`` — a protocol this build does not know must never be assumed to be the asserting one, or
+    the row would report a number it cannot support."""
+    if from_ack_none_list:
+        return "none"
+    if isinstance(item, dict) and str(item.get("ack") or "").strip() not in ("", "read-dir"):
+        return "none"
+    return "read-dir"
+
+
+def _lanebus_inbox_specs(inboxes: Any, count_only: Any = None, ack_none: Any = None) -> list[dict[str, str]]:
+    """Normalize the configured inboxes into ``[{path, filenames, ack}]``.
 
     Accepts what ``instance_config()`` hands the app (entries shaped ``{path, filenames}``) as well
     as bare strings. The NARROWER policy wins where the count-only list overlaps, and unconfigured
@@ -3370,20 +3396,26 @@ def _lanebus_inbox_specs(inboxes: Any, count_only: Any = None) -> list[dict[str,
     """
     ordered: list[str] = []
     policies: dict[str, str] = {}
-    pairs = [(item, False) for item in _lanebus_entries(inboxes)]
-    pairs += [(item, True) for item in _lanebus_entries(count_only)]
-    for item, from_count_only in pairs:
+    acks: dict[str, str] = {}
+    triples = [(item, False, False) for item in _lanebus_entries(inboxes)]
+    triples += [(item, True, False) for item in _lanebus_entries(count_only)]
+    triples += [(item, False, True) for item in _lanebus_entries(ack_none)]
+    for item, from_count_only, from_ack_none in triples:
         path = _lanebus_entry_path(item)
         if not path:
             continue
         policy = _lanebus_entry_policy(item, from_count_only)
-        if path in policies:
+        ack = _lanebus_entry_ack(item, from_ack_none)
+        if path in acks:
             if policy == "count-only":
                 policies[path] = "count-only"
+            if ack == "none":
+                acks[path] = "none"
             continue
         ordered.append(path)
         policies[path] = policy
-    return [{"path": path, "filenames": policies[path]} for path in ordered]
+        acks[path] = ack
+    return [{"path": path, "filenames": policies[path], "ack": acks[path]} for path in ordered]
 
 
 def _lanebus_messages(directory: Path) -> list[tuple[str, float]]:
@@ -3453,26 +3485,50 @@ def _lanebus_inbox_row(spec: dict[str, str], now: float, allowlist: list[str]) -
         except OSError:
             read_dir_state = "unknown"
 
-    unknown = present is None or read_dir_state == "unknown"
-    unread = None if unknown else [(n, m) for n, m in present if n not in acked]
+    # "unread" is only meaningful when THIS inbox's declaration says a read/ receipt is the ack.
+    # `ack: none` means acks are recorded elsewhere, so a count here would be a confident wrong
+    # number; a read-dir inbox with no receipt directory at all and a backlog past the threshold
+    # contradicts its own declaration the same way. Both are UNMEASURED: the counts stay complete,
+    # every unread-derived field is null, and the row never claims "unread".
+    unreadable = present is None or read_dir_state == "unknown"
+    unmeasured = not unreadable and (
+        spec["ack"] == "none"
+        or (read_dir_state == "missing" and len(present) > _LANEBUS_READ_DIR_CONTRADICTION_N)
+    )
+    unread = None if (unreadable or unmeasured) else [(n, m) for n, m in present if n not in acked]
     ages = [max(0.0, now - m) for _, m in (unread or [])]
+    if unread is None:
+        rows, truncated = [], None
+    else:
+        oldest_first = sorted(unread, key=lambda name_mtime: name_mtime[1])
+        truncated = len(oldest_first) > _LANEBUS_UNREAD_ROW_CAP
+        rows = [
+            _lanebus_unread_row(n, m, spec["filenames"], now, allowlist)
+            for n, m in oldest_first[:_LANEBUS_UNREAD_ROW_CAP]
+        ]
     fields: dict[str, Any] = {
         "inbox": name,
         "path": str(inbox),  # SENSITIVE: the filesystem path never airs
+        "ack": spec["ack"],
         "exists": bool(exists),
-        "state": "missing" if not exists else ("unknown" if unknown else ("unread" if unread else "clear")),
+        "state": (
+            "missing" if not exists
+            else "unknown" if unreadable
+            else "unmeasured" if unmeasured
+            else "unread" if unread
+            else "clear"
+        ),
         "read_dir": read_dir_state,
         # a failed scan is UNKNOWN, never a fabricated zero (absence is not evidence of absence)
         "files_present": None if present is None else len(present),
-        "files_acked": None if unknown else sum(1 for n, _ in present if n in acked),
+        "files_acked": None if (unreadable or unmeasured) else sum(1 for n, _ in present if n in acked),
         "unread_count": None if unread is None else len(unread),
         # max age over the unread set == now - min(mtime); null when empty OR unmeasured (the
         # `state` field distinguishes "clear" from "unknown")
         "oldest_unread_age_s": max(ages) if ages else None,
+        # the row LIST is capped at the oldest _LANEBUS_UNREAD_ROW_CAP; unread_count is not
+        "unread_rows_truncated": truncated,
     }
-    rows = [] if unread is None else [
-        _lanebus_unread_row(n, m, spec["filenames"], now, allowlist) for n, m in unread
-    ]
     return {**fields, "unread": rows, "air": _lanebus_air(fields, allowlist)}
 
 
@@ -3492,7 +3548,11 @@ def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = 
     allowlist = allowlist or []
     cfg = cfg or {}
     now = time.time() if now is None else now
-    specs = _lanebus_inbox_specs(cfg.get("lanebus_inboxes"), cfg.get("lanebus_count_only_inboxes"))
+    specs = _lanebus_inbox_specs(
+        cfg.get("lanebus_inboxes"),
+        cfg.get("lanebus_count_only_inboxes"),
+        cfg.get("lanebus_ack_none_inboxes"),
+    )
     if not specs:
         # Empty/unconfigured DENIES by default: no inbox is guessed or globbed into existence.
         return {
@@ -3501,7 +3561,8 @@ def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = 
             "generated_at": _lanebus_stamp(now),
             "inboxes": [],
             "totals": {
-                "inboxes": 0, "unknown_inboxes": 0, "files_present": 0, "files_acked": 0,
+                "inboxes": 0, "unknown_inboxes": 0, "unmeasured_inboxes": 0,
+                "files_present": 0, "files_acked": 0,
                 "unread_count": 0, "oldest_unread_age_s": None,
             },
         }
@@ -3514,6 +3575,7 @@ def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = 
         "totals": {
             "inboxes": len(rows),
             "unknown_inboxes": sum(1 for r in rows if r["state"] == "unknown"),
+            "unmeasured_inboxes": sum(1 for r in rows if r["state"] == "unmeasured"),
             "files_present": _lanebus_total(rows, "files_present"),
             "files_acked": _lanebus_total(rows, "files_acked"),
             "unread_count": _lanebus_total(rows, "unread_count"),
@@ -4891,7 +4953,12 @@ def instance_config() -> dict:
         raw_count_only = [v for v in count_only_env.split(os.pathsep) if v]
     else:
         raw_count_only = toml_cfg.get("lanebus_count_only_inboxes", [])
-    lanebus_inboxes = _lanebus_inbox_specs(raw_lanebus, raw_count_only)
+    ack_none_env = os.environ.get("REINS_LANEBUS_ACK_NONE_INBOXES")
+    if ack_none_env:
+        raw_ack_none = [v for v in ack_none_env.split(os.pathsep) if v]
+    else:
+        raw_ack_none = toml_cfg.get("lanebus_ack_none_inboxes", [])
+    lanebus_inboxes = _lanebus_inbox_specs(raw_lanebus, raw_count_only, raw_ack_none)
     hkp_index_root = os.environ.get("REINS_HKP_INDEX_ROOT") or str(toml_cfg.get("hkp_index_root", ""))
     hkp_report_root = os.environ.get("REINS_HKP_REPORT_ROOT") or str(toml_cfg.get("hkp_report_root", ""))
     vault_root = os.environ.get("REINS_VAULT_ROOT") or str(toml_cfg.get("vault_root", ""))

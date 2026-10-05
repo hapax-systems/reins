@@ -97,6 +97,8 @@ FACET_BY_NAME: dict[str, str] = {
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
     # the ack-receipt dir's condition: ok / missing / rejected (unknown = unmeasurable)
     "read_dir": "posture",
+    # whether the unread ROW list was capped (unread_count is always complete)
+    "unread_rows_truncated": "posture",
     # action (lifecycle motion)
     "stage": "action", "prior_stage": "action", "predicted_stage": "action", "intent": "action",
     # ownership (the "whose" labels)
@@ -115,6 +117,8 @@ FACET_BY_NAME: dict[str, str] = {
     "activity_age_s": "time", "age_bucket": "time",
     # unread age (now - mtime), per message and per inbox
     "age_s": "time", "oldest_unread_age_s": "time",
+    # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
+    "ack": "variant",
     # provenance (evidence / authority / egress / permission)
     "authority": "provenance", "authority_case": "provenance", "authority_ceiling": "provenance",
     "claim_ceiling": "provenance", "claim_surface": "provenance", "mutation_surface": "provenance",
@@ -131,7 +135,7 @@ FACET_BY_NAME: dict[str, str] = {
     # lanebus counts: present / acked / unread, and inboxes that could not be read at all (travels
     # with the totals so a partial sum is never read as a whole one)
     "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
-    "unknown_inboxes": "measure",
+    "unknown_inboxes": "measure", "unmeasured_inboxes": "measure",
     # variant (capability/mode variant — the sub-faceted dimensional cross-product)
     "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
     "quantization": "variant", "demand_vector": "variant", "hardening": "variant",

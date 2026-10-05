@@ -46,9 +46,10 @@ func TestLoadReadsLanebusInboxes(t *testing.T) {
 	// decode them rather than treating the file as malformed.
 	t.Setenv("REINS_LANEBUS_INBOXES", "") // hermetic: the file read is the subject here
 	t.Setenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", "")
+	t.Setenv("REINS_LANEBUS_ACK_NONE_INBOXES", "")
 	dir := t.TempDir()
 	p := dir + "/c.toml"
-	if err := writeFile(p, "lanebus_inboxes=['/lane/a','/lane/b']\nlanebus_count_only_inboxes=['/lane/b']\n"); err != nil {
+	if err := writeFile(p, "lanebus_inboxes=['/lane/a','/lane/b']\nlanebus_count_only_inboxes=['/lane/b']\nlanebus_ack_none_inboxes=['/lane/b']\n"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load(p)
@@ -61,15 +62,22 @@ func TestLoadReadsLanebusInboxes(t *testing.T) {
 	if len(c.LanebusCountOnlyInboxes) != 1 || c.LanebusCountOnlyInboxes[0] != "/lane/b" {
 		t.Fatalf("count-only inboxes not read: %+v", c.LanebusCountOnlyInboxes)
 	}
+	if len(c.LanebusAckNoneInboxes) != 1 || c.LanebusAckNoneInboxes[0] != "/lane/b" {
+		t.Fatalf("ack-none inboxes not read: %+v", c.LanebusAckNoneInboxes)
+	}
 
 	t.Setenv("REINS_LANEBUS_INBOXES", "/env/a:/env/b")
 	t.Setenv("REINS_LANEBUS_COUNT_ONLY_INBOXES", "/env/a")
+	t.Setenv("REINS_LANEBUS_ACK_NONE_INBOXES", "/env/b")
 	c, err = Load("/no/such/file.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(c.LanebusInboxes) != 2 || len(c.LanebusCountOnlyInboxes) != 1 || c.LanebusCountOnlyInboxes[0] != "/env/a" {
 		t.Fatalf("lanebus inbox env override not applied: %+v %+v", c.LanebusInboxes, c.LanebusCountOnlyInboxes)
+	}
+	if len(c.LanebusAckNoneInboxes) != 1 || c.LanebusAckNoneInboxes[0] != "/env/b" {
+		t.Fatalf("ack-none env override not applied: %+v", c.LanebusAckNoneInboxes)
 	}
 }
 
