@@ -79,6 +79,10 @@ INVENTORY: dict[str, list[str]] = {
                          "authority", "authority_case", "evidence_count", "evidence", "source", "source_refs",
                          "source_ref_labels", "freshness", "privacy", "raw_access", "missing", "action", "detail",
                          "map_kind", "map_id", "map_source", "map_target", "map_relation", "air"],
+    # Reins slice 1 — the lanebus unread projection (read-only, metadata only).
+    "LanebusInbox": ["inbox", "path", "exists", "state", "read_dir", "files_present", "files_acked",
+                     "unread_count", "oldest_unread_age_s", "unread", "air"],
+    "LanebusUnread": ["basename", "mtime", "age_s", "air"],
 }
 
 
@@ -251,6 +255,11 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         "lens", "inquiry_mode", "audience_mode", "explanation_path",
         # edge ref IDs (task/node/route ids — safe; path-like refs are SENSITIVE-denied):
         "claimed_task", "route", "focus_node_ids", "focus_edge_ids", "selection_group", "selection_id",
+        # Reins slice 1 (lanebus unread projection): a lane NAME (same class as the already-airing
+        # `role`), three counts, a directory condition token, and two ages. No free text, no PII,
+        # no spend. The message FILENAME (`basename`) is NOT here — it is SENSITIVE and denies.
+        "inbox", "files_present", "files_acked", "unread_count", "read_dir",
+        "oldest_unread_age_s", "age_s",
     }
     newly_aired = set()
     for domain, attrs in INVENTORY.items():
@@ -269,7 +278,8 @@ def test_air_allowlist_airs_skeleton_denies_pii_and_bodies():
         assert ok in al, f"{ok} should air"
     # PII + free-text bodies + path-like refs do NOT air:
     for deny in ("path", "session", "subject", "label", "title", "parent_spec", "evidence_ref",
-                 "route_evidence_ref", "summary", "detail", "missing", "action", "blockers"):
+                 "route_evidence_ref", "summary", "detail", "missing", "action", "blockers",
+                 "basename"):
         assert deny not in al, f"{deny} must NOT air"
 
 
