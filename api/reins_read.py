@@ -3307,6 +3307,283 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
     return {"vault_root": str(root), "dark": False, "notes": [row for _, row in notes[:500]]}
 
 
+# ── lanebus unread projection (Reins convergence slice 1) ─────────────────────────────────────
+# The unread fact is the protocol's OWN filesystem fact: a ``*.md`` file directly in a lane's inbox,
+# ACKED when a same-named file exists under ``read/``. Nothing is indexed and nothing is written, so
+# it is re-derived on every read and no message is opened (name + mtime only).
+
+#: The registry denies these by CATEGORY (SENSITIVE = PII, FINANCIAL = spend) as per-attribute
+#: policy, not a default — but classify_air() consults only the instance allowlist, so an explicit
+#: REINS_AIR_ALLOWLIST entry would re-expose a path, a message name or an inbox name. (The same hole
+#: exists estate-wide on every classify_air() endpoint.)
+_LANEBUS_NEVER_AIR = facet_registry.SENSITIVE | facet_registry.FINANCIAL
+
+#: The ack protocols an inbox may declare. ``read-dir``: a same-named file under ``read/`` is the
+#: receipt. ``none``: acks are recorded elsewhere (e.g. a message queue's processed set), so the
+#: read-dir join does not apply and the unread set is NOT measurable here.
+_LANEBUS_ACK_PROTOCOLS = ("read-dir", "none")
+
+#: Past this many messages, a ``read-dir`` inbox with NO receipt directory at all contradicts its own
+#: declaration: a large backlog with no receipts means the acks are recorded somewhere else. Below
+#: it, "no receipts yet" is the ordinary reading of a young inbox. A judgement threshold, not a
+#: measured law — the declaration is the real control; this catches an undeclared protocol.
+_LANEBUS_READ_DIR_CONTRADICTION_N = 100
+
+#: The unread ROW list is bounded; the counts are not. The rows kept are the OLDEST — the actionable
+#: end of the list — because a thousand-row payload helps nobody.
+_LANEBUS_UNREAD_ROW_CAP = 50
+
+
+def _lanebus_stamp(now: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+
+def _lanebus_air(fields: dict, allowlist: list[str]) -> dict:
+    air = classify_air(fields, allowlist)
+    for name in fields:
+        if name in _LANEBUS_NEVER_AIR:
+            air[name] = "deny"
+    return air
+
+
+def _lanebus_canonical_path(raw: Any) -> str:
+    """A configured inbox path with ``~`` expanded and ``.``/``..``/symlinks resolved.
+
+    Canonicalizing BEFORE the count-only test is load-bearing: ``/lane`` and ``/lane/.`` are one
+    directory, so a spelling must not escape a narrowing.
+    """
+    text = str(raw or "").strip()
+    return os.path.realpath(os.path.expanduser(text)) if text else ""
+
+
+def _lanebus_entries(raw: Any) -> list[Any]:
+    if not isinstance(raw, list):
+        raw = [raw] if raw else []
+    return [item for item in raw if item not in (None, "")]
+
+
+def _lanebus_entry_path(item: Any) -> str:
+    return _lanebus_canonical_path(item.get("path") if isinstance(item, dict) else item)
+
+
+def _lanebus_entry_policy(item: Any, from_count_only_list: bool) -> str:
+    """``count-only`` withholds message names. An unrecognized ``filenames`` value NARROWS to it:
+    a policy this build does not know must never expose more than the safe default."""
+    if from_count_only_list:
+        return "count-only"
+    if isinstance(item, dict) and str(item.get("filenames") or "").strip() not in ("", "metadata"):
+        return "count-only"
+    return "metadata"
+
+
+def _lanebus_entry_ack(item: Any, from_ack_none_list: bool) -> str:
+    """The inbox's declared ack protocol: ``read-dir`` or ``none``. An unrecognized value NARROWS to
+    ``none`` — a protocol this build does not know must never be assumed to be the asserting one, or
+    the row would report a number it cannot support."""
+    if from_ack_none_list:
+        return "none"
+    if isinstance(item, dict) and str(item.get("ack") or "").strip() not in ("", "read-dir"):
+        return "none"
+    return "read-dir"
+
+
+def _lanebus_inbox_specs(inboxes: Any, count_only: Any = None, ack_none: Any = None) -> list[dict[str, str]]:
+    """Normalize the configured inboxes into ``[{path, filenames, ack}]``.
+
+    Accepts what ``instance_config()`` hands the app (entries shaped ``{path, filenames}``) as well
+    as bare strings. The NARROWER policy wins where the count-only list overlaps, and unconfigured
+    stays empty — nothing is guessed into existence.
+    """
+    ordered: list[str] = []
+    policies: dict[str, str] = {}
+    acks: dict[str, str] = {}
+    triples = [(item, False, False) for item in _lanebus_entries(inboxes)]
+    triples += [(item, True, False) for item in _lanebus_entries(count_only)]
+    triples += [(item, False, True) for item in _lanebus_entries(ack_none)]
+    for item, from_count_only, from_ack_none in triples:
+        path = _lanebus_entry_path(item)
+        if not path:
+            continue
+        policy = _lanebus_entry_policy(item, from_count_only)
+        ack = _lanebus_entry_ack(item, from_ack_none)
+        if path in acks:
+            if policy == "count-only":
+                policies[path] = "count-only"
+            if ack == "none":
+                acks[path] = "none"
+            continue
+        ordered.append(path)
+        policies[path] = policy
+        acks[path] = ack
+    return [{"path": path, "filenames": policies[path], "ack": acks[path]} for path in ordered]
+
+
+def _lanebus_messages(directory: Path) -> list[tuple[str, float]]:
+    """Top-level regular ``*.md`` files as (basename, mtime): never recursive, never a symlink.
+
+    ``os.scandir`` is one directory deep and yields BARE names, so no path is ever built from an
+    entry name. ``is_file(follow_symlinks=False)`` is the single load-bearing guard: False for a
+    symlink (how an entry reaches outside the root) and for a directory.
+    """
+    out: list[tuple[str, float]] = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".md"):
+                continue
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            out.append((entry.name, entry.stat(follow_symlinks=False).st_mtime))
+    return sorted(out)
+
+
+def _lanebus_read_dir(inbox: Path) -> tuple[Path | None, str]:
+    """The ack-receipt directory and its condition: ok / missing / rejected.
+
+    ``rejected`` is a ``read/`` that does not resolve to ``<inbox>/read`` — the symlink-escape case.
+    It is not followed and acks nothing, and reporting it keeps the refusal visible instead of
+    reading as an ordinary "no acks yet". There is no error branch on purpose: ``Path.is_dir()``
+    answers False rather than raising when the parent is unreadable, so an unlistable inbox is
+    caught by its own scan failing — the caller then reports ``read_dir: unknown``.
+    """
+    read_dir = inbox / "read"
+    if not read_dir.is_dir():
+        return None, "missing"
+    if Path(os.path.realpath(read_dir)) != inbox / "read":
+        return None, "rejected"
+    return read_dir, "ok"
+
+
+def _lanebus_unread_row(basename: str, mtime: float, policy: str, now: float, allowlist: list[str]) -> dict:
+    # A future mtime measures nothing (the same rule as _producer_verdict): age never goes negative.
+    fields: dict[str, Any] = {
+        "mtime": _lanebus_stamp(mtime),
+        "age_s": max(0.0, now - mtime),
+    }
+    if policy == "metadata":
+        fields = {"basename": basename, **fields}
+    return {**fields, "air": _lanebus_air(fields, allowlist)}
+
+
+def _lanebus_inbox_row(spec: dict[str, str], now: float, allowlist: list[str]) -> dict:
+    inbox = Path(spec["path"])  # canonical: _lanebus_inbox_specs resolved it once
+    name = inbox.name or spec["path"]
+    exists = inbox.is_dir()
+    if exists:
+        try:
+            present: list[tuple[str, float]] | None = _lanebus_messages(inbox)
+        except OSError:
+            present = None  # unreadable: NOT the same answer as "no messages"
+        # an unlistable inbox cannot have its receipt dir examined either: unknown, not the
+        # "missing" that is_dir()'s False-on-error would imply
+        read_dir_state = "unknown" if present is None else _lanebus_read_dir(inbox)[1]
+    else:
+        present, read_dir_state = [], "missing"  # no inbox at all: genuinely no messages
+    acked: set[str] = set()
+    if read_dir_state == "ok":
+        try:
+            acked = {n for n, _ in _lanebus_messages(inbox / "read")}
+        except OSError:
+            read_dir_state = "unknown"
+
+    # "unread" is only meaningful when THIS inbox's declaration says a read/ receipt is the ack.
+    # `ack: none` means acks are recorded elsewhere, so a count here would be a confident wrong
+    # number; a read-dir inbox with no receipt directory at all and a backlog past the threshold
+    # contradicts its own declaration the same way. Both are UNMEASURED: the counts stay complete,
+    # every unread-derived field is null, and the row never claims "unread".
+    unreadable = present is None or read_dir_state == "unknown"
+    unmeasured = not unreadable and (
+        spec["ack"] == "none"
+        or (read_dir_state == "missing" and len(present) > _LANEBUS_READ_DIR_CONTRADICTION_N)
+    )
+    unread = None if (unreadable or unmeasured) else [(n, m) for n, m in present if n not in acked]
+    ages = [max(0.0, now - m) for _, m in (unread or [])]
+    if unread is None:
+        rows, truncated = [], None
+    else:
+        oldest_first = sorted(unread, key=lambda name_mtime: name_mtime[1])
+        truncated = len(oldest_first) > _LANEBUS_UNREAD_ROW_CAP
+        rows = [
+            _lanebus_unread_row(n, m, spec["filenames"], now, allowlist)
+            for n, m in oldest_first[:_LANEBUS_UNREAD_ROW_CAP]
+        ]
+    fields: dict[str, Any] = {
+        "inbox": name,
+        "path": str(inbox),  # SENSITIVE: the filesystem path never airs
+        "ack": spec["ack"],
+        "exists": bool(exists),
+        "state": (
+            "missing" if not exists
+            else "unknown" if unreadable
+            else "unmeasured" if unmeasured
+            else "unread" if unread
+            else "clear"
+        ),
+        "read_dir": read_dir_state,
+        # a failed scan is UNKNOWN, never a fabricated zero (absence is not evidence of absence)
+        "files_present": None if present is None else len(present),
+        "files_acked": None if (unreadable or unmeasured) else sum(1 for n, _ in present if n in acked),
+        "unread_count": None if unread is None else len(unread),
+        # max age over the unread set == now - min(mtime); null when empty OR unmeasured (the
+        # `state` field distinguishes "clear" from "unknown")
+        "oldest_unread_age_s": max(ages) if ages else None,
+        # the row LIST is capped at the oldest _LANEBUS_UNREAD_ROW_CAP; unread_count is not
+        "unread_rows_truncated": truncated,
+    }
+    return {**fields, "unread": rows, "air": _lanebus_air(fields, allowlist)}
+
+
+def _lanebus_total(rows: list[dict], key: str) -> int | None:
+    """Sum a per-inbox count over the MEASURED inboxes; None if none were (0 for a set never read
+    is the absence-into-zero defect). ``unknown_inboxes`` travels with it."""
+    values = [row[key] for row in rows if row[key] is not None]
+    return sum(values) if values else None
+
+
+def read_lanebus_summary(cfg: dict | None = None, allowlist: list[str] | None = None, now: float | None = None) -> dict:
+    """Read-only lanebus inbox state for the inboxes named in the instance config.
+
+    Per inbox: messages present, acked (a same-named file under ``read/``), the unread set, and the
+    age of the oldest unread. Metadata only — no body is opened, nothing is written.
+    """
+    allowlist = allowlist or []
+    cfg = cfg or {}
+    now = time.time() if now is None else now
+    specs = _lanebus_inbox_specs(
+        cfg.get("lanebus_inboxes"),
+        cfg.get("lanebus_count_only_inboxes"),
+        cfg.get("lanebus_ack_none_inboxes"),
+    )
+    if not specs:
+        # Empty/unconfigured DENIES by default: no inbox is guessed or globbed into existence.
+        return {
+            "dark": True,
+            "reason": "no lanebus inboxes configured",
+            "generated_at": _lanebus_stamp(now),
+            "inboxes": [],
+            "totals": {
+                "inboxes": 0, "unknown_inboxes": 0, "unmeasured_inboxes": 0,
+                "files_present": 0, "files_acked": 0,
+                "unread_count": 0, "oldest_unread_age_s": None,
+            },
+        }
+    rows = [_lanebus_inbox_row(spec, now, allowlist) for spec in specs]
+    ages = [r["oldest_unread_age_s"] for r in rows if r["oldest_unread_age_s"] is not None]
+    return {
+        "dark": False,
+        "generated_at": _lanebus_stamp(now),
+        "inboxes": rows,
+        "totals": {
+            "inboxes": len(rows),
+            "unknown_inboxes": sum(1 for r in rows if r["state"] == "unknown"),
+            "unmeasured_inboxes": sum(1 for r in rows if r["state"] == "unmeasured"),
+            "files_present": _lanebus_total(rows, "files_present"),
+            "files_acked": _lanebus_total(rows, "files_acked"),
+            "unread_count": _lanebus_total(rows, "unread_count"),
+            "oldest_unread_age_s": max(ages) if ages else None,
+        },
+    }
+
+
 _OBSERVE_DIMENSION_KEYS = (
     "health",
     "drift",
@@ -4570,6 +4847,10 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     def read_vault() -> dict:
         return read_vault_summary(session_cfg)
 
+    @app.get("/read/lanebus")
+    def read_lanebus() -> dict:
+        return read_lanebus_summary(session_cfg, allowlist)
+
     @app.get("/read/observe")
     def read_observe() -> dict:
         observe_cfg = dict(session_cfg)
@@ -4662,6 +4943,22 @@ def instance_config() -> dict:
         else:
             capability_surface_pack_paths = []
     hkp_shadow_root = os.environ.get("REINS_HKP_SHADOW_ROOT") or str(toml_cfg.get("hkp_shadow_root", ""))
+    lanebus_env = os.environ.get("REINS_LANEBUS_INBOXES")
+    if lanebus_env:
+        raw_lanebus = [v for v in lanebus_env.split(os.pathsep) if v]
+    else:
+        raw_lanebus = toml_cfg.get("lanebus_inboxes", [])
+    count_only_env = os.environ.get("REINS_LANEBUS_COUNT_ONLY_INBOXES")
+    if count_only_env:
+        raw_count_only = [v for v in count_only_env.split(os.pathsep) if v]
+    else:
+        raw_count_only = toml_cfg.get("lanebus_count_only_inboxes", [])
+    ack_none_env = os.environ.get("REINS_LANEBUS_ACK_NONE_INBOXES")
+    if ack_none_env:
+        raw_ack_none = [v for v in ack_none_env.split(os.pathsep) if v]
+    else:
+        raw_ack_none = toml_cfg.get("lanebus_ack_none_inboxes", [])
+    lanebus_inboxes = _lanebus_inbox_specs(raw_lanebus, raw_count_only, raw_ack_none)
     hkp_index_root = os.environ.get("REINS_HKP_INDEX_ROOT") or str(toml_cfg.get("hkp_index_root", ""))
     hkp_report_root = os.environ.get("REINS_HKP_REPORT_ROOT") or str(toml_cfg.get("hkp_report_root", ""))
     vault_root = os.environ.get("REINS_VAULT_ROOT") or str(toml_cfg.get("vault_root", ""))
@@ -4726,6 +5023,7 @@ def instance_config() -> dict:
         "hkp_report_root": hkp_report_root,
         "hkp_bundles": hkp_bundles,
         "vault_root": vault_root,
+        "lanebus_inboxes": lanebus_inboxes,
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }
