@@ -43,6 +43,8 @@ EXPECTED_DEFAULT_ALLOW = [
     "id", "layer", "status", "source", "target", "relation", "res",
     "role", "platform", "state", "alive", "idle", "stalled", "output_age_s", "relay_age_s",
     "readiness", "blocker", "attention",
+    # Coordinator verdict; structural booleans only — dispatch_blocked_reason stays off air.
+    "dispatchable", "dispatch_ready",
     "evidence_count", "resume_ready",
     "evidence_summary", "by_kind", "transcript_roots_observed", "transcript_roots_missing", "truncated",
     "count", "age_bucket", "coverage", "task_link_state", "severity", "privacy", "raw_access", "exists",
@@ -597,6 +599,54 @@ def test_to_session_shape_state_precedence_and_air():
     assert out["air"]["role"] == "ok"
     assert out["air"]["session"] == "deny" and out["air"]["claimed_task"] == "deny"
     assert out["air"]["readiness"] == "deny" and out["air"]["attention"] == "deny"
+
+
+def test_to_session_carries_coordinator_verdict_and_redacts_the_free_text_reason():
+    """The producer's verdict is carried, not re-derived — and only its structural half airs.
+
+    `state`/`blocker` are synthesised from alive/idle/ages and cannot distinguish a retired lane
+    from an unstarted one, so both used to render as "stale ... idle". The coordinator already
+    decided: `dispatchable` is permission, `dispatch_ready` is capability.
+
+    `dispatch_blocked_reason` is free text and carries absolute filesystem paths in production, so
+    it must NOT air. That is the assertion that matters here — the allowlist's stated purpose is
+    structural fields only. (The fixture uses a stand-in path; the real one names an operator home.)
+    """
+    retired = to_session(
+        "delta",
+        {
+            "role": "delta", "platform": "claude", "alive": True, "idle": True,
+            "dispatchable": False, "dispatch_ready": True,
+        },
+        EXPECTED_DEFAULT_ALLOW,
+    )
+    unstarted = to_session(
+        "alpha",
+        {
+            "role": "alpha", "platform": "claude", "alive": False, "idle": True,
+            "dispatchable": True, "dispatch_ready": False,
+            "dispatch_blocked_reason": (
+                "lane_not_alive; next_action=start or relaunch lane 'alpha' before checking "
+                "guarded cc-task scripts in /srv/example/council"
+            ),
+        },
+        EXPECTED_DEFAULT_ALLOW,
+    )
+
+    # The pair separates two dispositions the synthesised labels collapse together.
+    assert (retired["dispatchable"], retired["dispatch_ready"]) == (False, True)
+    assert (unstarted["dispatchable"], unstarted["dispatch_ready"]) == (True, False)
+
+    # The producer's own next action survives the hop off-air.
+    assert "next_action=start or relaunch lane 'alpha'" in unstarted["dispatch_blocked_reason"]
+
+    # ... and is redacted on air, because it names a filesystem path.
+    assert unstarted["air"]["dispatch_blocked_reason"] == "deny"
+    assert "/srv/example" not in str(unstarted["air"])
+
+    # The structural booleans do air.
+    assert unstarted["air"]["dispatchable"] == "ok"
+    assert unstarted["air"]["dispatch_ready"] == "ok"
 
 
 def test_session_attention_sort_prioritizes_cutover_lanes():

@@ -9,6 +9,8 @@ var expectedDefaultAIRAllowlist = []string{
 	"id", "layer", "status", "source", "target", "relation", "res",
 	"role", "platform", "state", "alive", "idle", "stalled", "output_age_s", "relay_age_s",
 	"readiness", "blocker", "attention",
+	// Coordinator verdict; structural booleans only — dispatch_blocked_reason stays off air.
+	"dispatchable", "dispatch_ready",
 	"evidence_count", "resume_ready",
 	"evidence_summary", "by_kind", "transcript_roots_observed", "transcript_roots_missing", "truncated",
 	"count", "age_bucket", "coverage", "task_link_state", "severity", "privacy", "raw_access", "exists",
