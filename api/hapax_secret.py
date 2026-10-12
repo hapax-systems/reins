@@ -18,8 +18,10 @@ Put never calls FileStore.put and never ``pass insert``. It POSTs
 never appear on argv. The command ledger records sha256 only.
 
 On a host that is not the FileStore machine, the same argv is forwarded
-with ``ssh`` (``-t`` only for put) to ``HAPAX_SECRETS_HOST`` (default
-``hapax-appendix``). ``:8799`` is not opened on the tailnet.
+with ``ssh`` (``-t`` only for put) to the logical SSH alias ``secrets-store``.
+Bind the alias in private SSH configuration, or override it with
+``HAPAX_SECRETS_HOST`` (e.g. ``secrets.example.internal``). ``:8799`` is not
+opened on the tailnet.
 """
 
 from __future__ import annotations
@@ -92,15 +94,15 @@ def is_store_host() -> bool:
 
 
 def secrets_host() -> str:
-    return os.environ.get("HAPAX_SECRETS_HOST", "hapax-appendix").strip() or "hapax-appendix"
+    return os.environ.get("HAPAX_SECRETS_HOST", "secrets-store").strip() or "secrets-store"
 
 
 def ssh_argv(*, tty: bool, rest: list[str]) -> list[str]:
     host = secrets_host()
     if host.startswith("-"):
         raise ValueError(
-            "HAPAX_SECRETS_HOST must not start with '-'. Next action: set a hostname "
-            "like hapax-appendix"
+            "HAPAX_SECRETS_HOST must not start with '-'. Next action: unset it to use "
+            "the secrets-store SSH alias, or set a hostname like secrets.example.internal."
         )
     remote = " ".join(shlex.quote(part) for part in ("$HOME/.local/bin/hapax-secret", *rest))
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]

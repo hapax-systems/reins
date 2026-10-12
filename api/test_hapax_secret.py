@@ -40,7 +40,7 @@ def test_name_of_maps_slash_and_rejects_illegal():
 
 def test_require_loopback_refuses_tailnet():
     with pytest.raises(ValueError, match="loopback"):
-        hapax_secret.require_loopback_url("http://hapax-appendix.tailf9491.ts.net:8799/command/secret")
+        hapax_secret.require_loopback_url("http://secrets.example.ts.net:8799/command/secret")
     hapax_secret.require_loopback_url("http://127.0.0.1:8799/command/secret")
 
 
@@ -155,22 +155,51 @@ def test_launcher_script_sshes_without_baked_home():
     assert "ssh" in text
     assert " -t -- " in text or " -t --" in text
     assert "/home/" not in text
-    assert "hapax-appendix" in text
+    assert "secrets-store" in text
+    assert "HAPAX_SECRETS_HOST" in text
     assert "python3 -m hapax_secret" in text
     assert ".local/share/reins/current/api" in text
     assert 'HOST == -*' in text or 'HOST" == -*' in text
 
 
-def test_ssh_argv_tty_only_for_put():
+def test_ssh_argv_tty_only_for_put(monkeypatch):
+    monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
     put = hapax_secret.ssh_argv(tty=True, rest=[])
     get = hapax_secret.ssh_argv(tty=False, rest=["litellm/master-key"])
     assert put[:4] == ["ssh", "-o", "BatchMode=yes", "-o"]
     assert "-t" in put
     assert "--" in put
-    assert put[put.index("--") + 1] == "hapax-appendix"
+    assert put[put.index("--") + 1] == "secrets-store"
     assert "hapax-secret" in put[-1]
     assert "-t" not in get
+    assert get[get.index("--") + 1] == "secrets-store"
     assert "litellm/master-key" in get[-1]
+
+
+def test_module_docstring_names_ssh_alias_and_override():
+    assert "secrets-store" in hapax_secret.__doc__
+    assert "HAPAX_SECRETS_HOST" in hapax_secret.__doc__
+
+
+def test_launcher_default_matches_python(monkeypatch):
+    monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
+    text = Path(__file__).resolve().parent.parent.joinpath("scripts/hapax-secret").read_text()
+    host = hapax_secret.secrets_host()
+    assert f'HOST="${{HAPAX_SECRETS_HOST:-{host}}}"' in text
+
+
+@pytest.mark.parametrize("tty", [False, True], ids=["get", "put"])
+def test_ssh_argv_uses_host_override(monkeypatch, tty):
+    monkeypatch.setenv("HAPAX_SECRETS_HOST", "secrets.example.internal")
+    argv = hapax_secret.ssh_argv(tty=tty, rest=[] if tty else ["litellm/master-key"])
+    assert argv[argv.index("--") + 1] == "secrets.example.internal"
+    assert ("-t" in argv) == tty
+
+
+@pytest.mark.parametrize("host", ["", "  "], ids=["empty", "whitespace"])
+def test_secrets_host_empty_override_uses_alias(monkeypatch, host):
+    monkeypatch.setenv("HAPAX_SECRETS_HOST", host)
+    assert hapax_secret.secrets_host() == "secrets-store"
 
 
 def test_ssh_argv_rejects_option_like_host(monkeypatch):
