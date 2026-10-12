@@ -17,8 +17,8 @@ composes + verifies + forwards, and physically cannot append.
 """
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -41,6 +41,11 @@ class Envelope:
     authority_packet: Any
     preflight_receipt: dict
     idempotency_key: str
+    #: Request headers, lower-cased, as the transport received them. Defaulted so
+    #: every existing construction stays valid. A verb that authenticates its
+    #: CALLER rather than its packet reads it here; a credential belongs in a
+    #: header and not in ``authority_packet``, which is witnessed data.
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass

@@ -5,10 +5,12 @@ operator's ~20 entries, UID, and identity strings — a stranger's kit cannot in
 gap is four claims, and this module is each of them as machinery:
 
   * PORTABLE, BACKEND-AGNOSTIC STORE. `SecretStore` is the contract; `FileStore`
-    (durable, device-bound files), `PassStore` (legacy CLI), and `MemoryStore`
-    (tests / stranger) are backends. Nothing else in the kernel may know which
-    is in use. The canonical durable backend is `FileStore` (`backend_id=file`),
-    not `pass` (operator 2026-08-23: pass is not the answer; estate≡shipped).
+    (durable, device-bound files) and `MemoryStore` (tests / stranger) are the
+    backends. Nothing else in the kernel may know which is in use. `FileStore`
+    (`backend_id=file`) is the only durable one. The `pass` backend was removed
+    2026-09-16 on the operator's ruling that pass/gopass are never used to
+    manage secrets going forward; `default_store()` is now unconditional, so no
+    caller needs a "this is not pass" branch to be safe.
   * THE SECRET SET IS GENERATED, never enumerated. `required_secrets` derives the set from the
     RATIFIED boot profile (R3.6): the existing-agent-harness profile needs nothing (the sanctioned
     harness IS the secret store for entitlement auth — access-bootstrap amendment, 2026-07-09);
@@ -39,8 +41,7 @@ import hmac
 import os
 import re
 import secrets
-import shutil
-import subprocess
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -97,8 +98,112 @@ def _default_file_root() -> Path:
     return Path.home() / ".config" / "reins" / "secrets"
 
 
+class SecretIntegrityError(Exception):
+    """A stored blob did not authenticate: tampered, truncated, wrong key, or
+    written under another name.
+
+    DELIBERATELY NOT a ``ValueError`` subclass. The defect this type exists to
+    close is that ``FileStore.get`` caught ``ValueError`` and returned ``None``,
+    so a corrupted secret was indistinguishable from an absent one and every
+    caller's "not found, run the put dialogue" arm fired on a tampered blob. A
+    subclass would be swallowed by exactly those ``except ValueError`` arms
+    again. Messages never carry the value or the key.
+    """
+
+
+#: Format 2 header: 3 ASCII bytes + a version byte, so a later format 3 is a
+#: one-byte change rather than another undiscriminated blob shape.
+_SECRET_MAGIC_V2 = b"RS2\x00"
+_NONCE_LEN = 16
+_TAG_LEN = 32
+_V1_MIN_LEN = _NONCE_LEN + _TAG_LEN
+_V2_MIN_LEN = len(_SECRET_MAGIC_V2) + _NONCE_LEN + _TAG_LEN
+
+
+def _hkdf_sha256(*, ikm: bytes, salt: bytes, info: bytes, length: int) -> bytes:
+    """RFC 5869 HKDF over HMAC-SHA256, stdlib only.
+
+    WHY NOT ``cryptography``. ``scripts/hapax-secret`` execs the SYSTEM
+    ``python3`` with PYTHONPATH pointed at this api directory — not the uv venv
+    — because GET is the bootstrap read path that watchdogs and units take
+    before any environment exists. Measured on the store host: ``cryptography``
+    is not importable from that interpreter. A compiled dependency on the secret
+    READ path means a broken wheel locks the operator out of the credentials
+    needed to repair the wheel. Falsifier: point the launcher at an interpreter
+    whose environment is guaranteed present before the first secret read, and an
+    AEAD from ``cryptography`` becomes affordable and is the better primitive.
+    """
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    out = b""
+    block = b""
+    counter = 1
+    while len(out) < length:
+        block = hmac.new(prk, block + info + bytes([counter]), hashlib.sha256).digest()
+        out += block
+        counter += 1
+    return out[:length]
+
+
+def _v2_subkeys(key: bytes, nonce: bytes) -> tuple[bytes, bytes]:
+    """Separate enc and mac subkeys. v1 used the SAME 32 bytes for the SHAKE
+    keystream and the HMAC tag; distinct ``info`` labels under one HKDF is the
+    single mechanism that separates them."""
+    return (
+        _hkdf_sha256(ikm=key, salt=nonce, info=b"reins-secret-v2-enc", length=32),
+        _hkdf_sha256(ikm=key, salt=nonce, info=b"reins-secret-v2-mac", length=32),
+    )
+
+
+def _v2_aad(name: str) -> bytes:
+    """Associated data: header + length-prefixed name. The length prefix makes
+    the encoding unambiguous, and the name in the MAC is the single mechanism
+    that stops a blob being renamed into another secret's slot."""
+    raw = name.encode("utf-8")
+    if len(raw) > 0xFFFF:
+        raise ValueError("secret name is too long to bind into the blob")
+    return _SECRET_MAGIC_V2 + len(raw).to_bytes(2, "big") + raw
+
+
+def blob_format_of(blob: bytes) -> int:
+    """2 when the header is present, else 1.
+
+    KNOWN AND ACCEPTED LIMIT: a v1 blob opens with a 16-byte random nonce, so
+    with probability 2**-32 its first four bytes are the v2 header and it is
+    read as v2, fails to authenticate, and is reported as an integrity failure.
+    That is a named refusal with the right next action (re-put the secret), not
+    a silent wrong answer, and it is why there is no "try v1 after v2 fails"
+    arm: such a fallback would make a genuine v2 tamper take a second, weaker
+    path instead of refusing.
+    """
+    return 2 if blob.startswith(_SECRET_MAGIC_V2) else 1
+
+
+def _file_wrap_v2(key: bytes, nonce: bytes, name: str, plaintext: bytes) -> bytes:
+    """header || nonce || tag || ct — encrypt-then-MAC with separated subkeys
+    and the name bound into the authenticated data."""
+    enc_key, mac_key = _v2_subkeys(key, nonce)
+    stream = hashlib.shake_256(enc_key).digest(len(plaintext))
+    ct = bytes(a ^ b for a, b in zip(plaintext, stream, strict=True))
+    tag = hmac.new(mac_key, _v2_aad(name) + nonce + ct, hashlib.sha256).digest()
+    return _SECRET_MAGIC_V2 + nonce + tag + ct
+
+
+def _file_unwrap_v2(key: bytes, blob: bytes, name: str) -> bytes:
+    if len(blob) < _V2_MIN_LEN:
+        raise SecretIntegrityError("secret blob is truncated below the v2 header")
+    body = blob[len(_SECRET_MAGIC_V2) :]
+    nonce, tag, ct = body[:_NONCE_LEN], body[_NONCE_LEN:_V1_MIN_LEN], body[_V1_MIN_LEN:]
+    enc_key, mac_key = _v2_subkeys(key, nonce)
+    expect = hmac.new(mac_key, _v2_aad(name) + nonce + ct, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expect):
+        raise SecretIntegrityError("secret blob failed authentication")
+    stream = hashlib.shake_256(enc_key).digest(len(ct))
+    return bytes(a ^ b for a, b in zip(ct, stream, strict=True))
+
+
 def _file_wrap(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
-    """SHAKE-256 stream + HMAC-SHA256 tag. Not a named product; values never argv."""
+    """Format 1. RETAINED FOR READING ONLY — nothing writes it any more; the
+    tests that pin v1 reads construct their fixtures with it."""
     stream = hashlib.shake_256(key + nonce).digest(len(plaintext))
     ct = bytes(a ^ b for a, b in zip(plaintext, stream, strict=True))
     tag = hmac.new(key, nonce + ct, hashlib.sha256).digest()
@@ -106,32 +211,225 @@ def _file_wrap(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
 
 
 def _file_unwrap(key: bytes, blob: bytes) -> bytes:
-    if len(blob) < 16 + 32:
-        raise ValueError("truncated secret blob")
-    nonce, tag, ct = blob[:16], blob[16:48], blob[48:]
+    if len(blob) < _V1_MIN_LEN:
+        raise SecretIntegrityError("secret blob is truncated below the v1 header")
+    nonce, tag, ct = blob[:_NONCE_LEN], blob[_NONCE_LEN:_V1_MIN_LEN], blob[_V1_MIN_LEN:]
     expect = hmac.new(key, nonce + ct, hashlib.sha256).digest()
     if not hmac.compare_digest(tag, expect):
-        raise ValueError("secret blob MAC mismatch")
+        raise SecretIntegrityError("secret blob failed authentication")
     stream = hashlib.shake_256(key + nonce).digest(len(ct))
     return bytes(a ^ b for a, b in zip(ct, stream, strict=True))
 
 
+def _file_unwrap_any(key: bytes, blob: bytes, name: str) -> bytes:
+    """Read either format. Writers only ever emit v2."""
+    if blob_format_of(blob) == 2:
+        return _file_unwrap_v2(key, blob, name)
+    return _file_unwrap(key, blob)
+
+
+#: Byte shapes a stored value can carry. ``--audit`` reports them; put refuses
+#: the ones in REFUSABLE_VALUE_FLAGS. Flag names, never values.
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+#: THE CLOSED VOCABULARY. value_shape_flags returns a subset of exactly these
+#: literals and nothing derived from the value — that is what makes it safe to
+#: print a flag list beside a secret's name. Pinned by
+#: test_value_shape_flags_only_ever_returns_the_closed_vocabulary, which fuzzes
+#: the function and asserts no returned string is absent from this set.
+#:
+#: Named for what it is — the byte shapes a value can carry — and not
+#: "SECRET_*": CodeQL classifies identifiers as secret material by NAME, and
+#: under its former name this tuple of flag literals was reported as a secret
+#: flowing to stdout for four commits running (py/clear-text-logging-
+#: sensitive-data; the SARIF named this tuple, the function below and
+#: blob_format_of as its three sources). The property that matters is the
+#: closed set, and the fuzz test holds it.
+VALUE_SHAPE_FLAGS = (
+    "empty",
+    "bom",
+    "nul",
+    "cr",
+    "trailing-newline",
+    "trailing-blank-line",
+    "multiline",
+    "leading-whitespace",
+    "trailing-whitespace",
+    "non-utf8",
+)
+
+#: INFORMATIONAL, not defects — reported by --audit, never refused at put.
+#:
+#: `multiline` was refusable in the first cut of this change and the ruling that
+#: corrected it was measured, not argued: 7 of the 184 live values carry
+#: interior newlines and every one is a document rather than a credential
+#: string — an ssh private key, a GitHub App private key, two Google
+#: service-account JSONs, an rclone config, a BitLocker recovery blob, a GPG
+#: passphrase file. Refusing interior LF would have failed all seven at their
+#: next put. `non-utf8` is here for the same reason: a binary secret is
+#: legitimate.
+INFORMATIONAL_VALUE_FLAGS = frozenset({"multiline", "non-utf8"})
+
+#: Everything else has been measured to break a consumer.
+REFUSABLE_VALUE_FLAGS = frozenset(set(VALUE_SHAPE_FLAGS) - INFORMATIONAL_VALUE_FLAGS)
+
+
+def value_shape_flags(value: bytes) -> tuple[str, ...]:
+    """The byte shapes of one value, in a stable order. Never returns the value.
+
+    The BOM flag exists because it happened: 17 of 112 FileStore values began
+    ``ef bb bf`` (carried in from the pass store), and every consumer of those
+    keys authenticated with three junk bytes on the front and got a 401 that
+    named the provider, not the store.
+
+    ``multiline`` exists because the opposite happened: refusing interior
+    newlines would have refused seven live values that are documents rather than
+    credential strings. A flag vocabulary that cannot separate "this byte broke
+    a consumer" from "this value is a file" refuses the wrong half.
+
+    THE TRAILING-NEWLINE POLICY, stated once, here:
+
+      * a single-line value ends at its last non-whitespace byte;
+      * a multi-line value may end in exactly one LF;
+      * two trailing LFs are a defect either way.
+
+    The refusal exists to catch the single-line key pasted with its Enter, not
+    to reject files for being files.
+    """
+    flags: list[str] = []
+    if not value:
+        flags.append("empty")
+    if value.startswith(_UTF8_BOM):
+        flags.append("bom")
+    if b"\x00" in value:
+        flags.append("nul")
+    if b"\r" in value:
+        flags.append("cr")
+    # Multi-line means CONTENT on more than one line, so strip every trailing
+    # newline before looking. Stripping only one made "sk-key\n\n" — a
+    # single-line value with a blank line pasted onto it — read as a document
+    # and slip past the refusal it exists for.
+    body = value.rstrip(b"\n")
+    multiline = b"\n" in body
+    if multiline:
+        # INFORMATION. An interior newline means the value is a document, not a
+        # credential string, and documents are legitimate here.
+        flags.append("multiline")
+    trailing = len(value) - len(body)
+    if trailing >= 2:
+        # Refusable whatever the value is. One newline ends a file; two mean a
+        # blank line nobody intended, and for a document that is as much a
+        # transcription artefact as a BOM.
+        flags.append("trailing-blank-line")
+    elif trailing == 1 and not multiline:
+        # Refusable. A bearer token sent as "sk-abc\n" gets a 401 that names the
+        # provider rather than the store — the same failure the BOM produced.
+        # A DOCUMENT ending in one newline is not this: a PEM key, a
+        # service-account JSON and an rclone config are files, and a file ends
+        # in a newline. Refusing those refuses the values that matter most.
+        flags.append("trailing-newline")
+    # Look for edge whitespace PAST a BOM and PAST the trailing newlines, so one
+    # put reports every shape it carries. Checking value[:1] meant a value of
+    # BOM-then-space reported only `bom`, the operator fixed that, and the space
+    # came back as a second refusal on the retry. A refusal that reveals one
+    # problem at a time is a refusal the operator meets several times.
+    unbommed = body[len(_UTF8_BOM) :] if body.startswith(_UTF8_BOM) else body
+    if unbommed[:1] in (b" ", b"\t"):
+        flags.append("leading-whitespace")
+    if unbommed[-1:] in (b" ", b"\t"):
+        flags.append("trailing-whitespace")
+    try:
+        value.decode("utf-8")
+    except UnicodeDecodeError:
+        flags.append("non-utf8")
+    return tuple(flags)
+
+
+def validate_secret_value(value: bytes) -> None:
+    """Refuse a value whose bytes are known to break consumers. ONE definition:
+    the command surface calls it before any write, and the TTY dialogue calls
+    the same function so the operator sees the same sentence without a round
+    trip. No silent stripping — a store that quietly edits the operator's bytes
+    cannot be reasoned about, and the BOM incident was undetectable precisely
+    because nothing ever said anything.
+    """
+    bad = [f for f in value_shape_flags(value) if f in REFUSABLE_VALUE_FLAGS]
+    if bad:
+        raise ValueError(
+            "secret value refused ("
+            + ", ".join(bad)
+            + "). Next action: re-enter the value with no byte-order mark, no "
+            "carriage return, and no leading or trailing space or tab. A "
+            "single-line value must end at its last non-whitespace byte; a "
+            "multi-line value may end in exactly one newline, never two. Run "
+            "hapax-secret --audit to see which stored names carry the same shapes"
+        )
+
+
+def _default_key_file() -> Path | None:
+    """An out-of-tree key location, or None for the in-root default.
+
+    The key sits beside the blobs it protects, inside a home directory that
+    restic and the vault snapshotter both walk. Co-located key and ciphertext
+    means one backup set carries both halves. REINS_SECRET_KEY_FILE (and
+    ``hapax-secret --key-file``) move the key off that path; the exclusion
+    measurement and the boundary are written up in docs/secret-store-key.md.
+    """
+    env = os.environ.get("REINS_SECRET_KEY_FILE", "").strip()
+    return Path(env) if env else None
+
+
+#: How many superseded blobs a name keeps. Bounded because history is
+#: ciphertext of real credentials: unbounded history is an unbounded liability.
+_HISTORY_KEEP = 5
+_HISTORY_DIR = ".history"
+#: The stamp _archive and delete write — %Y%m%dT%H%M%S%fZ — plus the "-N" that
+#: _archive appends when two supersessions of one name land in one microsecond.
+_HISTORY_STAMP_RE = re.compile(r"\d{8}T\d{12}Z(?:-\d+)?")
+
+
+def _history_entries(hdir: Path, name: str, suffix: str) -> list[tuple[Path, str]]:
+    """THIS name's history files, with their stamps, in stamp order.
+
+    A name may contain dots, so ``api`` and ``api.openai`` are both legal and
+    the glob ``api.*.bin`` matches ``api.openai.<stamp>.bin`` as well as
+    ``api.<stamp>.bin``. Found in review of PR 44: without the stamp check,
+    history("api") reported api.openai's stamps, put("api") counted
+    api.openai's archives toward api's cap and pruned them, and delete("api")
+    destroyed api.openai's archived ciphertext. Only a segment that IS a stamp
+    belongs to this name.
+    """
+    entries = []
+    for path in hdir.glob(f"{name}.*{suffix}"):
+        stamp = path.name[len(name) + 1 : -len(suffix)]
+        if _HISTORY_STAMP_RE.fullmatch(stamp):
+            entries.append((path, stamp))
+    return sorted(entries, key=lambda entry: entry[1])
+
+
 @dataclass
 class FileStore:
-    """Durable device-bound store. Not `pass`. backend_id is `file`.
+    """Durable device-bound store. backend_id is `file`.
 
-    Layout: ``root/.key`` (32 random bytes, 0600) and ``root/<safe-name>.bin``.
-    Override root with REINS_SECRET_STORE. Names are path-safe; values never
-    appear on argv, in env, or in raised messages.
+    Layout: ``root/.key`` (32 random bytes, 0600, or ``key_file`` elsewhere),
+    ``root/<safe-name>.bin`` (format 2 blobs), and ``root/.history/`` holding
+    superseded blobs and delete tombstones. Override root with
+    REINS_SECRET_STORE. Names are path-safe; values never appear on argv, in
+    env, or in raised messages.
     """
 
     root: Path = field(default_factory=_default_file_root)
     backend_id: str = "file"
+    key_file: Path | None = field(default_factory=_default_key_file)
+
+    @property
+    def key_path(self) -> Path:
+        return self.key_file if self.key_file is not None else self.root / ".key"
 
     def _key(self) -> bytes:
-        root = self.root
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = root / ".key"
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self.key_path
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         try:
             fd = os.open(path, flags, 0o600)
@@ -152,23 +450,34 @@ class FileStore:
             )
         return self.root / f"{name}.bin"
 
+    def _history_dir(self) -> Path:
+        return self.root / _HISTORY_DIR
+
     def has(self, name: str) -> bool:
         return self._blob_path(name).is_file()
 
     def get(self, name: str) -> bytes | None:
+        """None means ABSENT and nothing else.
+
+        A blob that is present but does not authenticate raises
+        SecretIntegrityError. It used to return None here, which told every
+        caller "not found" about a file it had just read.
+        """
         path = self._blob_path(name)
         if not path.is_file():
             return None
-        try:
-            return _file_unwrap(self._key(), path.read_bytes())
-        except ValueError:
-            return None
+        return _file_unwrap_any(self._key(), path.read_bytes(), name)
 
-    def put(self, name: str, value: bytes) -> None:
+    def blob_format(self, name: str) -> int | None:
+        """1 or 2 for a present blob, None when absent. Reads the header only."""
         path = self._blob_path(name)
-        nonce = os.urandom(16)
-        blob = _file_wrap(self._key(), nonce, value)
-        fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=self.root)
+        if not path.is_file():
+            return None
+        with path.open("rb") as fh:
+            return blob_format_of(fh.read(len(_SECRET_MAGIC_V2)))
+
+    def _write_blob(self, path: Path, blob: bytes) -> None:
+        fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=path.parent)
         try:
             os.write(fd, blob)
             os.fchmod(fd, 0o600)
@@ -184,18 +493,202 @@ class FileStore:
                 pass
             raise
 
+    def _archive(self, name: str, blob: bytes) -> None:
+        """Keep the superseded ciphertext under a fresh timestamp, then prune."""
+        hdir = self._history_dir()
+        hdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        for attempt in range(1000):
+            suffix = "" if attempt == 0 else f"-{attempt}"
+            path = hdir / f"{name}.{stamp}{suffix}.bin"
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                continue
+            try:
+                os.write(fd, blob)
+            finally:
+                os.close(fd)
+            break
+        else:  # pragma: no cover - 1000 puts inside one microsecond
+            raise RuntimeError("could not allocate a history slot for the superseded blob")
+        entries = _history_entries(hdir, name, ".bin")
+        for stale, _stamp in entries[:-_HISTORY_KEEP]:
+            stale.unlink(missing_ok=True)
+
+    def put(self, name: str, value: bytes) -> None:
+        """Always writes format 2. A v1 blob is therefore migrated by its first
+        put and by nothing else — get stays a reader, because GET runs from
+        watchdogs and units and a getter that writes is a getter that can fail
+        on a read-only mount.
+        """
+        path = self._blob_path(name)
+        blob = _file_wrap_v2(self._key(), os.urandom(_NONCE_LEN), name, value)
+        if path.is_file():
+            self._archive(name, path.read_bytes())
+        self._write_blob(path, blob)
+
+    def history(self, name: str) -> tuple[str, ...]:
+        """Timestamps of superseded versions and of the delete tombstone, in
+        order. Timestamps only — never a value, never a digest of one."""
+        self._blob_path(name)  # validate the name before it reaches a glob
+        hdir = self._history_dir()
+        if not hdir.is_dir():
+            return ()
+        stamps = [stamp for _path, stamp in _history_entries(hdir, name, ".bin")]
+        stamps += [
+            stamp + " (deleted)" for _path, stamp in _history_entries(hdir, name, ".tombstone")
+        ]
+        return tuple(sorted(stamps))
+
     def delete(self, name: str) -> bool:
+        """Delete means the material is gone: the live blob AND this name's
+        superseded blobs. A tombstone records that it happened.
+
+        Keeping history through a delete would defeat the one operation whose
+        whole purpose is that a revoked credential stops existing — the estate
+        deletes names precisely because the value must not survive.
+        """
         path = self._blob_path(name)
         try:
             path.unlink()
         except FileNotFoundError:
             return False
+        hdir = self._history_dir()
+        if hdir.is_dir():
+            for stale, _stamp in _history_entries(hdir, name, ".bin"):
+                stale.unlink(missing_ok=True)
+        hdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        tombstone = hdir / f"{name}.{stamp}.tombstone"
+        try:
+            os.close(os.open(tombstone, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            pass
         return True
+
+    def names(self) -> tuple[str, ...]:
+        """Stored names, sorted. Reads no values."""
+        if not self.root.is_dir():
+            return ()
+        return tuple(sorted(p.name[: -len(".bin")] for p in self.root.glob("*.bin")))
 
 
 def default_store() -> SecretStore:
-    """The estate path and the shipped path: FileStore, not PassStore."""
+    """Unconditional since the pass backend was removed: always the FileStore."""
     return FileStore()
+
+
+#: The header the secret command surface authenticates. A header rather than a
+#: body field so the credential never lands in a request body that a proxy, a
+#: log line, or a witnessed envelope might copy.
+SECRET_COMMAND_TOKEN_HEADER = "x-reins-secret-token"
+_TOKEN_REL_PATH = ("reins", "secret-command.token")
+
+
+class SecretCommandTokenError(Exception):
+    """The capability token could not be located or read. Carries a next action;
+    never carries the token."""
+
+
+def _runtime_dir() -> Path:
+    """$XDG_RUNTIME_DIR, or the systemd default computed from our own uid.
+
+    Computing /run/user/<uid> is not a widening fallback: it is the SAME
+    location the variable normally holds, and the safety precondition is
+    checked here, at the moment of use — the directory must exist, be a real
+    directory, be owned by this uid, and not be group- or world-accessible. If
+    that cannot be established we refuse. /tmp is never used: a world-writable
+    directory would let any local account plant the token file first.
+    """
+    env = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    candidate = Path(env) if env else Path(f"/run/user/{os.getuid()}")
+    try:
+        st = os.stat(candidate)
+    except OSError as exc:
+        raise SecretCommandTokenError(
+            f"runtime directory {candidate} is unusable ({type(exc).__name__}). Next action: "
+            "run the secret command surface in a session with XDG_RUNTIME_DIR set to a "
+            "0700 directory you own"
+        ) from None
+    if not stat.S_ISDIR(st.st_mode):
+        raise SecretCommandTokenError(
+            f"runtime directory {candidate} is not a directory. Next action: point "
+            "XDG_RUNTIME_DIR at a 0700 directory you own"
+        )
+    if st.st_uid != os.getuid():
+        raise SecretCommandTokenError(
+            f"runtime directory {candidate} is not owned by this uid. Next action: point "
+            "XDG_RUNTIME_DIR at a 0700 directory you own"
+        )
+    if st.st_mode & 0o077:
+        raise SecretCommandTokenError(
+            f"runtime directory {candidate} is group- or world-accessible. Next action: "
+            "chmod 700 it, or point XDG_RUNTIME_DIR at a 0700 directory you own"
+        )
+    return candidate
+
+
+def secret_command_token_path() -> Path:
+    return _runtime_dir().joinpath(*_TOKEN_REL_PATH)
+
+
+def mint_secret_command_token() -> str:
+    """Read the per-boot capability token, creating it if this is the first call.
+
+    WHAT THIS DOES AND DOES NOT BUY. It excludes a process running as ANOTHER
+    uid, which loopback HTTP did not: :8799 is reachable by every account on the
+    host, and before this a container or a service user could put or delete any
+    secret. It does NOT exclude a process running as the operator — such a
+    process can read the token file, exactly as it could read the store's .key.
+    An SO_PEERCRED check on a Unix socket would buy the same set and no more,
+    for a larger change; that is why this is a token and not a socket. Same-uid
+    isolation needs a different trust domain and is not claimed here.
+
+    Per-boot by construction: XDG_RUNTIME_DIR is tmpfs cleared on logout.
+    """
+    path = secret_command_token_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        try:
+            os.write(fd, secrets.token_hex(32).encode("ascii"))
+        finally:
+            os.close(fd)
+    try:
+        st = os.stat(path)
+        if st.st_uid != os.getuid() or st.st_mode & 0o077:
+            raise SecretCommandTokenError(
+                f"secret command token {path} is not 0600 and owned by this uid. Next action: "
+                "delete it and let the surface mint a fresh one"
+            )
+        token = path.read_text(encoding="ascii").strip()
+    except OSError as exc:
+        raise SecretCommandTokenError(
+            f"secret command token at {path} is unreadable ({type(exc).__name__}). Next action: "
+            "delete it and rerun so the surface mints a fresh one"
+        ) from None
+    if not token:
+        raise SecretCommandTokenError(
+            f"secret command token at {path} is empty. Next action: delete it and rerun so "
+            "the surface mints a fresh one"
+        )
+    return token
+
+
+def secret_command_token_matches(presented: str | None) -> bool:
+    """Constant-time comparison against the on-disk token. A missing or
+    unreadable token denies — it never passes for want of something to check."""
+    if not presented:
+        return False
+    try:
+        expected = mint_secret_command_token()
+    except SecretCommandTokenError:
+        return False
+    return hmac.compare_digest(presented, expected)
 
 
 @dataclass
@@ -218,92 +711,6 @@ class MemoryStore:
 
     def delete(self, name: str) -> bool:
         return self._values.pop(name, None) is not None
-
-
-@dataclass(frozen=True)
-class PassStore:
-    """The estate-pattern backend: `pass`, values via stdin/stdout pipes, never argv.
-
-    argv is world-readable (`ps`); stdin is not. A value must never appear on a command line,
-    in an environment block, or in an error message — subprocess errors are re-raised without
-    captured output attached.
-
-    Single-line invariant: `pass insert --echo` reads exactly one line, so multiline values are
-    refused here rather than truncated by the backend. `pass show` appends exactly one newline
-    on output; `get` strips exactly that byte, so put/get round-trips byte-identically.
-    """
-
-    prefix: str = "first-init/"
-    backend_id: str = "pass"
-
-    def _path(self, name: str) -> str:
-        return f"{self.prefix}{name}"
-
-    def has(self, name: str) -> bool:
-        # `pass ls` lists without DECRYPTING — `pass show` would read the value just to answer
-        # presence, and a presence check has no business holding the secret (codex r4 major).
-        return subprocess.run(
-            ["pass", "ls", self._path(name)],
-            capture_output=True,
-            check=False,
-        ).returncode == 0
-
-    def get(self, name: str) -> bytes | None:
-        result = subprocess.run(
-            ["pass", "show", self._path(name)],
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        out = result.stdout
-        if out.endswith(b"\n"):
-            out = out[:-1]
-        return out
-
-    def put(self, name: str, value: bytes) -> None:
-        if b"\n" in value or b"\r" in value:
-            raise ValueError(
-                f"{name}: pass entries here are single-line — a multiline value would be "
-                "silently truncated by insert --echo, and a truncated key is a wrong key"
-            )
-        rc = None
-        try:
-            subprocess.run(
-                ["pass", "insert", "--echo", "--force", self._path(name)],
-                input=value + b"\n",
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            # CalledProcessError RETAINS the captured stdout/stderr, and a backend error can
-            # quote what it was fed. Keep only the exit code; the exception object — and its
-            # place in the raised error's __context__ chain — must not survive (codex r3 major).
-            rc = exc.returncode
-        if rc is not None:
-            raise RuntimeError(
-                f"pass insert {self._path(name)!r} failed (rc={rc}); "
-                "backend output deliberately suppressed"
-            )
-
-    def delete(self, name: str) -> bool:
-        if not self.has(name):
-            return False
-        rc = None
-        try:
-            subprocess.run(
-                ["pass", "rm", "--force", self._path(name)],
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            rc = exc.returncode
-        if rc is not None:
-            raise RuntimeError(
-                f"pass rm {self._path(name)!r} failed (rc={rc}); "
-                "backend output deliberately suppressed"
-            )
-        return True
 
 
 @dataclass(frozen=True)
@@ -861,7 +1268,3 @@ def validate_key(
     )
     return True
 
-
-def pass_backend_available() -> bool:
-    """The pass backend is offered only when the host can actually serve it."""
-    return shutil.which("pass") is not None

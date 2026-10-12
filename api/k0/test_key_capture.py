@@ -20,8 +20,8 @@ from k0.egress_consent import accept as accept_egress
 from k0.egress_consent import elicit_allowlist
 from k0.key_capture import (
     FileStore,
+    SecretIntegrityError,
     MemoryStore,
-    PassStore,
     SecretSupply,
     decline_capture,
     default_store,
@@ -367,81 +367,20 @@ def test_a_key_changed_after_validation_falls_off_the_supply_rung(tmp_path: Path
     assert supply_state(root, store, NAME) is SecretSupply.ABSENT
 
 
-FAKE_PASS = """#!/bin/sh
-# Minimal pass(1) contract double: show prints the stored line (with its newline), insert
-# --echo reads exactly one line from stdin. Values arrive on stdin, never argv — this double
-# would not see them otherwise, which is the point of the contract.
-store="$FAKE_PASS_DIR"
-cmd="$1"; shift
-case "$cmd" in
-  show)
-    f="$store/$1"
-    if [ -f "$f" ]; then cat "$f"; exit 0; else exit 1; fi
-    ;;
-  ls)
-    # presence without decryption: prints the name, never the value
-    if [ -f "$store/$1" ]; then echo "$1"; exit 0; else exit 1; fi
-    ;;
-  insert)
-    p=""
-    while [ $# -gt 0 ]; do
-      case "$1" in --*) shift ;; *) p="$1"; shift ;; esac
-    done
-    [ -n "$p" ] || exit 2
-    mkdir -p "$store/$(dirname -- "$p" 2>/dev/null || echo .)" 2>/dev/null
-    IFS= read -r line
-    printf '%s\\n' "$line" > "$store/$p"
-    ;;
-esac
-"""
-
-
-def test_pass_store_contract_round_trips_single_line_values(
+def test_file_store_round_trip_and_is_the_only_durable_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The production backend against a pass(1) contract double (claude r1 major).
-
-    What is pinned here is the COMMAND SHAPE: insert with --echo (one line, no confirmation
-    prompt — the default form deadlocks a noninteractive caller), value on stdin, and show's
-    trailing-newline convention, which get() must strip for the round-trip to be exact.
-    """
-    import os
-
-    from k0.key_capture import PassStore
-
-    fake_dir = tmp_path / "fake-store"
-    fake_dir.mkdir()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    script = bin_dir / "pass"
-    script.write_text(FAKE_PASS, encoding="utf-8")
-    script.chmod(0o755)
-    monkeypatch.setenv("FAKE_PASS_DIR", str(fake_dir))
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-
-    store = PassStore()
-    assert not store.has(NAME)
-    store.put(NAME, b"sk-round-trip-123")
-    assert store.has(NAME)
-    assert store.get(NAME) == b"sk-round-trip-123", (
-        "put/get must round-trip byte-identically — show appends one newline, get strips one"
-    )
-    with pytest.raises(ValueError, match="single-line"):
-        store.put(NAME, b"two\nlines")
-
-
-def test_file_store_round_trip_and_is_not_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """FileStore is the durable backend: round-trip, missing is None, no pass(1) argv."""
+    """FileStore is the durable backend: round-trip, missing is None, no subprocess."""
     monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "store"))
-    monkeypatch.setenv("PATH", "/usr/bin")  # pass may exist; FileStore must not invoke it
+    monkeypatch.setenv("PATH", "/usr/bin")
     store = FileStore(root=tmp_path / "store")
     assert store.backend_id == "file"
     assert default_store().backend_id == "file"
     assert not store.has(NAME)
     assert store.get(NAME) is None
-    store.put(NAME, b"sk-file-round-trip\nwith-newline")
+    store.put(NAME, b"sk-file-round-trip")
     assert store.has(NAME)
-    assert store.get(NAME) == b"sk-file-round-trip\nwith-newline"
+    assert store.get(NAME) == b"sk-file-round-trip"
     store.put(NAME, b"sk-file-overwritten")
     assert store.get(NAME) == b"sk-file-overwritten"
     assert store.delete(NAME) is True
@@ -455,59 +394,488 @@ def test_file_store_round_trip_and_is_not_pass(tmp_path: Path, monkeypatch: pyte
         store.put("a?b", b"x")
 
 
-def test_file_store_errors_never_carry_the_value(tmp_path: Path) -> None:
+def test_the_pass_backend_is_gone(tmp_path: Path) -> None:
+    """Operator ruling 2026-09-16: pass/gopass are never used to manage secrets.
+
+    The class, the availability probe, and the subprocess import that only it
+    needed are all removed — not deprecated. A backend that still exists is a
+    backend something can still be pointed at.
+    """
+    import k0.key_capture as kc
+
+    assert not hasattr(kc, "PassStore")
+    assert not hasattr(kc, "pass_backend_available")
+    assert not hasattr(kc, "subprocess"), "nothing here shells out any more"
+    source = (Path(kc.__file__)).read_text(encoding="utf-8")
+    assert "pass insert" not in source
+    assert "pass show" not in source
+    # default_store is unconditional now, which is what lets every caller drop
+    # its "this had better not be pass" branch.
+    assert default_store().backend_id == "file"
+
+
+# ---------------------------------------------------------------------------
+# Blob format 2: subkey separation, name binding, versioning, migration.
+# ---------------------------------------------------------------------------
+
+
+def test_put_writes_format_2_and_get_still_reads_a_format_1_blob(tmp_path: Path) -> None:
+    """A v1 store keeps working through the rollout, and the first put migrates."""
+    from k0.key_capture import _file_wrap, blob_format_of
+
+    store = FileStore(root=tmp_path / "store")
+    key = store._key()
+    blob_path = store._blob_path(NAME)
+    blob_path.write_bytes(_file_wrap(key, b"\x00" * 16, b"sk-legacy-v1"))
+    assert blob_format_of(blob_path.read_bytes()) == 1
+    assert store.blob_format(NAME) == 1
+    assert store.get(NAME) == b"sk-legacy-v1", "a v1 blob must still read"
+
+    store.put(NAME, b"sk-rewritten")
+    assert store.blob_format(NAME) == 2, "the first put migrates the blob"
+    assert store.get(NAME) == b"sk-rewritten"
+
+
+def test_get_does_not_rewrite_a_v1_blob(tmp_path: Path) -> None:
+    """Migration is on PUT and nothing else. GET runs from watchdogs and units;
+    a getter that writes is a getter that fails on a read-only mount."""
+    from k0.key_capture import _file_wrap
+
+    store = FileStore(root=tmp_path / "store")
+    blob_path = store._blob_path(NAME)
+    blob_path.write_bytes(_file_wrap(store._key(), b"\x01" * 16, b"sk-legacy-v1"))
+    before = blob_path.read_bytes()
+    for _ in range(3):
+        assert store.get(NAME) == b"sk-legacy-v1"
+    assert blob_path.read_bytes() == before
+    assert store.blob_format(NAME) == 1
+
+
+def test_v2_derives_separate_enc_and_mac_subkeys(tmp_path: Path) -> None:
+    """v1 used the SAME 32 bytes for the SHAKE keystream and the HMAC tag."""
+    from k0.key_capture import _v2_subkeys
+
+    key = b"k" * 32
+    nonce = b"n" * 16
+    enc, mac = _v2_subkeys(key, nonce)
+    assert enc != mac
+    assert enc != key and mac != key
+    assert len(enc) == len(mac) == 32
+    # nonce-bound: a different nonce yields different subkeys
+    other_enc, other_mac = _v2_subkeys(key, b"m" * 16)
+    assert other_enc != enc and other_mac != mac
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        pytest.param(lambda b: b[:-1] + bytes([b[-1] ^ 1]), id="last-ciphertext-byte"),
+        pytest.param(lambda b: b[:20] + bytes([b[20] ^ 1]) + b[21:], id="tag-byte"),
+        pytest.param(lambda b: b[:6] + bytes([b[6] ^ 1]) + b[7:], id="nonce-byte"),
+        pytest.param(lambda b: b[:-1], id="truncated"),
+        pytest.param(lambda b: b[:40], id="truncated-below-header"),
+    ],
+)
+def test_a_tampered_blob_raises_a_typed_integrity_error_not_none(
+    tmp_path: Path, corrupt
+) -> None:
+    """THE defect this whole format change exists for.
+
+    get() caught ValueError and returned None, so a tampered blob was
+    indistinguishable from an absent one and every caller's "not found, run the
+    put dialogue" arm fired on a secret that was sitting right there.
+    """
     store = FileStore(root=tmp_path / "store")
     store.put(NAME, b"sk-file-canary")
-    blob = (tmp_path / "store" / f"{NAME}.bin").read_bytes()
-    (tmp_path / "store" / f"{NAME}.bin").write_bytes(blob[:-1] + bytes([(blob[-1] ^ 1)]))
-    assert store.get(NAME) is None
-    # the on-disk blob must not be the plaintext
-    assert b"sk-file-canary" not in (tmp_path / "store" / ".key").read_bytes()
-    raw = (tmp_path / "store" / f"{NAME}.bin").read_bytes()
-    assert b"sk-file-canary" not in raw
+    blob_path = store._blob_path(NAME)
+    blob_path.write_bytes(corrupt(blob_path.read_bytes()))
 
-
-FAILING_PASS = """#!/bin/sh
-# A pass(1) double whose insert FAILS and quotes its stdin on stderr — the leak case.
-cmd="$1"; shift
-case "$cmd" in
-  show) exit 1 ;;
-  ls) exit 1 ;;
-  insert)
-    IFS= read -r line
-    echo "gpg: cannot encrypt for $line: no key" >&2
-    exit 1
-    ;;
-esac
-"""
-
-
-def test_pass_backend_errors_never_carry_the_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A failing backend may quote what it was fed; the caller must never see it (r3 majors).
-
-    Also pins the get()-on-missing arm: an absent entry reads None, not an error.
-    """
-    import os
-
-    from k0.key_capture import PassStore
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    script = bin_dir / "pass"
-    script.write_text(FAILING_PASS, encoding="utf-8")
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-
-    store = PassStore()
-    assert store.get(NAME) is None, "a missing entry is None, not an exception"
-
-    with pytest.raises(RuntimeError, match="rc=1") as exc:
-        store.put(NAME, b"sk-leak-canary-99")
-    assert "sk-leak-canary-99" not in str(exc.value)
-    assert "cannot encrypt" not in str(exc.value), "backend stderr is suppressed entirely"
-    assert exc.value.__cause__ is None and exc.value.__context__ is None, (
-        "the suppressed error must not leak through the exception chain either"
+    with pytest.raises(SecretIntegrityError) as exc:
+        store.get(NAME)
+    assert "sk-file-canary" not in str(exc.value), "the error must not carry the value"
+    assert not isinstance(exc.value, ValueError), (
+        "a ValueError subclass would be swallowed by the same except arms again"
     )
+
+
+def test_a_blob_cannot_be_renamed_into_another_secrets_slot(tmp_path: Path) -> None:
+    """The name is in the authenticated data, so moving the file does not move
+    the secret. Without it, `cp litellm-master-key.bin api-openai.bin` silently
+    makes one credential answer for the other.
+
+    THE TWO NAMES ARE THE SAME LENGTH ON PURPOSE. The AAD is a length prefix
+    followed by the name bytes; with names of different lengths this test
+    passes even when the name itself is dropped from the AAD, because the
+    LENGTH alone still differs. Measured: with api-openai (10) against
+    api-mistral (11), removing the name bytes left the test green. Same-length
+    names make the name bytes the only thing that varies.
+    """
+    store = FileStore(root=tmp_path / "store")
+    assert len("api-openai") == len("api-cohere"), "the discriminator must be the name, not its length"
+    store.put("api-openai", b"sk-openai-real")
+    store.put("api-cohere", b"sk-cohere-real")
+    hijacked = store._blob_path("api-cohere")
+    hijacked.write_bytes(store._blob_path("api-openai").read_bytes())
+
+    with pytest.raises(SecretIntegrityError):
+        store.get("api-cohere")
+    assert store.get("api-openai") == b"sk-openai-real"
+
+
+def test_a_v1_blob_can_be_renamed_which_is_why_v2_binds_the_name(tmp_path: Path) -> None:
+    """A deliberate NEGATIVE CONTROL outside the supported set: format 1 has no
+    name binding, so the rename attack works against it. It is pinned here so
+    the v2 property above is shown to be doing the work rather than being an
+    accident of the fixture."""
+    from k0.key_capture import _file_wrap
+
+    store = FileStore(root=tmp_path / "store")
+    key = store._key()
+    store._blob_path("api-openai").write_bytes(_file_wrap(key, b"\x02" * 16, b"sk-openai-real"))
+    store._blob_path("api-cohere").write_bytes(store._blob_path("api-openai").read_bytes())
+    assert store.get("api-cohere") == b"sk-openai-real", (
+        "v1 read the hijacked blob happily — that is the defect v2 closes"
+    )
+
+
+def test_a_v1_blob_whose_nonce_opens_with_the_v2_header_refuses_rather_than_lying(
+    tmp_path: Path,
+) -> None:
+    """The documented 2**-32 limit of header-based discrimination.
+
+    Such a blob is read as v2, fails to authenticate, and is REPORTED. That is
+    a named refusal with the right next action, not a silent wrong answer — and
+    it is why there is no "retry as v1" arm: that fallback would give a genuine
+    v2 tamper a second, weaker path instead of refusing.
+    """
+    from k0.key_capture import _SECRET_MAGIC_V2, _file_wrap, blob_format_of
+
+    store = FileStore(root=tmp_path / "store")
+    key = store._key()
+    collide_nonce = _SECRET_MAGIC_V2 + b"\x07" * 12
+    blob = _file_wrap(key, collide_nonce, b"sk-unlucky")
+    assert blob_format_of(blob) == 2, "by construction it looks like v2"
+    store._blob_path(NAME).write_bytes(blob)
+
+    with pytest.raises(SecretIntegrityError):
+        store.get(NAME)
+
+
+def test_the_stored_blob_is_not_the_plaintext(tmp_path: Path) -> None:
+    store = FileStore(root=tmp_path / "store")
+    store.put(NAME, b"sk-file-canary")
+    assert b"sk-file-canary" not in store._blob_path(NAME).read_bytes()
+    assert b"sk-file-canary" not in store.key_path.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# History and tombstones.
+# ---------------------------------------------------------------------------
+
+
+def test_put_archives_the_superseded_blob_and_bounds_the_history(tmp_path: Path) -> None:
+    store = FileStore(root=tmp_path / "store")
+    for i in range(8):
+        store.put(NAME, f"sk-v{i}".encode())
+    history = store.history(NAME)
+    assert len(history) == 5, "history is bounded: it is ciphertext of real credentials"
+    assert store.get(NAME) == b"sk-v7"
+    assert sorted(history) == list(history), "timestamps come back in order"
+    # timestamps only — never a value, never a digest of one
+    for stamp in history:
+        assert "sk-v" not in stamp
+
+
+def test_delete_purges_the_history_and_leaves_a_tombstone(tmp_path: Path) -> None:
+    """Delete is the one operation whose whole purpose is that the value stops
+    existing. Keeping superseded blobs through it would defeat exactly that."""
+    store = FileStore(root=tmp_path / "store")
+    for i in range(3):
+        store.put(NAME, f"sk-v{i}".encode())
+    assert store.history(NAME)
+
+    assert store.delete(NAME) is True
+    history = store.history(NAME)
+    assert len(history) == 1 and history[0].endswith("(deleted)")
+    hdir = tmp_path / "store" / ".history"
+    assert list(hdir.glob(f"{NAME}.*.bin")) == []
+    for leftover in hdir.iterdir():
+        assert b"sk-v" not in leftover.read_bytes()
+
+
+def test_history_of_an_unknown_name_is_empty_and_the_name_is_still_validated(
+    tmp_path: Path,
+) -> None:
+    store = FileStore(root=tmp_path / "store")
+    assert store.history("never-stored") == ()
+    with pytest.raises(ValueError, match="path segment"):
+        store.history("../escape")
+
+
+def test_history_files_are_not_listed_as_secrets(tmp_path: Path) -> None:
+    store = FileStore(root=tmp_path / "store")
+    store.put(NAME, b"sk-a")
+    store.put(NAME, b"sk-b")
+    assert store.names() == (NAME,)
+
+
+def test_a_dotted_name_is_not_a_prefix_of_another_names_history(tmp_path: Path) -> None:
+    """Names may contain dots, so ``api`` and ``api.openai`` are both legal and
+    the glob ``api.*.bin`` matches the longer name's archives too. Found in
+    review of PR 44: history("api") reported api.openai's stamps, put("api")
+    pruned api.openai's archives toward api's cap, and delete("api") destroyed
+    api.openai's archived ciphertext. Each of the three call sites is pinned
+    here; the live store has no dotted names today, so this is the grammar's
+    hazard rather than a measured incident."""
+    store = FileStore(root=tmp_path / "store")
+    for i in range(3):
+        store.put("api", f"sk-short-{i}".encode())
+    for i in range(3):
+        store.put("api.openai", f"sk-long-{i}".encode())
+    hdir = tmp_path / "store" / ".history"
+    long_archives = sorted(hdir.glob("api.openai.*.bin"))
+    assert len(long_archives) == 2, "the longer name has exactly its own two supersessions"
+
+    # history(): the short name reports only its own stamps.
+    assert len(store.history("api")) == 2
+    assert all("openai" not in stamp for stamp in store.history("api"))
+    assert len(store.history("api.openai")) == 2
+
+    # _archive() pruning: the short name's cap counts only its own archives.
+    for i in range(3, 10):
+        store.put("api", f"sk-short-{i}".encode())
+    assert len(store.history("api")) == 5, "bounded by ITS OWN supersessions"
+    assert sorted(hdir.glob("api.openai.*.bin")) == long_archives, "prune touched another name"
+
+    # delete(): purging the short name's history leaves the longer name whole.
+    assert store.delete("api") is True
+    assert sorted(hdir.glob("api.openai.*.bin")) == long_archives, "delete purged another name"
+    assert store.get("api.openai") == b"sk-long-2"
+    assert len(store.history("api.openai")) == 2
+    short = store.history("api")
+    assert len(short) == 1 and short[0].endswith("(deleted)")
+
+
+# ---------------------------------------------------------------------------
+# The key boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_the_key_can_live_outside_the_store_root(tmp_path: Path) -> None:
+    """The key sat beside the blobs it protects, inside the backed-up home, so
+    one backup set carried both halves."""
+    key_file = tmp_path / "elsewhere" / "secret.key"
+    store = FileStore(root=tmp_path / "store", key_file=key_file)
+    store.put(NAME, b"sk-out-of-tree")
+    assert key_file.is_file()
+    assert store.key_path == key_file
+    assert not (tmp_path / "store" / ".key").exists()
+    assert store.get(NAME) == b"sk-out-of-tree"
+    assert oct(key_file.stat().st_mode & 0o777) == "0o600"
+    # The blobs alone are not enough, and the refusal is TYPED: a backup set that
+    # captured the ciphertext without the key cannot tell itself apart from a
+    # tampered blob, and both are integrity failures rather than wrong plaintext.
+    with pytest.raises(SecretIntegrityError):
+        FileStore(root=tmp_path / "store", key_file=tmp_path / "other.key").get(NAME)
+
+
+def test_the_key_file_env_var_is_honoured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    key_file = tmp_path / "elsewhere" / "secret.key"
+    monkeypatch.setenv("REINS_SECRET_KEY_FILE", str(key_file))
+    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "store"))
+    store = default_store()
+    assert store.key_path == key_file
+
+
+# ---------------------------------------------------------------------------
+# Put-time value validation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "flag"),
+    [
+        pytest.param(b"\xef\xbb\xbfsk-abc", "bom", id="utf8-bom"),
+        pytest.param(b"sk-abc\r\n", "cr", id="crlf"),
+        pytest.param(b"sk-abc\n", "trailing-newline", id="trailing-newline"),
+        pytest.param(b"line-one\nline-two\n\n", "trailing-blank-line", id="multiline-blank-line"),
+        pytest.param(b" sk-abc", "leading-whitespace", id="leading-space"),
+        pytest.param(b"sk-abc ", "trailing-whitespace", id="trailing-space"),
+        pytest.param(b"sk-abc\t", "trailing-whitespace", id="trailing-tab"),
+        pytest.param(b"sk\x00abc", "nul", id="nul"),
+        pytest.param(b"", "empty", id="empty"),
+    ],
+)
+def test_a_value_with_a_known_breaking_byte_shape_is_refused(value: bytes, flag: str) -> None:
+    from k0.key_capture import validate_secret_value, value_shape_flags
+
+    assert flag in value_shape_flags(value)
+    with pytest.raises(ValueError) as exc:
+        validate_secret_value(value)
+    assert flag in str(exc.value)
+    assert "Next action:" in str(exc.value), "a refusal without a next move is a dead end"
+    assert value.decode("utf-8", "replace").strip() not in str(exc.value) or not value.strip()
+
+
+def test_a_clean_value_is_accepted_and_binary_is_only_flagged(tmp_path: Path) -> None:
+    from k0.key_capture import validate_secret_value, value_shape_flags
+
+    validate_secret_value(b"sk-proj-abcdef0123456789")
+    assert value_shape_flags(b"sk-proj-abcdef0123456789") == ()
+    # non-utf8 is INFORMATIONAL: a binary secret is legitimate
+    assert value_shape_flags(b"\xff\xfe\x01") == ("non-utf8",)
+    validate_secret_value(b"\xff\xfe\x01")
+
+
+def test_an_interior_newline_is_information_and_a_trailing_one_is_a_refusal() -> None:
+    """The ruling that corrected the first cut of this change, pinned in both
+    directions as it was stated: a two-line value is ACCEPTED, a value ending in
+    a newline is REFUSED.
+
+    Measured on the 184 live values: 7 carry interior newlines and all 7 are
+    documents — an ssh private key, a GitHub App private key, two Google
+    service-account JSONs, an rclone config, a BitLocker recovery blob, a GPG
+    passphrase file. Refusing interior LF would have failed every one at its
+    next put, which is the replica push failing on exactly the values that
+    matter most.
+    """
+    from k0.key_capture import (
+        INFORMATIONAL_VALUE_FLAGS,
+        REFUSABLE_VALUE_FLAGS,
+        validate_secret_value,
+        value_shape_flags,
+    )
+
+    assert "multiline" in INFORMATIONAL_VALUE_FLAGS
+    assert "multiline" not in REFUSABLE_VALUE_FLAGS
+    assert "trailing-newline" in REFUSABLE_VALUE_FLAGS
+
+    two_line = b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGlj"
+    assert value_shape_flags(two_line) == ("multiline",)
+    validate_secret_value(two_line)  # accepted
+
+    with pytest.raises(ValueError, match="trailing-newline"):
+        validate_secret_value(b"sk-single-line\n")
+
+
+def test_the_store_itself_does_not_validate_so_migration_can_rewrite_anything(
+    tmp_path: Path,
+) -> None:
+    """Validation lives at the command surface — the single place a value has to
+    get past. FileStore.put stays a byte writer so the v1 blobs already holding
+    a BOM can be read and rewritten rather than becoming unrewritable."""
+    store = FileStore(root=tmp_path / "store")
+    store.put(NAME, b"\xef\xbb\xbfsk-already-stored")
+    assert store.get(NAME) == b"\xef\xbb\xbfsk-already-stored"
+
+
+# ---------------------------------------------------------------------------
+# The loopback capability token.
+# ---------------------------------------------------------------------------
+
+
+def test_the_capability_token_is_0600_in_the_runtime_dir_and_is_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from k0.key_capture import mint_secret_command_token, secret_command_token_path
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    token = mint_secret_command_token()
+    assert token and mint_secret_command_token() == token, "minting is idempotent per boot"
+    path = secret_command_token_path()
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert path.read_text(encoding="ascii").strip() == token
+
+
+@pytest.mark.parametrize("presented", [None, "", "not-the-token"])
+def test_a_wrong_or_absent_token_never_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, presented
+) -> None:
+    from k0.key_capture import mint_secret_command_token, secret_command_token_matches
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    real = mint_secret_command_token()
+    assert secret_command_token_matches(real) is True
+    assert secret_command_token_matches(presented) is False
+
+
+def test_a_group_or_world_accessible_runtime_dir_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The precondition is checked at the moment of use, not asserted in a
+    comment: a runtime dir another account can reach would let it plant the
+    token file first."""
+    from k0.key_capture import SecretCommandTokenError, mint_secret_command_token
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o755)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    with pytest.raises(SecretCommandTokenError) as exc:
+        mint_secret_command_token()
+    assert "Next action:" in str(exc.value)
+
+
+def test_a_group_or_world_readable_token_file_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runtime dir check and the token FILE check are two different guards.
+
+    Found by mutation: dropping this one left every token test green, because
+    they all exercised the directory guard. A token another account can read is
+    a token another account can present.
+    """
+    from k0.key_capture import (
+        SecretCommandTokenError,
+        mint_secret_command_token,
+        secret_command_token_path,
+    )
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    mint_secret_command_token()
+    secret_command_token_path().chmod(0o644)
+
+    with pytest.raises(SecretCommandTokenError) as exc:
+        mint_secret_command_token()
+    assert "Next action:" in str(exc.value)
+
+
+def test_an_empty_token_file_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from k0.key_capture import (
+        SecretCommandTokenError,
+        mint_secret_command_token,
+        secret_command_token_path,
+    )
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    mint_secret_command_token()
+    secret_command_token_path().write_text("", encoding="ascii")
+
+    with pytest.raises(SecretCommandTokenError):
+        mint_secret_command_token()
+
+
+def test_an_absent_runtime_dir_denies_rather_than_falling_back_to_tmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from k0.key_capture import SecretCommandTokenError, secret_command_token_matches
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "does-not-exist"))
+    with pytest.raises(SecretCommandTokenError):
+        from k0.key_capture import mint_secret_command_token
+
+        mint_secret_command_token()
+    # and the matcher denies rather than passing for want of something to check
+    assert secret_command_token_matches("anything") is False
 
 
 def test_validation_against_an_unconsented_host_never_reaches_the_validator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -984,3 +1352,109 @@ def test_the_registry_cannot_be_amended_by_a_caller() -> None:
         PROVIDER_PROBE_ENDPOINTS.pop("openai")
     with pytest.raises(AttributeError):
         PROVIDER_PROBE_ENDPOINTS.clear()
+
+
+def test_value_shape_flags_only_ever_returns_the_closed_vocabulary() -> None:
+    """What makes it safe to print flags beside a secret's name.
+
+    The flags are computed FROM the value, so a taint analyser flags the print.
+    They are not derived from it: every element comes from one closed literal
+    tuple. Fuzzed rather than asserted, so a future flag built by formatting
+    some of the value into a string is caught here rather than in review.
+    """
+    import random
+
+    from k0.key_capture import (
+        REFUSABLE_VALUE_FLAGS,
+        VALUE_SHAPE_FLAGS,
+        value_shape_flags,
+    )
+
+    allowed = set(VALUE_SHAPE_FLAGS)
+    assert REFUSABLE_VALUE_FLAGS <= allowed
+
+    rng = random.Random(20260916)
+    corpus = [b"", b"sk-plain", b"\xef\xbb\xbfsk", b" sk ", b"sk\r\n", b"sk\x00", b"\xff\xfe"]
+    corpus += [bytes(rng.randrange(256) for _ in range(rng.randrange(0, 40))) for _ in range(500)]
+    seen = set()
+    for value in corpus:
+        flags = value_shape_flags(value)
+        assert set(flags) <= allowed, f"undeclared flag from {len(value)} bytes"
+        seen |= set(flags)
+    assert seen >= {"empty", "bom", "cr", "nul", "leading-whitespace"}, (
+        "the corpus must actually exercise the vocabulary, or the check is vacuous"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted", "expected"),
+    [
+        pytest.param(b"sk-single", True, (), id="single-line-clean"),
+        pytest.param(b"sk-single\n", False, ("trailing-newline",), id="single-line-one-lf"),
+        pytest.param(b"sk-single\n\n", False, ("trailing-blank-line",), id="single-line-two-lf"),
+        pytest.param(b"line\nline", True, ("multiline",), id="multi-line-no-lf"),
+        pytest.param(b"line\nline\n", True, ("multiline",), id="multi-line-one-lf"),
+        pytest.param(
+            b"line\nline\n\n", False, ("multiline", "trailing-blank-line"), id="multi-line-two-lf"
+        ),
+        pytest.param(b"\n", False, ("trailing-newline",), id="bare-lf"),
+    ],
+)
+def test_the_trailing_newline_policy(value: bytes, accepted: bool, expected: tuple) -> None:
+    """Stated once in value_shape_flags' docstring, pinned once here:
+
+      * a single-line value ends at its last non-whitespace byte;
+      * a multi-line value may end in exactly one LF;
+      * two trailing LFs are a defect either way.
+
+    The refusal catches the single-line key pasted with its Enter. It is not for
+    rejecting files for being files — measured, three live values are a GitHub
+    App private key, a Google service-account JSON and an rclone config, and all
+    three end in the newline their format ends in.
+    """
+    from k0.key_capture import validate_secret_value, value_shape_flags
+
+    assert value_shape_flags(value) == expected
+    if accepted:
+        validate_secret_value(value)
+    else:
+        with pytest.raises(ValueError):
+            validate_secret_value(value)
+
+
+def test_a_document_that_ends_in_its_newline_round_trips_through_the_store(
+    tmp_path: Path,
+) -> None:
+    """The end-to-end the ruling is about: a PEM-shaped value stores and reads
+    back byte-identically, trailing newline included."""
+    from k0.key_capture import validate_secret_value
+
+    pem = b"-----BEGIN PRIVATE KEY-----\nc3ludGhldGljLW5vdC1hLWtleQ==\n-----END PRIVATE KEY-----\n"
+    validate_secret_value(pem)
+    store = FileStore(root=tmp_path / "store")
+    store.put("ssh-id-synthetic", pem)
+    assert store.get("ssh-id-synthetic") == pem
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(b"\xef\xbb\xbf sk", ("bom", "leading-whitespace"), id="bom-then-space"),
+        pytest.param(b"\xef\xbb\xbfsk ", ("bom", "trailing-whitespace"), id="bom-then-trailing"),
+        pytest.param(b"sk \n\n", ("trailing-blank-line", "trailing-whitespace"), id="space-then-blank-line"),
+        pytest.param(b"sk \n", ("trailing-newline", "trailing-whitespace"), id="space-then-newline"),
+    ],
+)
+def test_every_shape_a_value_carries_is_reported_in_one_pass(value: bytes, expected) -> None:
+    """A refusal that reveals one problem at a time is a refusal the operator
+    meets several times.
+
+    Edge whitespace used to be checked against the raw first byte and against
+    the value minus ONE trailing newline, so a BOM hid a leading space behind it
+    and a blank line hid a trailing one. The operator would fix the reported
+    shape and meet the next on the retry. Both checks now look past the BOM and
+    past every trailing newline.
+    """
+    from k0.key_capture import value_shape_flags
+
+    assert set(value_shape_flags(value)) == set(expected)
