@@ -11646,9 +11646,16 @@ func (m Model) turnSessionPosition(w int) string {
 func (m Model) turnBreakdownInbox(w int) string {
 	type need struct{ role, why string }
 	needs := make([]need, 0, len(m.Sessions))
+	unknown := 0
 	for _, s := range m.Sessions {
 		denied := func(f string) bool { return m.AIR && s.AIR[f] != "ok" }
 		role := grammar.Redact(s.AIR, "role", s.Role, m.AIR)
+		// A stale producer's lanes are unknown, not each blocked: the producer needs the operator,
+		// once — never one "blocked" line per lane it can no longer describe.
+		if !denied("state") && grammar.LivenessUnknown(s) {
+			unknown++
+			continue
+		}
 		switch {
 		case s.Stalled && !denied("stalled"),
 			!denied("readiness") && (s.Readiness == "red" || s.Readiness == "stall"),
@@ -11657,6 +11664,9 @@ func (m Model) turnBreakdownInbox(w int) string {
 		case !denied("state") && s.State == "awaiting":
 			needs = append(needs, need{role, "awaiting"})
 		}
+	}
+	if unknown > 0 {
+		needs = append(needs, need{fmt.Sprintf("%d lanes", unknown), "producer stale"})
 	}
 	if len(needs) == 0 {
 		return ""
@@ -11688,6 +11698,9 @@ func (m Model) turnLaneRail(w int) string {
 	}
 	rankFor := func(s grammar.Session) (string, int) {
 		denied := func(f string) bool { return m.AIR && s.AIR[f] != "ok" }
+		if !denied("state") && grammar.LivenessUnknown(s) {
+			return "unknown", 0 // stale producer: no rank this lane has not earned from a live verdict
+		}
 		switch {
 		case s.Stalled && !denied("stalled"),
 			!denied("readiness") && (s.Readiness == "red" || s.Readiness == "stall"),
@@ -12365,10 +12378,13 @@ func (m Model) sessionConstraintPane(w int) string {
 	b.WriteString(rule + "\n")
 	b.WriteString(" " + grammar.C("2nd", "freshness") + "\n")
 	outAge, outTok := fmt.Sprintf("%.1fs", s.OutputAgeS), ageToken(s.OutputAgeS)
+	relAge, relTok := fmt.Sprintf("%.1fs", s.RelayAgeS), ageToken(s.RelayAgeS)
+	if grammar.LivenessUnknown(s) {
+		outAge, outTok, relAge, relTok = "unknown", "mut", "unknown", "mut"
+	}
 	if m.AIR && s.AIR["output_age_s"] != "ok" {
 		outAge, outTok = "▒▒▒", "mut"
 	}
-	relAge, relTok := fmt.Sprintf("%.1fs", s.RelayAgeS), ageToken(s.RelayAgeS)
 	if m.AIR && s.AIR["relay_age_s"] != "ok" {
 		relAge, relTok = "▒▒▒", "mut"
 	}
@@ -12672,8 +12688,8 @@ func sessionPickRow(s grammar.Session, air bool, cur string) string {
 		{"f", "profile", s.RouteProfile},
 		{"g", "route_binding_state", s.RouteBindingState},
 		{"e", "route_evidence_ref", clip(s.RouteEvidenceRef, 24)},
-		{"o", "output_age_s", fmt.Sprintf("%.1f", s.OutputAgeS)},
-		{"l", "relay_age_s", fmt.Sprintf("%.1f", s.RelayAgeS)},
+		{"o", "output_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1f", s.OutputAgeS))},
+		{"l", "relay_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1f", s.RelayAgeS))},
 	}
 	out := grammar.C("brt", "▶ yank ")
 	for _, f := range fields {
@@ -13340,8 +13356,8 @@ func (m Model) sessionRail(w int) string {
 	b.WriteString(line("state", "state", s.State, stateTok) + "\n")
 	b.WriteString(line("plat", "platform", s.Platform, "2nd") + "\n")
 	b.WriteString(line("tmux", "session", s.Session, "pri") + "\n")
-	b.WriteString(line("output", "output_age_s", fmt.Sprintf("%.1fs", s.OutputAgeS), "mut") + "\n")
-	b.WriteString(line("relay", "relay_age_s", fmt.Sprintf("%.1fs", s.RelayAgeS), "mut") + "\n")
+	b.WriteString(line("output", "output_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1fs", s.OutputAgeS)), "mut") + "\n")
+	b.WriteString(line("relay", "relay_age_s", grammar.LivenessText(s, fmt.Sprintf("%.1fs", s.RelayAgeS)), "mut") + "\n")
 	b.WriteString(rule + "\n")
 	b.WriteString(line("task", "claimed_task", s.ClaimedTask, "2nd") + "\n")
 	b.WriteString(rule + "\n")
