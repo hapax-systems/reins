@@ -4,3 +4,4 @@
 fastapi>=0.110
 uvicorn>=0.29
 hapax-spine>=0.1,<0.2
+pyyaml>=6
