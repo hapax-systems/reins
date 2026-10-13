@@ -3262,6 +3262,122 @@ def _vault_root(cfg: dict | None = None) -> Path:
     return Path.home() / "Documents" / "Personal"
 
 
+def _grant_timestamp(value: Any) -> str:
+    from datetime import UTC, datetime
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        parsed = datetime.fromtimestamp(value, UTC)
+    else:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("grant timestamp lacks timezone")
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _grant_label(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.:@-]{1,128}", value
+    ):
+        raise ValueError("invalid grant identity")
+    return value
+
+
+def read_grant_consumption(cfg: dict, allowlist: list[str]) -> dict:
+    """Project retained grant files and honor events, without evaluating authority.
+
+    Both paths are instance bindings. Read the entire retained honor ledger so a
+    tail window cannot masquerade as a lifetime count. Missing minting/session
+    metadata stays unknown; the grantor and honoring role are not session ids.
+    Never import the mint/verify surface, read its key, or serialize raw records.
+    """
+    unavailable = {
+        "dark": True,
+        "error": "grant-ledger-unavailable",
+        "authority": "metadata-only",
+        "grants": [],
+    }
+    try:
+        if not cfg.get("grant_dir") or not cfg.get("grant_honor_ledger"):
+            return unavailable
+        grant_dir = Path(cfg["grant_dir"]).expanduser()
+        ledger = Path(cfg["grant_honor_ledger"]).expanduser()
+        records: dict[str, dict] = {}
+        honors: dict[str, list[dict]] = {}
+
+        def identity(record: dict) -> str:
+            value = record["grant_id"]
+            if not isinstance(value, str) or not re.fullmatch(
+                r"[0-9a-f]{16,64}", value
+            ):
+                raise ValueError("invalid grant id")
+            return value
+
+        # iterdir raises on a missing/unreadable source; glob would return a
+        # plausible empty set for a directory that never existed.
+        for path in sorted(grant_dir.iterdir()):
+            if path.suffix != ".grant":
+                continue
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record["kind"] != "escape":
+                raise ValueError("unknown grant record")
+            grant_id = identity(record)
+            if grant_id in records:
+                raise ValueError("ambiguous grant record")
+            records[grant_id] = record
+        with ledger.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("kind") != "escape_grant_honored":
+                    continue
+                fields = {
+                    "role": _grant_label(event.get("role")),
+                    "session": _grant_label(event.get("session")),
+                    "ts": _grant_timestamp(event["ts"]),
+                }
+                honors.setdefault(identity(event), []).append(
+                    {**fields, "air": classify_air(fields, allowlist)}
+                )
+        rows = []
+        for grant_id in sorted(records.keys() | honors.keys()):
+            record = records.get(grant_id, {})
+            binding = {
+                k: _grant_label(record[k]) for k in ("role", "session") if k in record
+            }
+            lease = {
+                k: _grant_timestamp(record[k])
+                for k in ("issued_at", "expires_at")
+                if k in record
+            }
+            if "lease_state" in record:
+                lease["state"] = _grant_label(record["lease_state"])
+            uses = honors.get(grant_id, [])
+            fields = {
+                "grant_id": grant_id[:8],
+                "grant_record_present": grant_id in records,
+                "minting_lane": binding.get("role"),
+                "minting_session": binding.get("session"),
+                "binding": binding,
+                "lease": lease,
+                "honors": uses,
+                "honor_count": len(uses),
+            }
+            rows.append({**fields, "air": classify_air(fields, allowlist)})
+        return {
+            "dark": False,
+            "error": "",
+            "authority": "metadata-only",
+            "coverage": "retained-records",
+            "grants": rows,
+        }
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        # Never echo a raw parse error: its text may contain credential fields.
+        return unavailable
+
+
 def _vault_note(path: Path, vault_root: Path) -> dict:
     rel = path.relative_to(vault_root)
     parts = rel.parts
@@ -4851,6 +4967,10 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     def read_lanebus() -> dict:
         return read_lanebus_summary(session_cfg, allowlist)
 
+    @app.get("/read/grant-consumption")
+    def read_grant_consumption_endpoint() -> dict:
+        return read_grant_consumption(session_cfg, allowlist)
+
     @app.get("/read/observe")
     def read_observe() -> dict:
         observe_cfg = dict(session_cfg)
@@ -5015,6 +5135,10 @@ def instance_config() -> dict:
         "port": int(port),
         "cc_tasks_active": cc_tasks_active,
         "orchestration_ledger_dir": orchestration_ledger_dir,
+        "grant_dir": os.environ.get("REINS_GRANT_DIR")
+        or str(toml_cfg.get("grant_dir", "")),
+        "grant_honor_ledger": os.environ.get("REINS_GRANT_HONOR_LEDGER")
+        or str(toml_cfg.get("grant_honor_ledger", "")),
         "lifecycle_registry_paths": lifecycle_registry_paths,
         "domain_pack_paths": domain_pack_paths,
         "capability_surface_pack_paths": capability_surface_pack_paths,
