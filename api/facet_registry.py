@@ -62,13 +62,14 @@ EDGES: set[str] = {
 BODIES: set[str] = {
     "summary", "detail", "prompt", "takeaway", "caveat", "emphasis", "context", "thesis",
     "missing", "action", "next_evidence", "blocked_reasons", "hardening_notes", "must_include",
-    "answer_shape", "blockers", "docs", "aliases", "tags",
+    "answer_shape", "blockers", "docs", "aliases", "tags", "remedy",
 }
 # ENVELOPES — structural wrappers / nesting / mirrors; not binnable row attributes.
 ENVELOPES: set[str] = {
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
     "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
+    "transitions", "prior", "current", "recorded_events",
     "workbench_contract", "layers", "nodes", "edges", "package", "health", "tmux", "task",
     "evidence_refs", "evidence_summary", "resume", "defaults", "inquiry_modes", "audience_modes",
     "explanation_paths", "follow_on_tranches", "scenes", "by_kind", "scene_count",
@@ -79,6 +80,11 @@ ENVELOPES: set[str] = {
 
 # ── BY-NAME DEFAULT ASSIGNMENT (the unambiguous bulk) ────────────────────────
 FACET_BY_NAME: dict[str, str] = {
+    # Claim custody is a projection, never a lifecycle authority.
+    "started": "posture", "return_state": "posture", "guard": "posture",
+    "claim_state": "posture", "events_truncated": "posture",
+    "holders": "ownership", "history_scope": "provenance",
+    "sequence": "measure", "dropped": "measure",
     # identity (id-family + type/kind/label + subject)
     "id": "identity", "task_id": "identity", "trace_id": "identity", "gate_id": "identity",
     "domain_id": "identity", "lifecycle_id": "identity", "row_id": "identity",
