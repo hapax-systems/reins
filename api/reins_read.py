@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
+from reins_seat_succession import read_seat_succession
 
 _ROUTE_BINDING_TAIL_BYTES = 4 * 1024 * 1024
 
@@ -4851,6 +4852,10 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     def read_lanebus() -> dict:
         return read_lanebus_summary(session_cfg, allowlist)
 
+    @app.get("/read/seat-succession")
+    def seat_succession() -> dict:
+        return read_seat_succession(session_cfg, allowlist, classify_air)
+
     @app.get("/read/observe")
     def read_observe() -> dict:
         observe_cfg = dict(session_cfg)
@@ -5024,6 +5029,7 @@ def instance_config() -> dict:
         "hkp_bundles": hkp_bundles,
         "vault_root": vault_root,
         "lanebus_inboxes": lanebus_inboxes,
+        "seat_succession": toml_cfg.get("seat_succession"),
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }
