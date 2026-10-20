@@ -50,8 +50,8 @@ func RenderSessionDoor(s Session, detail SessionDetail, hasDetail, detailDark bo
 	add(whoisSeg{"mut", "  state       : "}, whoisSeg{stateTok, sessionGlyph(s, airOn) + " " + lineVal("state", s.State)})
 	add(whoisSeg{"mut", "  blocker     : "}, whoisSeg{"pri", lineVal("blocker", s.Blocker)})
 	add(whoisSeg{"mut", "  attention   : "}, whoisSeg{"pri", lineVal("attention", compactAttention(s.Attention))})
-	add(whoisSeg{"mut", "  output age  : "}, whoisSeg{"pri", lineVal("output_age_s", fmt.Sprintf("%.1fs", s.OutputAgeS))})
-	add(whoisSeg{"mut", "  relay age   : "}, whoisSeg{"pri", lineVal("relay_age_s", fmt.Sprintf("%.1fs", s.RelayAgeS))})
+	add(whoisSeg{"mut", "  output age  : "}, whoisSeg{"pri", lineVal("output_age_s", LivenessText(s, fmt.Sprintf("%.1fs", s.OutputAgeS)))})
+	add(whoisSeg{"mut", "  relay age   : "}, whoisSeg{"pri", lineVal("relay_age_s", LivenessText(s, fmt.Sprintf("%.1fs", s.RelayAgeS)))})
 	blank()
 
 	add(whoisSeg{"mut", "IDENTITY — stable public role first; operational handles may redact"})
