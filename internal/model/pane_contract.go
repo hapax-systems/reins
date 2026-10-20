@@ -201,6 +201,20 @@ var PageContracts = map[int]PaneContract{
 		Provenance: "operator-issued readouts",
 		BlindSpot:  "the live event STREAM (Attention/PageEvents); system events",
 	},
+	PageRoute: {
+		Question:   "what is the capability routing posture and measured demand",
+		State:      "the routing posture + per-class measured demand vectors",
+		Controls:   "inspect routing posture",
+		Provenance: "the gate-event routing substrate",
+		BlindSpot:  "reins mints no routing decision; raw prompt bodies",
+	},
+	PageObligations: {
+		Question:   "what ligatory obligations (owes), locus anomalies, and substrate memory occupancies exist",
+		State:      "lanebus/grant/custody owes + local substrate loci + route fulfillment",
+		Controls:   "inspect obligations and locus fulfillment",
+		Provenance: "the /read/obligations synthesis across lanebus, grants, custody, seats, capabilities, and context",
+		BlindSpot:  "message/task bodies (default-deny); reins mints no authority or dispatch",
+	},
 }
 
 // doorPanes: self-describing registries DEMOTED TO DOORS (the decoder-in-band — Latour immutable-mobile).

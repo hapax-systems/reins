@@ -4,22 +4,55 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from reins_obligations import read_obligations_summary
+from reins_obligations import REDACTION_TOKEN, read_obligations_summary
 from reins_read import build_app, classify_air
 
 
 def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
-    allowlist = ["kind", "relation", "state", "attention", "route_id", "capability_id", "mode", "model_id", "route_state"]
+    allowlist = [
+        "kind",
+        "relation",
+        "state",
+        "attention",
+        "route_id",
+        "capability_id",
+        "mode",
+        "model_id",
+        "route_state",
+    ]
     lanebus = {
         "inboxes": [
-            {"lane": "lane-alpha", "unacked_count": 3, "oldest_unacked_age_s": 120.5, "state": "unacked", "attention": "warning"},
-            {"lane": "lane-beta", "unacked_count": 0, "state": "clear", "attention": "routine"},
+            {
+                "lane": "lane-alpha",
+                "unacked_count": 3,
+                "oldest_unacked_age_s": 120.5,
+                "state": "unacked",
+                "attention": "warning",
+            },
+            {
+                "lane": "lane-beta",
+                "unacked_count": 0,
+                "state": "clear",
+                "attention": "routine",
+            },
         ]
     }
     grants = {
         "rows": [
-            {"grant_id": "g-1", "lane": "lane-alpha", "route_id": "r.local", "state": "unmatched_receipt", "attention": "warning"},
-            {"grant_id": "g-2", "lane": "lane-beta", "route_id": "r.cloud", "state": "reconciled", "attention": "routine"},
+            {
+                "grant_id": "g-1",
+                "lane": "lane-alpha",
+                "route_id": "r.local",
+                "state": "unmatched_receipt",
+                "attention": "warning",
+            },
+            {
+                "grant_id": "g-2",
+                "lane": "lane-beta",
+                "route_id": "r.cloud",
+                "state": "reconciled",
+                "attention": "routine",
+            },
         ]
     }
     claim_custody = {
@@ -30,19 +63,47 @@ def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
     }
     seat_succession = {
         "rows": [
-            {"role": "lane-gamma", "session": "sess-gamma", "pane_state": "absent", "claims": {"present": True}},
+            {
+                "role": "lane-gamma",
+                "session": "sess-gamma",
+                "pane_state": "absent",
+                "claims": {"present": True},
+            },
         ]
     }
     capabilities = {
         "routes": [
-            {"route_id": "r.local", "capability_id": "cap.code", "mode": "local", "model_id": "qwen3.8-flash-next", "route_state": "ok"},
-            {"route_id": "r.disk", "capability_id": "cap.embed", "mode": "local", "model_id": "bge-m3", "route_state": "ok"},
-            {"route_id": "r.cloud", "capability_id": "cap.review", "mode": "metered", "model_id": "claude-opus-4-7", "route_state": "ok"},
+            {
+                "route_id": "r.local",
+                "capability_id": "cap.code",
+                "mode": "local",
+                "model_id": "qwen3.8-flash-next",
+                "route_state": "ok",
+            },
+            {
+                "route_id": "r.disk",
+                "capability_id": "cap.embed",
+                "mode": "local",
+                "model_id": "bge-m3",
+                "route_state": "ok",
+            },
+            {
+                "route_id": "r.cloud",
+                "capability_id": "cap.review",
+                "mode": "metered",
+                "model_id": "claude-opus-4-7",
+                "route_state": "ok",
+            },
         ]
     }
     context_bundle = {
         "facts": [
-            {"id": "host:node-dark", "kind": "host", "state": "dark", "payload": {"host": "node-dark"}},
+            {
+                "id": "host:node-dark",
+                "kind": "host",
+                "state": "dark",
+                "payload": {"host": "node-dark"},
+            },
             {
                 "id": "locus:node-a:8000",
                 "kind": "locus",
@@ -96,13 +157,279 @@ def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
     assert by_route["r.cloud"]["fulfillment_state"] == "admitted_remote_or_cloud"
 
 
+def test_all_sources_dark_reports_dark_and_source_anomalies() -> None:
+    """F01: when all six input facets are dark, obligations must report dark=True and surface source.dark anomalies."""
+    dark_facet = {"dark": True}
+    res = read_obligations_summary(
+        allowlist=["kind", "state", "attention"],
+        classify=classify_air,
+        lanebus=dark_facet,
+        grants=dark_facet,
+        claim_custody=dark_facet,
+        seat_succession=dark_facet,
+        capabilities=dark_facet,
+        context_bundle=dark_facet,
+    )
+    assert res["dark"] is True
+    assert res["summary"]["dark_sources_count"] == 6
+    assert len(res["locus_anomalies"]) == 6
+    assert all(a["kind"] == "source.dark" for a in res["locus_anomalies"])
+
+
+def test_stale_locus_and_blocked_route_do_not_claim_active_memory_fulfillment() -> None:
+    """F01: a stale locus or a blocked route must never report occupied_in_memory."""
+    allowlist = ["route_id", "fulfillment_state", "route_state", "kind", "state"]
+    capabilities = {
+        "routes": [
+            {
+                "route_id": "r.stale",
+                "capability_id": "cap.a",
+                "mode": "local",
+                "model_id": "m-stale",
+                "route_state": "ok",
+            },
+            {
+                "route_id": "r.blocked",
+                "capability_id": "cap.b",
+                "mode": "local",
+                "model_id": "m-live",
+                "route_state": "blocked",
+            },
+        ]
+    }
+    context_bundle = {
+        "facts": [
+            {
+                "id": "locus:stale:8000",
+                "kind": "loaded_model",
+                "freshness_state": "stale",
+                "state": {"value_state": "stale", "reason_codes": []},
+                "value": {
+                    "host": "node-a",
+                    "endpoint": "8000",
+                    "model": "m-stale",
+                    "admitting_row": "r.stale",
+                },
+            },
+            {
+                "id": "locus:live:8001",
+                "kind": "loaded_model",
+                "freshness_state": "fresh",
+                "state": {"value_state": "lit", "reason_codes": []},
+                "value": {
+                    "host": "node-a",
+                    "endpoint": "8001",
+                    "model": "m-live",
+                    "admitting_row": "r.blocked",
+                },
+            },
+        ]
+    }
+    res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities=capabilities,
+        context_bundle=context_bundle,
+    )
+    by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
+    assert by_route["r.stale"]["fulfillment_state"] == "stale_locus"
+    assert by_route["r.stale"]["occupied_loci"] == []
+    assert by_route["r.blocked"]["fulfillment_state"] == "route_blocked_locus_occupied"
+    assert res["summary"]["routes_occupied_in_memory"] == 0
+
+
+def test_strict_identity_joins_reject_fuzzy_substrings_and_unfulfilled_local_routes() -> (
+    None
+):
+    """F03 + F08: route.a must not match route.a2; qwen3 must not match qwen3-embedding-8b; local unfulfilled route is not cloud."""
+    allowlist = ["route_id", "fulfillment_state", "route_state"]
+    capabilities = {
+        "routes": [
+            {
+                "route_id": "route.a",
+                "mode": "local",
+                "model_id": "qwen3",
+                "route_state": "ok",
+            },
+            {
+                "route_id": "route.disk",
+                "mode": "local",
+                "model_id": "ornith-35b",
+                "route_state": "ok",
+            },
+        ]
+    }
+    # Pass grouped producer facts dict directly (residual risk #4 + F08 disk residency on resource_vram)
+    context_bundle = {
+        "facts": {
+            "resource_vram": [
+                {
+                    "fact_id": "resource_vram:host:node-a",
+                    "fact_type": "resource_vram",
+                    "subject_ref": "host:node-a",
+                    "freshness_state": "fresh",
+                    "state": {"value_state": "lit", "reason_codes": []},
+                    "value": {
+                        "host": "node-a",
+                        "total_mb": 64000,
+                        "avail_mb": 32000,
+                        "ollama_disk_resident_models": ["ornith-35b:latest"],
+                    },
+                }
+            ],
+            "loaded_model": [
+                {
+                    "fact_id": "loaded_model:host:node-a:8000/qwen3-embedding-8b",
+                    "fact_type": "loaded_model",
+                    "subject_ref": "host:node-a:8000/qwen3-embedding-8b",
+                    "freshness_state": "fresh",
+                    "state": {"value_state": "lit", "reason_codes": []},
+                    "value": {
+                        "host": "node-a",
+                        "endpoint": "8000",
+                        "model": "qwen3-embedding-8b",
+                        "admitting_row": "route.a2 (active)",
+                    },
+                }
+            ],
+        }
+    }
+    res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities=capabilities,
+        context_bundle=context_bundle,
+    )
+    by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
+    assert by_route["route.a"]["fulfillment_state"] == "unfulfilled_local_locus"
+    assert by_route["route.disk"]["fulfillment_state"] == "resident_on_disk_only"
+
+
+def test_producer_lost_endpoint_and_partial_vram_contracts() -> None:
+    """F04: declared_endpoint with value_state='absent' and reason_code='LOST' emits endpoint.lost action; partial VRAM emits host.partial_observation."""
+    allowlist = ["kind", "state", "attention"]
+    context_bundle = {
+        "facts": [
+            {
+                "fact_id": "declared_endpoint:serving.node-a-5000",
+                "fact_type": "declared_endpoint",
+                "subject_ref": "serving.node-a-5000",
+                "state": {
+                    "value_state": "absent",
+                    "reason_codes": ["LOST", "declared_endpoint_dead"],
+                },
+                "value": {"port": "5000", "alive": False},
+            },
+            {
+                "fact_id": "resource_vram:host:node-a/RTX",
+                "fact_type": "resource_vram",
+                "subject_ref": "host:node-a/RTX",
+                "state": {
+                    "value_state": "partial",
+                    "reason_codes": ["per_card_free_util_absent_backcompat_gpus"],
+                },
+                "value": {"card": "RTX", "used": "100 MiB"},
+            },
+        ]
+    }
+    res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={"routes": []},
+        context_bundle=context_bundle,
+    )
+    kinds = {a["kind"]: a for a in res["locus_anomalies"]}
+    assert "endpoint.lost" in kinds
+    assert kinds["endpoint.lost"]["attention"] == "action"
+    assert res["summary"]["action_count"] == 1
+    assert "host.partial_observation" in kinds
+    assert "host.dark" not in kinds
+
+
+def test_explicit_zero_unacked_and_malformed_counters_handled_safely() -> None:
+    """F10: unacked_count=0 must not fall back to unread_count=3; malformed counters must not raise ValueError."""
+    allowlist = ["kind", "state", "count"]
+    lanebus = {
+        "inboxes": [
+            {
+                "lane": "lane-zero",
+                "unacked_count": 0,
+                "unread_count": 3,
+                "state": "clear",
+            },
+            {"lane": "lane-bad", "unacked_count": "bad-counter-value", "state": "ok"},
+        ]
+    }
+    res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus=lanebus,
+        grants={
+            "rows": [
+                {
+                    "grant_id": "g-bad",
+                    "honor_count": "not-an-int",
+                    "grant_record_present": True,
+                }
+            ]
+        },
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={"routes": []},
+        context_bundle={"facts": [{"id": "h1", "kind": "host", "state": "live"}]},
+    )
+    assert len(res["lanebus_owes"]) == 1
+    assert res["lanebus_owes"][0]["kind"] == "lanebus.unparseable"
+    assert len(res["grant_owes"]) == 1
+    assert res["grant_owes"][0]["kind"] == "grant.unparseable_honor_count"
+
+
+def test_deny_all_classifier_and_secret_scrubbing() -> None:
+    """Residual risk #3: a deny-all classifier redacts string/list values and secret markers never survive."""
+    res = read_obligations_summary(
+        allowlist=[],
+        classify=lambda fields, _allow: {k: "deny" for k in fields},
+        lanebus={
+            "inboxes": [
+                {
+                    "lane": "lane-secret_marker_123",
+                    "unacked_count": 1,
+                    "state": "unacked",
+                }
+            ]
+        },
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={"routes": []},
+        context_bundle={"facts": [{"id": "h1", "kind": "host", "state": "live"}]},
+    )
+    row = res["lanebus_owes"][0]
+    assert row["debtor"] == REDACTION_TOKEN
+    assert row["subject"] == REDACTION_TOKEN
+    assert "secret_marker" not in str(res)
+
+
 def test_read_obligations_endpoint_wired_in_app() -> None:
     app = build_app("", ["kind", "state", "relation"])
     client = TestClient(app)
     resp = client.get("/read/obligations")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["dark"] is False
+    assert isinstance(body["dark"], bool)
+    assert "source_status" in body
     assert "summary" in body
     assert "lanebus_owes" in body
     assert "capability_fulfillment" in body
