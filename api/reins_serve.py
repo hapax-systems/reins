@@ -663,6 +663,11 @@ def build_serve_app(
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import sys
+
+    if "--wait-census" in sys.argv[1:]:
+        raise SystemExit(reins_read.main(sys.argv[1:]))
+
     import uvicorn
 
     cfg = reins_read.instance_config()
