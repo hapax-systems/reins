@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 REDACTION_TOKEN = "▒▒▒"
@@ -19,8 +20,24 @@ _SECRET_PATTERN = re.compile(
     r"|\bgh[pousr]_[A-Za-z0-9_]{8,}\b"
     r"|\bbearer\s+[A-Za-z0-9._~+/=-]{6,}"
     r"|\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization)\s*[:=]\s*\S+"
-    r"|\b\w*(?:secret[_-]?marker|sensitive[_-]?marker|synthetic[_-]?secret)\w*\b"
+    r"|\b\w*(?:secret[_-]?marker|sensitive[_-]?marker|synthetic[_-]?secret|canary[_-]?token|opaque[_-]?canary|synthetic[_-]?token|secret[_-]?token)\w*\b"
     r")"
+)
+
+_FS_PATH_ROOTS = frozenset(
+    {
+        "var",
+        "tmp",
+        "home",
+        "mnt",
+        "models",
+        "opt",
+        "usr",
+        "srv",
+        "data",
+        "root",
+        "etc",
+    }
 )
 
 _LOCAL_ROUTE_INDICATORS = frozenset(
@@ -84,9 +101,10 @@ def _classified(
     fields: dict[str, Any], allowlist: list[str], classify: Callable
 ) -> dict[str, Any]:
     sanitized = {k: _sanitize_scalar(v) for k, v in fields.items()}
+    is_default_air = getattr(classify, "__name__", "") == "classify_air"
     eff_allow = (
         list(dict.fromkeys([*allowlist, *_OBLIGATIONS_STRUCTURAL_ALLOW]))
-        if allowlist
+        if (allowlist and is_default_air)
         else allowlist
     )
     raw_air = classify(sanitized, eff_allow)
@@ -95,11 +113,10 @@ def _classified(
         dec = raw_air.get(k) if isinstance(raw_air, dict) else "deny"
         air[k] = "ok" if dec in ("ok", "allow") else "deny"
     deny_all = bool(air) and not any(v == "ok" for v in air.values())
+    enforce_redact = deny_all or not allowlist or not is_default_air
     out: dict[str, Any] = {}
     for k, v in sanitized.items():
-        if deny_all or (
-            k in ("subject", "debtor", "creditor") and air[k] != "ok" and not allowlist
-        ):
+        if enforce_redact and air[k] != "ok":
             out[k] = _redact_for_deny(v)
         else:
             out[k] = v
@@ -113,13 +130,21 @@ def _safe_int(val: Any) -> tuple[int, bool]:
     if isinstance(val, bool):
         return 0, False
     if isinstance(val, int):
+        if val < 0 or val > 10**18:
+            return 0, False
         return val, True
     if isinstance(val, str):
         s = val.strip()
         if not s:
             return 0, True
-        if re.fullmatch(r"[+-]?\d+", s):
-            return int(s), True
+        if re.fullmatch(r"[+-]?\d{1,18}", s):
+            try:
+                parsed = int(s)
+            except ValueError:
+                return 0, False
+            if parsed < 0:
+                return 0, False
+            return parsed, True
         return 0, False
     return 0, False
 
@@ -129,12 +154,28 @@ def _norm_model_token(val: str) -> str:
     if not s:
         return ""
     if "/" in s:
-        s = s.rsplit("/", 1)[-1]
+        first_seg = s.lstrip("/").split("/", 1)[0]
+        if s.startswith("/") or first_seg in _FS_PATH_ROOTS or s.endswith(".gguf"):
+            s = s.rsplit("/", 1)[-1]
     if s.endswith(":latest"):
         s = s[: -len(":latest")]
     if s.endswith(".gguf"):
         s = s[: -len(".gguf")]
     return s.strip()
+
+
+def _parse_iso_epoch(ts: Any) -> float | None:
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    else:
+        dt = dt.astimezone(UTC)
+    return dt.timestamp()
 
 
 def _norm_route_id(val: str) -> str:
@@ -373,7 +414,22 @@ def read_obligations_summary(
                 )
             )
 
-    facts = _extract_context_facts(context_bundle)
+    facts = (
+        []
+        if source_dark_map["context_bundle"]
+        else _extract_context_facts(context_bundle)
+    )
+    bundle_ref_ts = (
+        context_bundle.get("generated_at")
+        or (
+            (context_bundle.get("provenance") or {}).get("generated_at")
+            if isinstance(context_bundle.get("provenance"), dict)
+            else None
+        )
+        if isinstance(context_bundle, dict)
+        else None
+    )
+    bundle_ref_epoch = _parse_iso_epoch(bundle_ref_ts)
 
     live_loci: list[dict[str, Any]] = []
     local_substrate_loci: list[dict[str, Any]] = []
@@ -383,6 +439,7 @@ def read_obligations_summary(
         if not isinstance(f, dict):
             continue
         f_kind = str(f.get("kind") or f.get("fact_type") or "")
+        is_producer_fact = "fact_type" in f or isinstance(f.get("state"), dict)
         raw_state = f.get("state")
         reason_codes: list[str] = []
         if isinstance(raw_state, dict):
@@ -395,9 +452,46 @@ def read_obligations_summary(
             raw_rc = f.get("reason_codes")
             if isinstance(raw_rc, list):
                 reason_codes = [str(x) for x in raw_rc]
-        freshness = str(f.get("freshness_state") or "fresh")
-        if freshness == "stale" and f_state in ("live", "lit", "ok"):
+
+        raw_fresh = f.get("freshness_state")
+        if raw_fresh is not None and str(raw_fresh).strip():
+            freshness = str(raw_fresh).strip()
+        else:
+            freshness = "absent" if is_producer_fact else "fresh"
+
+        obs_ts = (
+            f.get("observed_at")
+            or (
+                (f.get("provenance") or {}).get("observed_at")
+                if isinstance(f.get("provenance"), dict)
+                else None
+            )
+            or (
+                (f.get("confidence_basis") or {}).get("observed_at")
+                if isinstance(f.get("confidence_basis"), dict)
+                else None
+            )
+        )
+        if obs_ts is not None:
+            obs_ep = _parse_iso_epoch(obs_ts)
+            if obs_ep is None:
+                freshness = "absent"
+            elif bundle_ref_epoch is not None:
+                age_diff = bundle_ref_epoch - obs_ep
+                if age_diff > 300 or age_diff < -60:
+                    freshness = "stale"
+
+        if freshness in ("stale", "aging") and f_state in (
+            "live",
+            "lit",
+            "ok",
+            "present",
+        ):
             f_state = "stale"
+        elif freshness == "absent" and f_state in ("live", "lit", "ok", "present"):
+            f_state = "absent"
+            if "observation_timestamp_absent" not in reason_codes:
+                reason_codes.append("observation_timestamp_absent")
 
         f_id = str(f.get("id") or f.get("subject_ref") or f.get("fact_id") or "")
         payload = (
@@ -466,12 +560,30 @@ def read_obligations_summary(
                     )
                 )
         elif f_kind == "declared_endpoint":
-            is_lost = (
+            if (
+                f_state == "absent"
+                and "observation_timestamp_absent" in reason_codes
+                and "LOST" not in reason_codes
+                and payload.get("alive") is not False
+            ):
+                locus_anomalies.append(
+                    _classified(
+                        {
+                            "kind": "endpoint.unverified_freshness",
+                            "id": f_id,
+                            "state": "absent",
+                            "subject": str(payload.get("port") or f_id),
+                            "attention": "warning",
+                        },
+                        allowlist,
+                        classify,
+                    )
+                )
+            elif (
                 f_state == "lost"
                 or "LOST" in reason_codes
                 or (f_state == "absent" and "not_declared" not in reason_codes)
-            )
-            if is_lost:
+            ):
                 locus_anomalies.append(
                     _classified(
                         {
@@ -637,7 +749,11 @@ def read_obligations_summary(
         and isinstance(capabilities.get("capabilities"), dict)
         else (capabilities if isinstance(capabilities, dict) else {})
     )
-    routes = cap_obj.get("routes") if isinstance(cap_obj, dict) else []
+    routes = (
+        []
+        if source_dark_map["capabilities"]
+        else (cap_obj.get("routes") if isinstance(cap_obj, dict) else [])
+    )
     if not isinstance(routes, list):
         routes = []
 
@@ -660,7 +776,7 @@ def read_obligations_summary(
         for lf in live_loci:
             lf_id = str(lf.get("id") or "")
             lf_state = str(lf.get("state") or "")
-            lf_fresh = str(lf.get("freshness_state") or "fresh")
+            lf_fresh = str(lf.get("freshness_state") or "absent")
             lp = lf.get("payload") if isinstance(lf.get("payload"), dict) else {}
             loaded = [
                 str(m)
@@ -691,14 +807,10 @@ def read_obligations_summary(
                 exact_admit and not norm_target and not loaded
             )
 
-            is_locus_live = lf_state in (
-                "live",
-                "lit",
-                "ok",
-                "present",
-            ) and lf_fresh not in (
-                "stale",
-                "absent",
+            is_locus_live = (
+                (not source_dark_map["context_bundle"])
+                and lf_state in ("live", "lit", "ok", "present")
+                and lf_fresh == "fresh"
             )
 
             if matched_loaded and loaded:
@@ -707,7 +819,7 @@ def read_obligations_summary(
                     topo = str(lp.get("topology") or "")
                     if topo and topo not in topologies:
                         topologies.append(topo)
-                elif lf_state == "stale" or lf_fresh == "stale":
+                elif lf_state == "stale" or lf_fresh in ("stale", "aging"):
                     stale_loci.append(lf_id)
             elif matched_resident and lf_state not in ("dark", "absent", "stale"):
                 resident_loci.append(lf_id)

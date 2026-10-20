@@ -875,7 +875,19 @@ def _session_snapshot() -> tuple[list[tuple[str, dict]], dict]:
         mtime = os.fstat(fh.fileno()).st_mtime
         state = json.load(fh)
     age_s = _now() - mtime
-    producer = {"source": path, "age_s": age_s, "state": _producer_verdict(age_s)}
+    verdict = _producer_verdict(age_s)
+    producer: dict[str, Any] = {"source": path, "age_s": age_s, "state": verdict}
+    host_probes = state.get("host_probes") if isinstance(state, dict) else None
+    if isinstance(host_probes, dict) and host_probes:
+        producer["host_probes"] = host_probes
+        probe_vals = [hp for hp in host_probes.values() if isinstance(hp, dict)]
+        if probe_vals and all(hp.get("ok") is False for hp in probe_vals):
+            producer["state"] = "dark"
+        elif (
+            any(hp.get("ok") is False for hp in probe_vals)
+            and producer["state"] == "live"
+        ):
+            producer["state"] = "degraded"
     lanes = state.get("lanes") or {}
     if not isinstance(lanes, dict):
         return [], producer
@@ -6339,7 +6351,7 @@ def build_app(
             raw, producer = _session_snapshot()
         except Exception as e:  # honest-dark
             return {"dark": True, "error": str(e), "sessions": []}
-        producer_live = producer["state"] == "live"
+        producer_live = producer["state"] in ("live", "degraded")
         bindings, binding_source, binding_path = _route_binding_index(session_cfg)
         sessions = [
             to_session(
@@ -6354,11 +6366,11 @@ def build_app(
             for name, lane in raw
         ]
         payload = {
-            "dark": False,
+            "dark": producer["state"] == "dark",
             "sessions": sorted(sessions, key=_session_sort_key),
             "producer": producer,
         }
-        if not producer_live:
+        if producer["state"] != "live":
             payload["partial"] = True
         return payload
 
@@ -6647,10 +6659,10 @@ def build_app(
                 capabilities=caps,
                 context_bundle=ctx,
             )
-        except Exception as e:  # honest-dark
+        except Exception:  # honest-dark (sanitized error code; never leak raw exception text)
             return {
                 "dark": True,
-                "error": str(e),
+                "error": "obligations_synthesis_failed",
                 "summary": {},
                 "lanebus_owes": [],
                 "grant_owes": [],

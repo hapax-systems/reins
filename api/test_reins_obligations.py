@@ -397,10 +397,12 @@ def test_explicit_zero_unacked_and_malformed_counters_handled_safely() -> None:
 
 
 def test_deny_all_classifier_and_secret_scrubbing() -> None:
-    """Residual risk #3: a deny-all classifier redacts string/list values and secret markers never survive."""
+    """Residual risk #3 & R2-F01: custom/selective or deny-all classifiers redact denied fields and secret/canary markers never survive."""
     res = read_obligations_summary(
-        allowlist=[],
-        classify=lambda fields, _allow: {k: "deny" for k in fields},
+        allowlist=["state"],
+        classify=lambda fields, _allow: {
+            k: ("ok" if k == "state" else "deny") for k in fields
+        },
         lanebus={
             "inboxes": [
                 {
@@ -413,13 +415,134 @@ def test_deny_all_classifier_and_secret_scrubbing() -> None:
         grants={"rows": []},
         claim_custody={"rows": []},
         seat_succession={"rows": []},
-        capabilities={"routes": []},
-        context_bundle={"facts": [{"id": "h1", "kind": "host", "state": "live"}]},
+        capabilities={
+            "routes": [
+                {
+                    "route_id": "r.local",
+                    "capability_id": "cap",
+                    "mode": "local",
+                    "model_id": "vendor-a/m1",
+                    "route_state": "ok",
+                }
+            ]
+        },
+        context_bundle={
+            "facts": [
+                {
+                    "id": "locus:h1:8000",
+                    "kind": "locus",
+                    "state": "live",
+                    "payload": {
+                        "host": "h1",
+                        "port": "8000",
+                        "loaded_models": ["vendor-a/m1"],
+                        "resident_models": ["vendor-a/m1"],
+                        "admitted_by": ["r.local"],
+                    },
+                }
+            ]
+        },
     )
     row = res["lanebus_owes"][0]
     assert row["debtor"] == REDACTION_TOKEN
     assert row["subject"] == REDACTION_TOKEN
+    assert row["state"] == "unacked"
+    locus_row = res["local_substrate_loci"][0]
+    assert locus_row["host"] == REDACTION_TOKEN
+    assert locus_row["loaded_models"] == [REDACTION_TOKEN]
+    cap_row = res["capability_fulfillment"][0]
+    assert cap_row["occupied_loci"] == [REDACTION_TOKEN]
+    assert cap_row["model_id"] == REDACTION_TOKEN
     assert "secret_marker" not in str(res)
+
+
+def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
+    """R2-F04, R2-F06, R2-F07, R2-F09: vendor-a/model-x != vendor-b/model-x, dark context_bundle yields 0 live loci, timestamp-absent alive endpoint emits endpoint.unverified_freshness, and negative/huge ints are rejected."""
+    allowlist = ["route_id", "fulfillment_state", "kind", "state", "attention", "count"]
+    capabilities = {
+        "routes": [
+            {
+                "route_id": "r.vendor.b",
+                "mode": "local",
+                "model_id": "vendor-b/model-x",
+                "route_state": "ok",
+            },
+        ]
+    }
+    context_bundle = {
+        "generated_at": "2026-10-20T12:10:00Z",
+        "facts": [
+            {
+                "fact_id": "loaded_model:host:n1:8000/vendor-a/model-x",
+                "fact_type": "loaded_model",
+                "subject_ref": "host:n1:8000/vendor-a/model-x",
+                "freshness_state": "fresh",
+                "state": {"value_state": "lit", "reason_codes": []},
+                "value": {
+                    "host": "n1",
+                    "endpoint": "8000",
+                    "model": "vendor-a/model-x",
+                    "admitting_row": "r.vendor.a",
+                },
+            },
+            {
+                "fact_id": "declared_endpoint:serving.n1-8000",
+                "fact_type": "declared_endpoint",
+                "subject_ref": "serving.n1-8000",
+                "freshness_state": "absent",
+                "state": {
+                    "value_state": "absent",
+                    "reason_codes": ["observation_timestamp_absent"],
+                },
+                "value": {"host": "n1", "port": "8000", "alive": True},
+            },
+        ],
+    }
+    res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={
+            "inboxes": [
+                {"lane": "neg", "unacked_count": -5, "state": "ok"},
+                {"lane": "huge", "unacked_count": "9" * 50, "state": "ok"},
+            ]
+        },
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities=capabilities,
+        context_bundle=context_bundle,
+    )
+    by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
+    assert by_route["r.vendor.b"]["fulfillment_state"] == "unfulfilled_local_locus"
+    kinds = {a["kind"]: a for a in res["locus_anomalies"]}
+    assert "endpoint.unverified_freshness" in kinds
+    assert "endpoint.lost" not in kinds
+    assert len(res["lanebus_owes"]) == 2
+    assert all(x["kind"] == "lanebus.unparseable" for x in res["lanebus_owes"])
+
+    # Dark context_bundle with residual facts must never mark routes occupied_in_memory
+    dark_ctx_res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={
+            "routes": [
+                {
+                    "route_id": "r.vendor.a",
+                    "mode": "local",
+                    "model_id": "vendor-a/model-x",
+                    "route_state": "ok",
+                }
+            ]
+        },
+        context_bundle={"dark": True, "facts": context_bundle["facts"]},
+    )
+    assert dark_ctx_res["summary"]["routes_occupied_in_memory"] == 0
+    assert dark_ctx_res["summary"]["local_loci_occupied_in_memory"] == 0
 
 
 def test_read_obligations_endpoint_wired_in_app() -> None:
