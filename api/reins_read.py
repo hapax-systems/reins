@@ -4019,6 +4019,46 @@ def _observe_cost(cfg: dict | None) -> dict:
     return _observe_dark("cost", f"dispatch ledger missing: {path}")
 
 
+def _observe_gpu_from_context(cfg: dict | None) -> dict | None:
+    cfg = cfg or {}
+    council_root = str(cfg.get("council_root") or "")
+    if not council_root:
+        return None
+    try:
+        bundle = _load_context_bundle(council_root)
+        if not bundle:
+            return None
+        proj = reins_context.project(bundle, "operator_private")
+        facts = proj.get("facts") or []
+        vram_lit = sum(
+            1
+            for f in facts
+            if isinstance(f, dict)
+            and f.get("fact_type") == "resource_vram"
+            and (f.get("state") or {}).get("value_state") == "lit"
+        )
+        vram_total = sum(
+            1 for f in facts if isinstance(f, dict) and f.get("fact_type") == "resource_vram"
+        )
+        loaded_models = sum(
+            1
+            for f in facts
+            if isinstance(f, dict)
+            and f.get("fact_type") == "loaded_model"
+            and (f.get("state") or {}).get("value_state") == "lit"
+        )
+        if vram_total == 0 and loaded_models == 0:
+            return None
+        return _observe_dim(
+            "gpu",
+            "live",
+            f"context-bundle live: vram_loci={vram_lit}/{vram_total}; loaded_models={loaded_models}",
+            loaded_models,
+        )
+    except Exception:
+        return None
+
+
 def read_observe_summary(cfg: dict | None = None) -> dict:
     """Aggregate whole-system observation dimensions without minting authority or AIR policy.
 
@@ -4043,6 +4083,8 @@ def read_observe_summary(cfg: dict | None = None) -> dict:
         api_dim = _observe_from_http(cfg, key)
         if api_dim["status"] == "live":
             dimensions.append(api_dim)
+        elif key == "gpu" and (ctx_gpu := _observe_gpu_from_context(cfg)) is not None:
+            dimensions.append(ctx_gpu)
         elif local_dim is not None:
             dimensions.append(local_dim)
         else:
