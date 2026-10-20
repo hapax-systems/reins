@@ -85,18 +85,172 @@ INVENTORY: dict[str, list[str]] = {
     "LanebusUnread": ["basename", "mtime", "age_s", "air"],
     "LanebusTotals": ["inboxes", "unknown_inboxes", "files_present", "files_acked", "unread_count",
                       "unmeasured_inboxes", "oldest_unread_age_s"],
+    # Reins #50 — the read-only grant-consumption projection.
+    "GrantConsumption": ["dark", "error", "authority", "coverage", "grants"],
+    "GrantRow": ["grant_id", "grant_record_present", "minting_lane", "minting_session", "binding", "lease",
+                 "issued_at", "expires_at", "state", "honors", "honor_count", "air"],
+    "GrantHonor": ["role", "session", "ts", "air"],
 }
 
 
-def test_every_live_attr_resolves():
-    """Exhaustiveness: no live (domain, attr) lands in UNRESOLVED limbo — the whole point of the cut."""
+def _collect_payload_attrs(value: object, out: set[str], parent_key: str = "") -> None:
+    """Recursively collect every attribute key emitted in a /read/* JSON payload.
+
+    Skips keys inside dynamic map envelopes whose keys are data values (e.g., `air` per-field
+    verdict maps, `by_kind` dynamic counters, `projections` keyed by audience name) while still
+    walking nested projection objects inside `projections`.
+    """
+    if isinstance(value, list):
+        for item in value:
+            _collect_payload_attrs(item, out, parent_key)
+    elif isinstance(value, dict):
+        if parent_key in ("air", "by_kind", "facet_by_name", "facets"):
+            return
+        if parent_key == "projections":
+            for nested in value.values():
+                _collect_payload_attrs(nested, out, "")
+            return
+        for key, item in value.items():
+            key_str = str(key)
+            out.add(key_str)
+            _collect_payload_attrs(item, out, key_str)
+
+
+def _populated_read_route_cfg(tmp_path) -> tuple[str, dict]:
+    """Build a temporary read-only fixture config so registered /read/* routes emit populated rows."""
+    import json
+
+    council_root = tmp_path / "council"
+    council_root.mkdir(parents=True, exist_ok=True)
+
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    gid = "a" * 32
+    (grants_dir / "first.grant").write_text(
+        json.dumps(
+            {
+                "kind": "escape",
+                "grant_id": gid,
+                "role": "lane-mint",
+                "session": "session-mint",
+                "issued_at": "2026-10-20T00:00:00Z",
+                "expires_at": "2026-10-20T01:00:00Z",
+                "lease_state": "active",
+            }
+        ),
+        encoding="utf-8",
+    )
+    honor_ledger = tmp_path / "honors.jsonl"
+    honor_ledger.write_text(
+        json.dumps(
+            {
+                "kind": "escape_grant_honored",
+                "grant_id": gid,
+                "role": "lane-use",
+                "session": "session-use",
+                "ts": "2026-10-20T00:05:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    inbox_dir = tmp_path / "inbox-alpha"
+    (inbox_dir / "read").mkdir(parents=True)
+    (inbox_dir / "20261020T000000Z-sample.md").write_text("hello\n", encoding="utf-8")
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "30-areas").mkdir(parents=True)
+    (vault_root / "30-areas" / "note.md").write_text("# Note\n", encoding="utf-8")
+
+    (council_root / "reins-context-bundle.json").write_text(
+        json.dumps(
+            {
+                "evaluation": {"bundle_state": "lit"},
+                "facts": {
+                    "tasks": [
+                        {
+                            "fact_id": "f-1",
+                            "subject_ref": "task-1",
+                            "freshness_state": "fresh",
+                            "confidence_word": "observed",
+                            "text_domain": True,
+                            "state": {"value_state": "lit", "reason_codes": []},
+                            "air": {
+                                "operator_private": "allow",
+                                "yard_context": "allow",
+                                "hapax_substrate": "allow",
+                                "public_or_air": "deny",
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = {
+        "council_root": str(council_root),
+        "grant_dir": str(grants_dir),
+        "grant_honor_ledger": str(honor_ledger),
+        "lanebus_inboxes": [
+            {"inbox": "alpha", "path": str(inbox_dir), "count_only": False, "ack": "read-dir"}
+        ],
+        "vault_root": str(vault_root),
+    }
+    return str(council_root), cfg
+
+
+def test_every_live_attr_resolves(tmp_path):
+    """Exhaustiveness: no live (domain, attr) or registered /read/* route payload key lands in
+    UNRESOLVED limbo — generic over all registered /read/* routes in build_app so no future facet
+    can escape."""
+    import reins_read as rr
+    from fastapi.testclient import TestClient
+
     unresolved = []
     for domain, attrs in INVENTORY.items():
         for attr in attrs:
             r = fr.classify(domain, attr)
             if r.startswith("UNRESOLVED"):
                 unresolved.append(f"{domain}.{attr}")
-    assert not unresolved, f"{len(unresolved)} attrs do not resolve to a facet/edge/body/envelope: {unresolved}"
+
+    # Generic payload walk over every registered GET /read/* route on build_app (both dark/unconfigured
+    # and populated fixtures). Any new /read/* route added to build_app is walked automatically.
+    council_root, pop_cfg = _populated_read_route_cfg(tmp_path)
+    apps = [
+        ("dark", rr.build_app("", fr.air_allowlist(), {})),
+        ("populated", rr.build_app(council_root, fr.air_allowlist(), pop_cfg)),
+    ]
+    seen_routes: set[str] = set()
+    for mode, app in apps:
+        read_routes = sorted(
+            r.path
+            for r in app.routes
+            if getattr(r, "path", "").startswith("/read/") and r.path != "/read/facets"
+        )
+        assert read_routes, "build_app must register /read/* routes"
+        with TestClient(app) as client:
+            for route_path in read_routes:
+                seen_routes.add(route_path)
+                url = route_path.replace("{role}", "alpha").replace(
+                    "{ts}", "2026-06-26T00:00:00Z"
+                )
+                resp = client.get(url)
+                assert resp.status_code == 200, f"{route_path} ({mode}) returned {resp.status_code}"
+                payload = resp.json()
+                attrs: set[str] = set()
+                _collect_payload_attrs(payload, attrs)
+                assert attrs, f"{route_path} ({mode}) emitted an empty payload"
+                for attr in sorted(attrs):
+                    if fr.classify("", attr).startswith("UNRESOLVED"):
+                        unresolved.append(f"{route_path}[{mode}].{attr}")
+
+    assert "/read/grant-consumption" in seen_routes
+    assert not unresolved, (
+        f"{len(unresolved)} attrs do not resolve to a facet/edge/body/envelope: {unresolved}"
+    )
 
 
 def test_exactly_nine_facets_in_citation_order():
@@ -261,6 +415,12 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         # NAME-bearing fields are NOT here — `basename` and `inbox` are SENSITIVE (deny on air).
         "files_present", "files_acked", "unread_count", "unknown_inboxes", "read_dir",
         "oldest_unread_age_s", "age_s", "ack", "unread_rows_truncated", "unmeasured_inboxes",
+        # Reins #50 + honest-dark: operational grant metadata (8-hex id prefix, presence bool,
+        # minting lane role, lease timestamps, honor count, dark bool). `minting_session` is
+        # SENSITIVE (denies on air), `error` is a BODY (denies on air), and `grants`/`binding`/
+        # `lease`/`honors` are ENVELOPES (do not enter air_allowlist).
+        "dark", "grant_id", "grant_record_present", "minting_lane", "issued_at", "expires_at",
+        "honor_count",
     }
     newly_aired = set()
     for domain, attrs in INVENTORY.items():
