@@ -16,6 +16,7 @@ from reins_claim_custody import CustodyProjection
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
+from reins_obligations import read_obligations_summary
 from reins_seat_succession import read_seat_succession
 from reins_quota_history import QuotaPhaseHistory
 
@@ -5052,6 +5053,43 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     def claim_custody() -> dict:
         return custody.read(allowlist)
 
+    @app.get("/read/obligations")
+    def read_obligations() -> dict:
+        try:
+            lb = read_lanebus_summary(session_cfg, allowlist)
+            gr = read_grant_consumption(session_cfg, allowlist)
+            cc = custody.read(allowlist)
+            ss = read_seat_succession(session_cfg, allowlist, classify_air)
+            try:
+                caps = read_capability_summary(council_root, allowlist, session_cfg)
+            except Exception:
+                caps = {}
+            try:
+                ctx = reins_context.load_and_project(council_root, "operator_private")
+            except Exception:
+                ctx = {}
+            return read_obligations_summary(
+                allowlist=allowlist,
+                classify=classify_air,
+                lanebus=lb,
+                grants=gr,
+                claim_custody=cc,
+                seat_succession=ss,
+                capabilities=caps,
+                context_bundle=ctx,
+            )
+        except Exception as e:  # honest-dark
+            return {
+                "dark": True,
+                "error": str(e),
+                "summary": {},
+                "lanebus_owes": [],
+                "grant_owes": [],
+                "custody_owes": [],
+                "locus_anomalies": [],
+                "capability_fulfillment": [],
+            }
+
     @app.get("/read/observe")
     def read_observe() -> dict:
         observe_cfg = dict(session_cfg)
@@ -5223,6 +5261,8 @@ def instance_config() -> dict:
         "lifecycle_registry_paths": lifecycle_registry_paths,
         "domain_pack_paths": domain_pack_paths,
         "capability_surface_pack_paths": capability_surface_pack_paths,
+        "capability_inventory_path": os.environ.get("REINS_CAPABILITY_INVENTORY")
+        or str(toml_cfg.get("capability_inventory_path", "")),
         "hkp_shadow_root": hkp_shadow_root,
         "hkp_index_root": hkp_index_root,
         "hkp_report_root": hkp_report_root,
