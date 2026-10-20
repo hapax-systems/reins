@@ -34,7 +34,28 @@ _LOCAL_ROUTE_INDICATORS = frozenset(
         "tabbyapi",
         "sglang",
         "substrate",
+        "local_compute",
     }
+)
+
+_OBLIGATIONS_STRUCTURAL_ALLOW = (
+    "total_owes",
+    "lanebus_owes_count",
+    "grant_owes_count",
+    "custody_owes_count",
+    "locus_anomaly_count",
+    "dark_sources_count",
+    "action_count",
+    "warning_count",
+    "routes_total",
+    "routes_occupied_in_memory",
+    "local_loci_occupied_in_memory",
+    "local_loci_total",
+    "fulfillment_state",
+    "resident_models_count",
+    "topology",
+    "age_s",
+    "creditor",
 )
 
 
@@ -63,7 +84,12 @@ def _classified(
     fields: dict[str, Any], allowlist: list[str], classify: Callable
 ) -> dict[str, Any]:
     sanitized = {k: _sanitize_scalar(v) for k, v in fields.items()}
-    raw_air = classify(sanitized, allowlist)
+    eff_allow = (
+        list(dict.fromkeys([*allowlist, *_OBLIGATIONS_STRUCTURAL_ALLOW]))
+        if allowlist
+        else allowlist
+    )
+    raw_air = classify(sanitized, eff_allow)
     air: dict[str, str] = {}
     for k in sanitized:
         dec = raw_air.get(k) if isinstance(raw_air, dict) else "deny"
@@ -126,6 +152,7 @@ def _is_local_route(route: dict[str, Any]) -> bool:
         "mode",
         "route_id",
         "capability_id",
+        "capacity_pool",
     ):
         raw = str(route.get(key) or "").strip().lower()
         if not raw:
