@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from reins_obligations import REDACTION_TOKEN, read_obligations_summary
+from reins_obligations import REDACTION_TOKEN, _classified, read_obligations_summary
 from reins_read import build_app, classify_air
 
 
@@ -97,17 +97,20 @@ def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
         ]
     }
     context_bundle = {
+        "generated_at": "2026-10-20T12:10:00Z",
         "facts": [
             {
                 "id": "host:node-dark",
                 "kind": "host",
                 "state": "dark",
+                "observed_at": "2026-10-20T12:09:50Z",
                 "payload": {"host": "node-dark"},
             },
             {
                 "id": "locus:node-a:8000",
                 "kind": "locus",
                 "state": "live",
+                "observed_at": "2026-10-20T12:09:50Z",
                 "payload": {
                     "loaded_models": ["qwen3.8-flash-next"],
                     "resident_models": ["qwen3.8-flash-next"],
@@ -119,13 +122,14 @@ def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
                 "id": "locus:node-b:11434",
                 "kind": "locus",
                 "state": "live",
+                "observed_at": "2026-10-20T12:09:50Z",
                 "payload": {
                     "loaded_models": ["stray-unexplained-model"],
                     "resident_models": ["bge-m3:latest", "stray-unexplained-model"],
                     "admitted_by": [],
                 },
             },
-        ]
+        ],
     }
 
     res = read_obligations_summary(
@@ -137,6 +141,7 @@ def test_read_obligations_summary_synthesizes_owes_and_fulfillment() -> None:
         seat_succession=seat_succession,
         capabilities=capabilities,
         context_bundle=context_bundle,
+        now="2026-10-20T12:10:05Z",
     )
 
     assert res["dark"] is False
@@ -198,10 +203,12 @@ def test_stale_locus_and_blocked_route_do_not_claim_active_memory_fulfillment() 
         ]
     }
     context_bundle = {
+        "generated_at": "2026-10-20T12:10:00Z",
         "facts": [
             {
                 "id": "locus:stale:8000",
                 "kind": "loaded_model",
+                "observed_at": "2026-10-20T11:30:00Z",
                 "freshness_state": "stale",
                 "state": {"value_state": "stale", "reason_codes": []},
                 "value": {
@@ -214,6 +221,7 @@ def test_stale_locus_and_blocked_route_do_not_claim_active_memory_fulfillment() 
             {
                 "id": "locus:live:8001",
                 "kind": "loaded_model",
+                "observed_at": "2026-10-20T12:09:50Z",
                 "freshness_state": "fresh",
                 "state": {"value_state": "lit", "reason_codes": []},
                 "value": {
@@ -223,7 +231,7 @@ def test_stale_locus_and_blocked_route_do_not_claim_active_memory_fulfillment() 
                     "admitting_row": "r.blocked",
                 },
             },
-        ]
+        ],
     }
     res = read_obligations_summary(
         allowlist=allowlist,
@@ -234,6 +242,7 @@ def test_stale_locus_and_blocked_route_do_not_claim_active_memory_fulfillment() 
         seat_succession={"rows": []},
         capabilities=capabilities,
         context_bundle=context_bundle,
+        now="2026-10-20T12:10:05Z",
     )
     by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
     assert by_route["r.stale"]["fulfillment_state"] == "stale_locus"
@@ -265,12 +274,14 @@ def test_strict_identity_joins_reject_fuzzy_substrings_and_unfulfilled_local_rou
     }
     # Pass grouped producer facts dict directly (residual risk #4 + F08 disk residency on resource_vram)
     context_bundle = {
+        "generated_at": "2026-10-20T12:10:00Z",
         "facts": {
             "resource_vram": [
                 {
                     "fact_id": "resource_vram:host:node-a",
                     "fact_type": "resource_vram",
                     "subject_ref": "host:node-a",
+                    "observed_at": "2026-10-20T12:09:50Z",
                     "freshness_state": "fresh",
                     "state": {"value_state": "lit", "reason_codes": []},
                     "value": {
@@ -286,6 +297,7 @@ def test_strict_identity_joins_reject_fuzzy_substrings_and_unfulfilled_local_rou
                     "fact_id": "loaded_model:host:node-a:8000/qwen3-embedding-8b",
                     "fact_type": "loaded_model",
                     "subject_ref": "host:node-a:8000/qwen3-embedding-8b",
+                    "observed_at": "2026-10-20T12:09:50Z",
                     "freshness_state": "fresh",
                     "state": {"value_state": "lit", "reason_codes": []},
                     "value": {
@@ -296,7 +308,7 @@ def test_strict_identity_joins_reject_fuzzy_substrings_and_unfulfilled_local_rou
                     },
                 }
             ],
-        }
+        },
     }
     res = read_obligations_summary(
         allowlist=allowlist,
@@ -307,6 +319,7 @@ def test_strict_identity_joins_reject_fuzzy_substrings_and_unfulfilled_local_rou
         seat_succession={"rows": []},
         capabilities=capabilities,
         context_bundle=context_bundle,
+        now="2026-10-20T12:10:05Z",
     )
     by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
     assert by_route["route.a"]["fulfillment_state"] == "unfulfilled_local_locus"
@@ -388,7 +401,17 @@ def test_explicit_zero_unacked_and_malformed_counters_handled_safely() -> None:
         claim_custody={"rows": []},
         seat_succession={"rows": []},
         capabilities={"routes": []},
-        context_bundle={"facts": [{"id": "h1", "kind": "host", "state": "live"}]},
+        context_bundle={
+            "facts": [
+                {
+                    "id": "h1",
+                    "kind": "host",
+                    "state": "live",
+                    "observed_at": "2026-10-20T12:09:50Z",
+                }
+            ]
+        },
+        now="2026-10-20T12:10:00Z",
     )
     assert len(res["lanebus_owes"]) == 1
     assert res["lanebus_owes"][0]["kind"] == "lanebus.unparseable"
@@ -397,7 +420,18 @@ def test_explicit_zero_unacked_and_malformed_counters_handled_safely() -> None:
 
 
 def test_deny_all_classifier_and_secret_scrubbing() -> None:
-    """Residual risk #3 & R2-F01: custom/selective or deny-all classifiers redact denied fields and secret/canary markers never survive."""
+    """Residual risk #3, R2-F01 & R3-F01: both custom/selective AND default classify_air redact denied opaque fields, and secret/canary markers never survive."""
+    # Direct R3-F01 check on _classified with default classify_air
+    direct = _classified(
+        {"kind": "x", "debtor": "v7q2z9-private-fixture"},
+        ["kind"],
+        classify_air,
+    )
+    assert direct["kind"] == "x"
+    assert direct["air"]["kind"] == "ok"
+    assert direct["debtor"] == REDACTION_TOKEN
+    assert direct["air"]["debtor"] == "deny"
+
     res = read_obligations_summary(
         allowlist=["state"],
         classify=lambda fields, _allow: {
@@ -427,11 +461,13 @@ def test_deny_all_classifier_and_secret_scrubbing() -> None:
             ]
         },
         context_bundle={
+            "generated_at": "2026-10-20T12:10:00Z",
             "facts": [
                 {
                     "id": "locus:h1:8000",
                     "kind": "locus",
                     "state": "live",
+                    "observed_at": "2026-10-20T12:09:50Z",
                     "payload": {
                         "host": "h1",
                         "port": "8000",
@@ -440,8 +476,9 @@ def test_deny_all_classifier_and_secret_scrubbing() -> None:
                         "admitted_by": ["r.local"],
                     },
                 }
-            ]
+            ],
         },
+        now="2026-10-20T12:10:05Z",
     )
     row = res["lanebus_owes"][0]
     assert row["debtor"] == REDACTION_TOKEN
@@ -455,9 +492,33 @@ def test_deny_all_classifier_and_secret_scrubbing() -> None:
     assert cap_row["model_id"] == REDACTION_TOKEN
     assert "secret_marker" not in str(res)
 
+    # Also verify default classify_air in read_obligations_summary redacts arbitrary non-allowlisted opaque strings
+    default_air_res = read_obligations_summary(
+        allowlist=["kind", "state"],
+        classify=classify_air,
+        lanebus={
+            "inboxes": [
+                {
+                    "lane": "v7q2z9-private-fixture",
+                    "unacked_count": 2,
+                    "state": "unacked",
+                    "attention": "action",
+                }
+            ]
+        },
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={"routes": []},
+        context_bundle={"facts": []},
+    )
+    assert default_air_res["lanebus_owes"][0]["debtor"] == REDACTION_TOKEN
+    assert default_air_res["lanebus_owes"][0]["subject"] == REDACTION_TOKEN
+    assert default_air_res["summary"]["action_count"] == 1
+
 
 def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
-    """R2-F04, R2-F06, R2-F07, R2-F09: vendor-a/model-x != vendor-b/model-x, dark context_bundle yields 0 live loci, timestamp-absent alive endpoint emits endpoint.unverified_freshness, and negative/huge ints are rejected."""
+    """R2-F04, R2-F06, R2-F07, R2-F09, R3-F02: vendor-a/model-x != vendor-b/model-x, dark context_bundle yields 0 live loci, ancient bundles or missing observed_at never claim occupied_in_memory, timestamp-absent alive endpoint emits endpoint.unverified_freshness, and negative/huge ints are rejected."""
     allowlist = ["route_id", "fulfillment_state", "kind", "state", "attention", "count"]
     capabilities = {
         "routes": [
@@ -476,6 +537,7 @@ def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
                 "fact_id": "loaded_model:host:n1:8000/vendor-a/model-x",
                 "fact_type": "loaded_model",
                 "subject_ref": "host:n1:8000/vendor-a/model-x",
+                "observed_at": "2026-10-20T12:09:50Z",
                 "freshness_state": "fresh",
                 "state": {"value_state": "lit", "reason_codes": []},
                 "value": {
@@ -512,6 +574,7 @@ def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
         seat_succession={"rows": []},
         capabilities=capabilities,
         context_bundle=context_bundle,
+        now="2026-10-20T12:10:05Z",
     )
     by_route = {r["route_id"]: r for r in res["capability_fulfillment"]}
     assert by_route["r.vendor.b"]["fulfillment_state"] == "unfulfilled_local_locus"
@@ -520,6 +583,93 @@ def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
     assert "endpoint.lost" not in kinds
     assert len(res["lanebus_owes"]) == 2
     assert all(x["kind"] == "lanebus.unparseable" for x in res["lanebus_owes"])
+
+    # R3-F02: Ancient internally-consistent bundle (generated_at and observed_at both 2000-01-01, marked fresh) must re-age against current read time to stale_locus
+    ancient_res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={
+            "routes": [
+                {
+                    "route_id": "r.vendor.a",
+                    "mode": "local",
+                    "model_id": "vendor-a/model-x",
+                    "route_state": "ok",
+                }
+            ]
+        },
+        context_bundle={
+            "generated_at": "2000-01-01T00:00:00Z",
+            "facts": [
+                {
+                    "fact_id": "loaded_model:host:n1:8000/vendor-a/model-x",
+                    "fact_type": "loaded_model",
+                    "subject_ref": "host:n1:8000/vendor-a/model-x",
+                    "observed_at": "2000-01-01T00:00:00Z",
+                    "freshness_state": "fresh",
+                    "state": {"value_state": "lit", "reason_codes": []},
+                    "value": {
+                        "host": "n1",
+                        "endpoint": "8000",
+                        "model": "vendor-a/model-x",
+                        "admitting_row": "r.vendor.a",
+                    },
+                }
+            ],
+        },
+        now="2026-10-20T12:10:05Z",
+    )
+    assert (
+        ancient_res["capability_fulfillment"][0]["fulfillment_state"] == "stale_locus"
+    )
+    assert ancient_res["summary"]["routes_occupied_in_memory"] == 0
+
+    # R3-F02: Explicit freshness_state='fresh' without observed_at must be rejected as absent
+    no_ts_res = read_obligations_summary(
+        allowlist=allowlist,
+        classify=classify_air,
+        lanebus={"inboxes": []},
+        grants={"rows": []},
+        claim_custody={"rows": []},
+        seat_succession={"rows": []},
+        capabilities={
+            "routes": [
+                {
+                    "route_id": "r.vendor.a",
+                    "mode": "local",
+                    "model_id": "vendor-a/model-x",
+                    "route_state": "ok",
+                }
+            ]
+        },
+        context_bundle={
+            "facts": [
+                {
+                    "fact_id": "loaded_model:host:n1:8000/vendor-a/model-x",
+                    "fact_type": "loaded_model",
+                    "subject_ref": "host:n1:8000/vendor-a/model-x",
+                    "freshness_state": "fresh",
+                    "state": {"value_state": "lit", "reason_codes": []},
+                    "value": {
+                        "host": "n1",
+                        "endpoint": "8000",
+                        "model": "vendor-a/model-x",
+                        "admitting_row": "r.vendor.a",
+                    },
+                }
+            ],
+        },
+        now="2026-10-20T12:10:05Z",
+    )
+    assert (
+        no_ts_res["capability_fulfillment"][0]["fulfillment_state"]
+        == "unfulfilled_local_locus"
+    )
+    assert no_ts_res["summary"]["routes_occupied_in_memory"] == 0
 
     # Dark context_bundle with residual facts must never mark routes occupied_in_memory
     dark_ctx_res = read_obligations_summary(
@@ -540,6 +690,7 @@ def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
             ]
         },
         context_bundle={"dark": True, "facts": context_bundle["facts"]},
+        now="2026-10-20T12:10:05Z",
     )
     assert dark_ctx_res["summary"]["routes_occupied_in_memory"] == 0
     assert dark_ctx_res["summary"]["local_loci_occupied_in_memory"] == 0

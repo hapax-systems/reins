@@ -73,6 +73,8 @@ _OBLIGATIONS_STRUCTURAL_ALLOW = (
     "topology",
     "age_s",
     "creditor",
+    "occupied_loci",
+    "resident_loci",
 )
 
 
@@ -112,11 +114,9 @@ def _classified(
     for k in sanitized:
         dec = raw_air.get(k) if isinstance(raw_air, dict) else "deny"
         air[k] = "ok" if dec in ("ok", "allow") else "deny"
-    deny_all = bool(air) and not any(v == "ok" for v in air.values())
-    enforce_redact = deny_all or not allowlist or not is_default_air
     out: dict[str, Any] = {}
     for k, v in sanitized.items():
-        if enforce_redact and air[k] != "ok":
+        if air[k] != "ok":
             out[k] = _redact_for_deny(v)
         else:
             out[k] = v
@@ -255,8 +255,19 @@ def read_obligations_summary(
     seat_succession: dict[str, Any],
     capabilities: dict[str, Any],
     context_bundle: dict[str, Any],
+    now: float | str | None = None,
 ) -> dict[str, Any]:
     """Synthesize ligatory obligations (`owes`) and capability fulfillment across read facets."""
+    if isinstance(now, (int, float)) and not isinstance(now, bool):
+        now_epoch = float(now)
+    elif isinstance(now, str) and now.strip():
+        parsed_now = _parse_iso_epoch(now)
+        now_epoch = (
+            parsed_now if parsed_now is not None else datetime.now(UTC).timestamp()
+        )
+    else:
+        now_epoch = datetime.now(UTC).timestamp()
+
     sources = {
         "lanebus": lanebus,
         "grants": grants,
@@ -267,6 +278,12 @@ def read_obligations_summary(
     }
     source_dark_map = {name: _source_is_dark(obj) for name, obj in sources.items()}
     overall_dark = all(source_dark_map.values())
+
+    raw_attentions: list[str] = []
+
+    def _emit_row(target: list[dict[str, Any]], row: dict[str, Any]) -> None:
+        raw_attentions.append(str(row.get("attention") or ""))
+        target.append(_classified(row, allowlist, classify))
 
     lanebus_owes: list[dict[str, Any]] = []
     inboxes = lanebus.get("inboxes") if isinstance(lanebus, dict) else None
@@ -307,7 +324,7 @@ def read_obligations_summary(
                 "state": state or "unacked",
                 "attention": str(inbox.get("attention") or "warning"),
             }
-            lanebus_owes.append(_classified(row, allowlist, classify))
+            _emit_row(lanebus_owes, row)
 
     grant_owes: list[dict[str, Any]] = []
     grant_rows = (
@@ -341,7 +358,7 @@ def read_obligations_summary(
                 "state": g_state,
                 "attention": attn or "warning",
             }
-            grant_owes.append(_classified(row, allowlist, classify))
+            _emit_row(grant_owes, row)
         elif rec_present is True and honors == 0:
             row = {
                 "kind": "grant.retained_unhonored",
@@ -353,7 +370,7 @@ def read_obligations_summary(
                 "state": "retained_unhonored",
                 "attention": "info",
             }
-            grant_owes.append(_classified(row, allowlist, classify))
+            _emit_row(grant_owes, row)
 
     custody_owes: list[dict[str, Any]] = []
     custody_rows = (
@@ -375,7 +392,7 @@ def read_obligations_summary(
                 "state": c_state,
                 "attention": "warning",
             }
-            custody_owes.append(_classified(row, allowlist, classify))
+            _emit_row(custody_owes, row)
 
     seat_rows = (
         seat_succession.get("rows") if isinstance(seat_succession, dict) else None
@@ -395,29 +412,33 @@ def read_obligations_summary(
                 "state": pane_state,
                 "attention": "action",
             }
-            custody_owes.append(_classified(row, allowlist, classify))
+            _emit_row(custody_owes, row)
 
     locus_anomalies: list[dict[str, Any]] = []
     for src_name, is_dark in source_dark_map.items():
         if is_dark:
-            locus_anomalies.append(
-                _classified(
-                    {
-                        "kind": "source.dark",
-                        "id": f"source:{src_name}",
-                        "state": "dark",
-                        "subject": src_name,
-                        "attention": "warning",
-                    },
-                    allowlist,
-                    classify,
-                )
+            _emit_row(
+                locus_anomalies,
+                {
+                    "kind": "source.dark",
+                    "id": f"source:{src_name}",
+                    "state": "dark",
+                    "subject": src_name,
+                    "attention": "warning",
+                },
             )
 
     facts = (
         []
         if source_dark_map["context_bundle"]
         else _extract_context_facts(context_bundle)
+    )
+    has_bundle_ts = isinstance(context_bundle, dict) and (
+        "generated_at" in context_bundle
+        or (
+            isinstance(context_bundle.get("provenance"), dict)
+            and "generated_at" in context_bundle["provenance"]
+        )
     )
     bundle_ref_ts = (
         context_bundle.get("generated_at")
@@ -430,16 +451,25 @@ def read_obligations_summary(
         else None
     )
     bundle_ref_epoch = _parse_iso_epoch(bundle_ref_ts)
+    bundle_stale = False
+    bundle_ts_invalid = False
+    if has_bundle_ts:
+        if bundle_ref_epoch is None:
+            bundle_ts_invalid = True
+        else:
+            bundle_age_now = now_epoch - bundle_ref_epoch
+            if bundle_age_now > 900 or bundle_age_now < -60:
+                bundle_stale = True
 
     live_loci: list[dict[str, Any]] = []
     local_substrate_loci: list[dict[str, Any]] = []
     host_disk_resident_models: dict[str, list[str]] = {}
+    occupied_loci_count = 0
 
     for f in facts:
         if not isinstance(f, dict):
             continue
         f_kind = str(f.get("kind") or f.get("fact_type") or "")
-        is_producer_fact = "fact_type" in f or isinstance(f.get("state"), dict)
         raw_state = f.get("state")
         reason_codes: list[str] = []
         if isinstance(raw_state, dict):
@@ -457,7 +487,7 @@ def read_obligations_summary(
         if raw_fresh is not None and str(raw_fresh).strip():
             freshness = str(raw_fresh).strip()
         else:
-            freshness = "absent" if is_producer_fact else "fresh"
+            freshness = "fresh"
 
         obs_ts = (
             f.get("observed_at")
@@ -472,14 +502,22 @@ def read_obligations_summary(
                 else None
             )
         )
-        if obs_ts is not None:
+        if obs_ts is None:
+            freshness = "absent"
+        else:
             obs_ep = _parse_iso_epoch(obs_ts)
-            if obs_ep is None:
+            if obs_ep is None or bundle_ts_invalid:
                 freshness = "absent"
-            elif bundle_ref_epoch is not None:
-                age_diff = bundle_ref_epoch - obs_ep
-                if age_diff > 300 or age_diff < -60:
+            else:
+                obs_age_now = now_epoch - obs_ep
+                if obs_age_now > 900 or obs_age_now < -60 or bundle_stale:
                     freshness = "stale"
+                elif bundle_ref_epoch is not None:
+                    age_diff = bundle_ref_epoch - obs_ep
+                    if age_diff > 300 or age_diff < -60:
+                        freshness = "stale"
+                elif freshness not in ("stale", "aging", "dark", "absent", "fresh"):
+                    freshness = "absent"
 
         if freshness in ("stale", "aging") and f_state in (
             "live",
@@ -508,56 +546,47 @@ def read_obligations_summary(
                 .split("/", 1)[0]
             )
             disk_models = payload.get("ollama_disk_resident_models")
-            if isinstance(disk_models, list) and disk_models:
+            if isinstance(disk_models, list) and disk_models and freshness == "fresh":
                 host_disk_resident_models[host_name] = [
                     str(m) for m in disk_models if str(m).strip()
                 ]
 
             if f_state == "dark" or "host_unreachable" in reason_codes:
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "host.dark",
-                            "id": f_id,
-                            "state": "dark",
-                            "subject": host_name or f_id,
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "host.dark",
+                        "id": f_id,
+                        "state": "dark",
+                        "subject": host_name or f_id,
+                        "attention": "warning",
+                    },
                 )
             elif (
                 f_state == "partial"
                 or "partial_memory_observation" in reason_codes
                 or "per_card_free_util_absent_backcompat_gpus" in reason_codes
             ):
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "host.partial_observation",
-                            "id": f_id,
-                            "state": "partial",
-                            "subject": host_name or f_id,
-                            "attention": "info",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "host.partial_observation",
+                        "id": f_id,
+                        "state": "partial",
+                        "subject": host_name or f_id,
+                        "attention": "info",
+                    },
                 )
             elif f_state not in ("live", "lit", "ok"):
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": f"host.{f_state or 'anomaly'}",
-                            "id": f_id,
-                            "state": f_state or "anomaly",
-                            "subject": host_name or f_id,
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": f"host.{f_state or 'anomaly'}",
+                        "id": f_id,
+                        "state": f_state or "anomaly",
+                        "subject": host_name or f_id,
+                        "attention": "warning",
+                    },
                 )
         elif f_kind == "declared_endpoint":
             if (
@@ -566,36 +595,30 @@ def read_obligations_summary(
                 and "LOST" not in reason_codes
                 and payload.get("alive") is not False
             ):
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "endpoint.unverified_freshness",
-                            "id": f_id,
-                            "state": "absent",
-                            "subject": str(payload.get("port") or f_id),
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "endpoint.unverified_freshness",
+                        "id": f_id,
+                        "state": "absent",
+                        "subject": str(payload.get("port") or f_id),
+                        "attention": "warning",
+                    },
                 )
             elif (
                 f_state == "lost"
                 or "LOST" in reason_codes
                 or (f_state == "absent" and "not_declared" not in reason_codes)
             ):
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "endpoint.lost",
-                            "id": f_id,
-                            "state": "lost",
-                            "subject": str(payload.get("port") or f_id),
-                            "attention": "action",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "endpoint.lost",
+                        "id": f_id,
+                        "state": "lost",
+                        "subject": str(payload.get("port") or f_id),
+                        "attention": "action",
+                    },
                 )
         elif f_kind in ("locus", "loaded_model"):
             if f_kind == "loaded_model":
@@ -647,32 +670,26 @@ def read_obligations_summary(
             live_loci.append(norm_locus)
 
             if f_state == "stale":
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "locus.stale",
-                            "id": f_id,
-                            "state": "stale",
-                            "subject": ",".join(loaded or resident) or f_id,
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "locus.stale",
+                        "id": f_id,
+                        "state": "stale",
+                        "subject": ",".join(loaded or resident) or f_id,
+                        "attention": "warning",
+                    },
                 )
             elif "OLLAMA_PS_PROBE_FAILED" in reason_codes:
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "locus.probe_failed",
-                            "id": f_id,
-                            "state": f_state,
-                            "subject": f"{host_str}:{port_str}",
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "locus.probe_failed",
+                        "id": f_id,
+                        "state": f_state,
+                        "subject": f"{host_str}:{port_str}",
+                        "attention": "warning",
+                    },
                 )
             elif (
                 (loaded and not admitted_by)
@@ -680,20 +697,20 @@ def read_obligations_summary(
                 or "UNEXPLAINED" in reason_codes
                 or "UNVERIFIED_WORKER_SHARD" in reason_codes
             ):
-                locus_anomalies.append(
-                    _classified(
-                        {
-                            "kind": "locus.unexplained_occupancy",
-                            "id": f_id,
-                            "state": f_state,
-                            "subject": ",".join(loaded) or f_id,
-                            "attention": "warning",
-                        },
-                        allowlist,
-                        classify,
-                    )
+                _emit_row(
+                    locus_anomalies,
+                    {
+                        "kind": "locus.unexplained_occupancy",
+                        "id": f_id,
+                        "state": f_state,
+                        "subject": ",".join(loaded) or f_id,
+                        "attention": "warning",
+                    },
                 )
             if loaded or resident:
+                is_live_loaded = bool(loaded and f_state in ("live", "lit", "ok"))
+                if is_live_loaded:
+                    occupied_loci_count += 1
                 local_substrate_loci.append(
                     _classified(
                         {
@@ -701,9 +718,7 @@ def read_obligations_summary(
                             "host": host_str,
                             "port": port_str,
                             "state": f_state,
-                            "loaded_models": loaded
-                            if f_state in ("live", "lit", "ok")
-                            else [],
+                            "loaded_models": loaded if is_live_loaded else [],
                             "resident_models_count": len(resident),
                             "admitted_by": admitted_by,
                             "topology": topo_str,
@@ -743,6 +758,7 @@ def read_obligations_summary(
             )
 
     capability_fulfillment: list[dict[str, Any]] = []
+    occupied_routes = 0
     cap_obj = (
         capabilities.get("capabilities")
         if isinstance(capabilities, dict)
@@ -839,6 +855,9 @@ def read_obligations_summary(
         else:
             f_state = r_state or "unfulfilled"
 
+        if f_state == "occupied_in_memory":
+            occupied_routes += 1
+
         row = {
             "route_id": r_id,
             "capability_id": cap_id,
@@ -853,18 +872,8 @@ def read_obligations_summary(
         capability_fulfillment.append(_classified(row, allowlist, classify))
 
     all_owes = lanebus_owes + grant_owes + custody_owes
-    action_count = sum(
-        1 for x in all_owes + locus_anomalies if x.get("attention") == "action"
-    )
-    warning_count = sum(
-        1 for x in all_owes + locus_anomalies if x.get("attention") == "warning"
-    )
-    occupied_routes = sum(
-        1
-        for x in capability_fulfillment
-        if x.get("fulfillment_state") == "occupied_in_memory"
-    )
-    occupied_loci_count = sum(1 for x in local_substrate_loci if x.get("loaded_models"))
+    action_count = sum(1 for a in raw_attentions if a == "action")
+    warning_count = sum(1 for a in raw_attentions if a == "warning")
     dark_sources_count = sum(1 for v in source_dark_map.values() if v)
 
     summary = _classified(

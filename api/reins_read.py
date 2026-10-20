@@ -6644,9 +6644,14 @@ def build_app(
                 caps = {}
             try:
                 bundle = _load_context_bundle(council_root)
-                ctx = (
-                    reins_context.project(bundle, "operator_private") if bundle else {}
-                )
+                if bundle:
+                    ctx = dict(reins_context.project(bundle, "operator_private"))
+                    if "generated_at" in bundle:
+                        ctx["generated_at"] = bundle.get("generated_at")
+                    if "provenance" in bundle:
+                        ctx["provenance"] = bundle.get("provenance")
+                else:
+                    ctx = {}
             except Exception:
                 ctx = {}
             return read_obligations_summary(
@@ -6659,7 +6664,9 @@ def build_app(
                 capabilities=caps,
                 context_bundle=ctx,
             )
-        except Exception:  # honest-dark (sanitized error code; never leak raw exception text)
+        except (
+            Exception
+        ):  # honest-dark (sanitized error code; never leak raw exception text)
             return {
                 "dark": True,
                 "error": "obligations_synthesis_failed",
