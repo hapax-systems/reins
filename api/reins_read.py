@@ -5065,7 +5065,7 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
             except Exception:
                 caps = {}
             try:
-                ctx = reins_context.load_and_project(council_root, "operator_private")
+                ctx = reins_context.load_and_project(os.path.expanduser(council_root), "operator_private")
             except Exception:
                 ctx = {}
             return read_obligations_summary(

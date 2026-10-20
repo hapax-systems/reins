@@ -27,6 +27,21 @@ def _norm_model_token(val: str) -> str:
     return s
 
 
+def _extract_context_facts(context_bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(context_bundle, dict):
+        return []
+    direct = context_bundle.get("facts")
+    if isinstance(direct, list):
+        return direct
+    projs = context_bundle.get("projections")
+    if isinstance(projs, dict):
+        for key in ("operator_private", "hapax_substrate", "yard_context"):
+            sub = projs.get(key)
+            if isinstance(sub, dict) and isinstance(sub.get("facts"), list):
+                return sub["facts"]
+    return []
+
+
 def read_obligations_summary(
     *,
     allowlist: list[str],
@@ -43,38 +58,58 @@ def read_obligations_summary(
     for inbox in lanebus.get("inboxes") or []:
         if not isinstance(inbox, dict):
             continue
-        unacked = int(inbox.get("unacked_count") or 0)
+        ack_mode = str(inbox.get("ack") or "")
+        unacked = int(inbox.get("unacked_count") or inbox.get("unread_count") or 0)
         state = str(inbox.get("state") or "")
-        if unacked > 0 or state in ("missing", "unparseable", "stale"):
+        lane_name = str(inbox.get("lane") or inbox.get("inbox") or "")
+        age_s = inbox.get("oldest_unacked_age_s")
+        if age_s is None:
+            age_s = inbox.get("oldest_unread_age_s")
+        if (unacked > 0 and ack_mode != "none") or state in ("missing", "unparseable", "stale"):
             row = {
                 "kind": "lanebus.unacked" if unacked > 0 else f"lanebus.{state}",
                 "relation": "owes",
                 "creditor": "lanebus",
-                "debtor": str(inbox.get("lane") or ""),
+                "debtor": lane_name,
                 "subject": f"{unacked} unacked message(s)" if unacked > 0 else state,
                 "count": unacked,
-                "age_s": inbox.get("oldest_unacked_age_s"),
+                "age_s": age_s,
                 "state": state or "unacked",
                 "attention": str(inbox.get("attention") or "warning"),
             }
             lanebus_owes.append(_classified(row, allowlist, classify))
 
     grant_owes: list[dict[str, Any]] = []
-    for g in grants.get("rows") or []:
+    grant_rows = grants.get("rows") if isinstance(grants.get("rows"), list) else grants.get("grants")
+    for g in grant_rows or []:
         if not isinstance(g, dict):
             continue
         g_state = str(g.get("state") or g.get("spend_status") or "")
         attn = str(g.get("attention") or "")
-        if g_state not in ("reconciled", "honored", "ok", "") or attn in ("warning", "action"):
+        rec_present = g.get("grant_record_present")
+        honors = int(g.get("honor_count") or 0)
+        if g_state and g_state not in ("reconciled", "honored", "ok"):
             row = {
-                "kind": f"grant.{g_state or unreconciled}",
+                "kind": f"grant.{g_state}",
                 "relation": "owes",
                 "creditor": "admission_authority",
-                "debtor": str(g.get("lane") or g.get("grant_id") or ""),
+                "debtor": str(g.get("lane") or g.get("minting_lane") or g.get("grant_id") or ""),
                 "subject": str(g.get("grant_id") or ""),
                 "route_id": str(g.get("route_id") or ""),
-                "state": g_state or "unreconciled",
+                "state": g_state,
                 "attention": attn or "warning",
+            }
+            grant_owes.append(_classified(row, allowlist, classify))
+        elif rec_present is True and honors == 0:
+            row = {
+                "kind": "grant.retained_unhonored",
+                "relation": "owes",
+                "creditor": "admission_authority",
+                "debtor": str(g.get("minting_lane") or g.get("grant_id") or ""),
+                "subject": str(g.get("grant_id") or ""),
+                "route_id": "",
+                "state": "retained_unhonored",
+                "attention": "info",
             }
             grant_owes.append(_classified(row, allowlist, classify))
 
@@ -82,13 +117,13 @@ def read_obligations_summary(
     for c in claim_custody.get("rows") or []:
         if not isinstance(c, dict):
             continue
-        c_state = str(c.get("custody_state") or c.get("state") or "")
-        if c_state and c_state not in ("settled", "released", "ok", "active"):
+        c_state = str(c.get("custody_state") or c.get("status") or c.get("state") or "")
+        if c_state in ("stale", "orphaned", "blocked", "conflict"):
             row = {
                 "kind": f"claim_custody.{c_state}",
                 "relation": "owes",
                 "creditor": "task_steward",
-                "debtor": str(c.get("holder") or c.get("lane") or c.get("task_id") or ""),
+                "debtor": str(c.get("holder") or c.get("assigned_to") or c.get("task_id") or ""),
                 "subject": str(c.get("task_id") or ""),
                 "state": c_state,
                 "attention": "warning",
@@ -112,12 +147,11 @@ def read_obligations_summary(
             }
             custody_owes.append(_classified(row, allowlist, classify))
 
-    facts = context_bundle.get("facts") if isinstance(context_bundle, dict) else []
-    if not isinstance(facts, list):
-        facts = []
+    facts = _extract_context_facts(context_bundle)
 
     locus_anomalies: list[dict[str, Any]] = []
     live_loci: list[dict[str, Any]] = []
+    local_substrate_loci: list[dict[str, Any]] = []
     for f in facts:
         if not isinstance(f, dict):
             continue
@@ -141,8 +175,9 @@ def read_obligations_summary(
             )
         elif f_kind == "locus":
             live_loci.append(f)
-            loaded = payload.get("loaded_models") or []
-            admitted_by = payload.get("admitted_by") or []
+            loaded = [str(m) for m in (payload.get("loaded_models") or [])]
+            resident = [str(m) for m in (payload.get("resident_models") or [])]
+            admitted_by = [str(a) for a in (payload.get("admitted_by") or [])]
             if loaded and not admitted_by:
                 locus_anomalies.append(
                     _classified(
@@ -150,8 +185,25 @@ def read_obligations_summary(
                             "kind": "locus.unexplained_occupancy",
                             "id": f_id,
                             "state": f_state,
-                            "subject": ",".join(str(m) for m in loaded),
+                            "subject": ",".join(loaded),
                             "attention": "warning",
+                        },
+                        allowlist,
+                        classify,
+                    )
+                )
+            if loaded or resident:
+                local_substrate_loci.append(
+                    _classified(
+                        {
+                            "id": f_id,
+                            "host": str(payload.get("host") or ""),
+                            "port": str(payload.get("port") or ""),
+                            "state": f_state,
+                            "loaded_models": loaded,
+                            "resident_models_count": len(resident),
+                            "admitted_by": admitted_by,
+                            "topology": str(payload.get("topology") or "single-node"),
                         },
                         allowlist,
                         classify,
@@ -204,7 +256,7 @@ def read_obligations_summary(
             f_state = "occupied_in_memory"
         elif resident_loci:
             f_state = "resident_on_disk_only"
-        elif r_state == "ok":
+        elif r_state in ("ok", "active"):
             f_state = "admitted_remote_or_cloud"
         else:
             f_state = r_state or "unfulfilled"
@@ -228,6 +280,7 @@ def read_obligations_summary(
     occupied_routes = sum(
         1 for x in capability_fulfillment if x.get("fulfillment_state") == "occupied_in_memory"
     )
+    occupied_loci_count = sum(1 for x in local_substrate_loci if x.get("loaded_models"))
 
     summary = _classified(
         {
@@ -240,6 +293,8 @@ def read_obligations_summary(
             "warning_count": warning_count,
             "routes_total": len(capability_fulfillment),
             "routes_occupied_in_memory": occupied_routes,
+            "local_loci_occupied_in_memory": occupied_loci_count,
+            "local_loci_total": len(local_substrate_loci),
         },
         allowlist,
         classify,
@@ -252,5 +307,6 @@ def read_obligations_summary(
         "grant_owes": grant_owes,
         "custody_owes": custody_owes,
         "locus_anomalies": locus_anomalies,
+        "local_substrate_loci": local_substrate_loci,
         "capability_fulfillment": capability_fulfillment,
     }
