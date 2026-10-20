@@ -227,3 +227,68 @@ def test_unreadable_claims_and_unassigned_charter_are_distinct(
         "air": {"state": "deny", "present": "deny", "paths": "deny"},
     }
     assert row["charter_state"] == "unassigned" and row["assigned_to"] is None
+
+
+def test_unstatable_matching_marker_is_unknown_not_absent(bound, monkeypatch, tmp_path):
+    """Under Python 3.14 Path.is_file() swallows PermissionError and returns False.
+    A matching marker that cannot be stat'ed (EACCES) must report claim-census-unavailable,
+    never present: False."""
+    import errno
+    import reins_seat_succession as ss
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a, 0, "lane-alpha\t%1\t101\tbash\t0\n", ""
+        ),
+    )
+    # 1. Real filesystem EACCES via symlink into an unsearchable (0o000) directory
+    for p in tmp_path.glob("active-alpha-*"):
+        p.unlink()
+    locked_dir = tmp_path / "locked_dir"
+    locked_dir.mkdir()
+    secret_target = locked_dir / "marker"
+    secret_target.write_text("x", encoding="utf-8")
+    (tmp_path / "active-alpha-locked").symlink_to(secret_target)
+    locked_dir.chmod(0o000)
+    try:
+        if os.geteuid() != 0:
+            # Verify Python 3.14's Path.is_file() behavior or direct stat failure:
+            row = read(bound)["rows"][0]
+            assert row["claims"]["state"] == "claim-census-unavailable"
+            assert row["claims"]["present"] is None
+            assert row["claims"]["paths"] is None
+    finally:
+        locked_dir.chmod(0o700)
+
+    # 2. Interpreter-independent pin: even if Path.is_file() swallows PermissionError
+    # (as Python 3.14 does), _claims must use stat() so EACCES yields claim-census-unavailable.
+    orig_stat = Path.stat
+
+    def stat_eacces(self, *args, **kwargs):
+        if self.name == "active-alpha-locked":
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+        return orig_stat(self, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "is_file", lambda self: False)
+        m.setattr(Path, "stat", stat_eacces)
+        claims = ss._claims(str(tmp_path / "active-alpha-*"))
+    assert claims == {
+        "state": "claim-census-unavailable",
+        "present": None,
+        "paths": None,
+    }
+
+
+def test_unbounded_charter_frontmatter_fails_closed(bound, monkeypatch):
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")
+    )
+    charter = Path(bound["seat_succession"]["lanes"][0]["charter_path"])
+    charter.write_text("---\nassigned_to: successor\n" + ("x: y\n" * 1000), encoding="utf-8")
+    row = read(bound)["rows"][0]
+    assert row["charter_state"] == "charter-unavailable"
+    assert row["assigned_to"] is None
+

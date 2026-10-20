@@ -90,6 +90,11 @@ INVENTORY: dict[str, list[str]] = {
     "GrantRow": ["grant_id", "grant_record_present", "minting_lane", "minting_session", "binding", "lease",
                  "issued_at", "expires_at", "state", "honors", "honor_count", "air"],
     "GrantHonor": ["role", "session", "ts", "air"],
+    # Reins #51 — the read-only seat-succession projection.
+    "SeatSuccession": ["state", "rows"],
+    "SeatSuccessionRow": ["role", "session", "pane_state", "panes", "claims", "charter_state", "assigned_to", "air"],
+    "SeatSuccessionPane": ["id", "pid", "command", "air"],
+    "SeatSuccessionClaims": ["state", "present", "paths", "air"],
 }
 
 
@@ -190,6 +195,11 @@ def _populated_read_route_cfg(tmp_path) -> tuple[str, dict]:
         encoding="utf-8",
     )
 
+    charter_path = tmp_path / "charter-alpha.md"
+    charter_path.write_text("---\nassigned_to: alpha\n---\n", encoding="utf-8")
+    marker_path = tmp_path / "cc-active-task-alpha"
+    marker_path.write_text("task-1\n", encoding="utf-8")
+
     cfg = {
         "council_root": str(council_root),
         "grant_dir": str(grants_dir),
@@ -197,16 +207,28 @@ def _populated_read_route_cfg(tmp_path) -> tuple[str, dict]:
         "lanebus_inboxes": [
             {"inbox": "alpha", "path": str(inbox_dir), "count_only": False, "ack": "read-dir"}
         ],
+        "seat_succession": {
+            "socket": str(tmp_path / "dead.sock"),
+            "lanes": [
+                {
+                    "role": "alpha",
+                    "session": "hapax-claude-alpha",
+                    "claim_marker_pattern": str(tmp_path / "cc-active-task-alpha*"),
+                    "charter_path": str(charter_path),
+                }
+            ],
+        },
         "vault_root": str(vault_root),
     }
     return str(council_root), cfg
 
 
-def test_every_live_attr_resolves(tmp_path):
+def test_every_live_attr_resolves(tmp_path, monkeypatch):
     """Exhaustiveness: no live (domain, attr) or registered /read/* route payload key lands in
     UNRESOLVED limbo — generic over all registered /read/* routes in build_app so no future facet
     can escape."""
     import reins_read as rr
+    import reins_seat_succession as ss
     from fastapi.testclient import TestClient
 
     unresolved = []
@@ -219,6 +241,11 @@ def test_every_live_attr_resolves(tmp_path):
     # Generic payload walk over every registered GET /read/* route on build_app (both dark/unconfigured
     # and populated fixtures). Any new /read/* route added to build_app is walked automatically.
     council_root, pop_cfg = _populated_read_route_cfg(tmp_path)
+    monkeypatch.setattr(
+        ss,
+        "_pane_census",
+        lambda _spec: {"hapax-claude-alpha": [{"id": "%1", "pid": 101, "command": "bash"}]},
+    )
     apps = [
         ("dark", rr.build_app("", fr.air_allowlist(), {})),
         ("populated", rr.build_app(council_root, fr.air_allowlist(), pop_cfg)),
@@ -421,6 +448,9 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         # `lease`/`honors` are ENVELOPES (do not enter air_allowlist).
         "dark", "grant_id", "grant_record_present", "minting_lane", "issued_at", "expires_at",
         "honor_count",
+        # Reins #51: operational seat-succession posture/identity fields. `paths` and `command`
+        # are SENSITIVE (deny on air), and `panes` is an ENVELOPE.
+        "pane_state", "present", "charter_state", "pid",
     }
     newly_aired = set()
     for domain, attrs in INVENTORY.items():

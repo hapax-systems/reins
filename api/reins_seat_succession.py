@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +20,8 @@ from pathlib import Path
 _PANE_FORMAT = (
     "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_dead}"
 )
+_MAX_FRONTMATTER_LINES = 512
+_MAX_FRONTMATTER_BYTES = 65536
 
 
 def _bindings(cfg: dict) -> tuple[dict, list[dict]] | None:
@@ -74,13 +77,20 @@ def _pane_census(spec: dict) -> dict[str, list[dict]] | None:
         return None
 
 
+def _is_regular_marker(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
 def _claims(pattern: str) -> dict:
     path = Path(pattern).expanduser()
     try:
         paths = sorted(
             str(p)
             for p in path.parent.iterdir()
-            if fnmatch.fnmatchcase(p.name, path.name) and p.is_file()
+            if fnmatch.fnmatchcase(p.name, path.name) and _is_regular_marker(p)
         )
         return {"state": "ok", "present": bool(paths), "paths": paths}
     except OSError:
@@ -92,10 +102,18 @@ def _assignment(path: str) -> tuple[str, str | None]:
     # Stop at the frontmatter boundary; bodies, YAML tags and aliases are not read.
     try:
         with Path(path).expanduser().open(encoding="utf-8") as stream:
-            if stream.readline().strip() != "---":
+            first = stream.readline(_MAX_FRONTMATTER_BYTES + 1)
+            if len(first) > _MAX_FRONTMATTER_BYTES or first.strip() != "---":
                 return "charter-unavailable", None
             values = []
-            for line in stream:
+            seen_bytes = len(first)
+            for _ in range(_MAX_FRONTMATTER_LINES):
+                line = stream.readline(_MAX_FRONTMATTER_BYTES + 1)
+                if not line:
+                    return "charter-unavailable", None
+                seen_bytes += len(line)
+                if seen_bytes > _MAX_FRONTMATTER_BYTES:
+                    return "charter-unavailable", None
                 if line.strip() == "---":
                     break
                 if line.startswith("assigned_to:"):
