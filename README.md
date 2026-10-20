@@ -107,9 +107,11 @@ go test ./...                      # Go: config, grammar, model, cmd
 
 Early, but live end-to-end against a real substrate. Working today: the vital frame + window hotlist,
 the read pages (`:events` `:tasks` `:sessions` `:yard` `:readiness` `:capabilities` `:lifecycles` and
-more), the cell-grammar, the AIR lens, hot-reload, the command line with completion, and the governed
-command **preview** (mints nothing). Next: the governed *write* side, and the lifecycle-adapter +
-generality work that turns "declare a lifecycle" from a navigation lens into governed automation.
+more, plus `GET /read/lanebus` — a read-only lanebus inbox projection: messages present, acked and
+unread, and the age of the oldest unread, from names and mtimes only, never a message body), the
+cell-grammar, the AIR lens, hot-reload, the command line with completion, and the governed command
+**preview** (mints nothing). Next: the governed *write* side, and the lifecycle-adapter + generality
+work that turns "declare a lifecycle" from a navigation lens into governed automation.
 
 ## License
 

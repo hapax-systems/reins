@@ -68,6 +68,7 @@ BODIES: set[str] = {
 ENVELOPES: set[str] = {
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
+    "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
     "workbench_contract", "layers", "nodes", "edges", "package", "health", "tmux", "task",
     "evidence_refs", "evidence_summary", "resume", "defaults", "inquiry_modes", "audience_modes",
     "explanation_paths", "follow_on_tranches", "scenes", "by_kind", "scene_count",
@@ -84,6 +85,8 @@ FACET_BY_NAME: dict[str, str] = {
     "capability_id": "identity", "tool_id": "identity", "map_id": "identity",
     "label": "identity", "kind": "identity", "subject_kind": "identity", "map_kind": "identity",
     "family": "identity", "subject": "identity", "title": "identity",
+    # a message filename: free-text-capable, so identity + SENSITIVE (denies on air)
+    "basename": "identity",
     # posture (current condition / health / admission)
     "state": "posture", "no_go": "posture", "readiness": "posture", "criticality": "posture",
     "severity": "posture", "blocker": "posture", "route_state": "posture", "quota_state": "posture",
@@ -92,6 +95,10 @@ FACET_BY_NAME: dict[str, str] = {
     "resume_ready": "posture", "truncated": "posture", "freshness_ok": "posture",
     "parity": "posture", "posture": "posture", "maturity": "posture", "coverage": "posture",
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
+    # the ack-receipt dir's condition: ok / missing / rejected (unknown = unmeasurable)
+    "read_dir": "posture",
+    # whether the unread ROW list was capped (unread_count is always complete)
+    "unread_rows_truncated": "posture",
     # action (lifecycle motion)
     "stage": "action", "prior_stage": "action", "predicted_stage": "action", "intent": "action",
     # ownership (the "whose" labels)
@@ -99,12 +106,19 @@ FACET_BY_NAME: dict[str, str] = {
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
+    # a configured DIRECTORY name (the class of `session`/`path`, not the declared `role`
+    # vocabulary): place, and SENSITIVE below
+    "inbox": "place",
     # posture (gate result is a state)
     "gate": "posture",
     # time
     "ts": "time", "freshness": "time", "mtime": "time", "updated_at": "time", "observed_at": "time",
     "stale_after": "time", "generated_at": "time", "output_age_s": "time", "relay_age_s": "time",
     "activity_age_s": "time", "age_bucket": "time",
+    # unread age (now - mtime), per message and per inbox
+    "age_s": "time", "oldest_unread_age_s": "time",
+    # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
+    "ack": "variant",
     # provenance (evidence / authority / egress / permission)
     "authority": "provenance", "authority_case": "provenance", "authority_ceiling": "provenance",
     "claim_ceiling": "provenance", "claim_surface": "provenance", "mutation_surface": "provenance",
@@ -118,6 +132,10 @@ FACET_BY_NAME: dict[str, str] = {
     "attention": "measure", "route_count": "measure", "ok_count": "measure", "blocked_count": "measure",
     "evidence_count": "measure", "rel_count": "measure", "receipt_count": "measure", "count": "measure",
     "total": "measure", "depth_count": "measure",
+    # lanebus counts: present / acked / unread, and inboxes that could not be read at all (travels
+    # with the totals so a partial sum is never read as a whole one)
+    "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
+    "unknown_inboxes": "measure", "unmeasured_inboxes": "measure",
     # variant (capability/mode variant — the sub-faceted dimensional cross-product)
     "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
     "quantization": "variant", "demand_vector": "variant", "hardening": "variant",
@@ -169,6 +187,10 @@ SENSITIVE: set[str] = {
     "path", "session",          # filesystem / tmux PII
     "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
+    "inbox",  # a configured directory name: free-text-chosen, may carry an identifier
+    # a message FILENAME is free-text chosen by a sender and may carry a name or an identifier: the
+    # one lanebus field an inbox can populate with anything, so it denies on air regardless of facet
+    "basename",
 }
 
 # There are TWO independent reasons to deny a field on air, and SENSITIVE models only the first.

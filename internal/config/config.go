@@ -23,6 +23,9 @@ type Config struct {
 	P0IncidentEvents           string   `toml:"p0_incident_events"`            // READ API: optional P0 incident JSONL ledger
 	SecuritySignalState        string   `toml:"security_signal_state"`         // READ API: optional security signal intake snapshot
 	OrchestrationLedgerDir     string   `toml:"orchestration_ledger_dir"`      // READ API: optional dispatch/route-decision ledger directory
+	LanebusInboxes             []string `toml:"lanebus_inboxes"`               // READ API: optional lanebus inbox roots for the unread projection (metadata only)
+	LanebusCountOnlyInboxes    []string `toml:"lanebus_count_only_inboxes"`    // READ API: inboxes whose message names the projection withholds (may carry PII)
+	LanebusAckNoneInboxes      []string `toml:"lanebus_ack_none_inboxes"`      // READ API: inboxes that ack outside read/, so their unread set is unmeasured
 	LifecycleRegistryPaths     []string `toml:"lifecycle_registry_paths"`      // READ API: optional source-backed SDLC/RDLC/n-DLC lifecycle contracts
 	DomainPackPaths            []string `toml:"domain_pack_paths"`             // READ API: optional source-backed SDLC/RDLC/n-DLC domain packs
 	CapabilitySurfacePackPaths []string `toml:"capability_surface_pack_paths"` // READ API: optional capability-surface discovery packs
@@ -116,6 +119,15 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("REINS_ORCHESTRATION_LEDGER_DIR"); v != "" {
 		c.OrchestrationLedgerDir = v
+	}
+	if v := os.Getenv("REINS_LANEBUS_INBOXES"); v != "" {
+		c.LanebusInboxes = strings.Split(v, string(os.PathListSeparator))
+	}
+	if v := os.Getenv("REINS_LANEBUS_COUNT_ONLY_INBOXES"); v != "" {
+		c.LanebusCountOnlyInboxes = strings.Split(v, string(os.PathListSeparator))
+	}
+	if v := os.Getenv("REINS_LANEBUS_ACK_NONE_INBOXES"); v != "" {
+		c.LanebusAckNoneInboxes = strings.Split(v, string(os.PathListSeparator))
 	}
 	if v := os.Getenv("REINS_LIFECYCLE_REGISTRIES"); v != "" {
 		c.LifecycleRegistryPaths = strings.Split(v, string(os.PathListSeparator))

@@ -17,6 +17,16 @@ ledger_path = "~/.cache/hapax/coord/ledger.db"
 # cc_tasks_active = "/path/to/your/tasks"          # task registry for :tasks/:sessions detail
 session_transcript_roots = []
 orchestration_ledger_dir = "~/.cache/hapax/orchestration"  # route decision/dispatch receipts
+# Lanebus inboxes for the read-only unread projection (`GET /read/lanebus`): messages present, acked
+# and unread, and the age of the oldest unread — names and mtimes only, never a message body. Empty
+# denies (no inbox is guessed). List an inbox under the second key to withhold its message names.
+lanebus_inboxes = []
+lanebus_count_only_inboxes = []
+# Which inboxes ack somewhere OTHER than a same-named file under `read/` (e.g. a message queue's
+# processed set). Their unread set is not measurable here, so the projection reports state
+# "unmeasured" with null unread counts rather than claiming every message is unread — declare an
+# inbox here if a `read/` directory is not its receipt record, even if one exists.
+lanebus_ack_none_inboxes = []
 
 # Optional lifecycle / domain / capability packs. The shipped example packs live in this repo's docs/ —
 # point these at your checkout (or your own packs).
