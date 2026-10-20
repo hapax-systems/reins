@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote
 from fastapi import FastAPI
 
+from reins_claim_custody import CustodyProjection
+
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
 from reins_seat_succession import read_seat_succession
@@ -4823,6 +4825,7 @@ def _load_context_bundle(council_root: str) -> dict | None:
 def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
     app = FastAPI()
     session_cfg = session_cfg or {}
+    custody = CustodyProjection(session_cfg.get("claim_custody"))
 
     @app.get("/read/events")
     def read_events(limit: int = 80, before: str | None = None) -> dict:
@@ -5039,6 +5042,9 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     @app.get("/read/seat-succession")
     def seat_succession() -> dict:
         return read_seat_succession(session_cfg, allowlist, classify_air)
+    @app.get("/read/claim-custody")
+    def claim_custody() -> dict:
+        return custody.read(allowlist)
 
     @app.get("/read/observe")
     def read_observe() -> dict:
@@ -5218,6 +5224,7 @@ def instance_config() -> dict:
         "vault_root": vault_root,
         "lanebus_inboxes": lanebus_inboxes,
         "seat_succession": toml_cfg.get("seat_succession"),
+        "claim_custody": toml_cfg.get("claim_custody"),
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }
