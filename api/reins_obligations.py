@@ -155,11 +155,16 @@ def read_obligations_summary(
     for f in facts:
         if not isinstance(f, dict):
             continue
-        f_kind = str(f.get("kind") or "")
-        f_state = str(f.get("state") or "")
-        f_id = str(f.get("id") or "")
-        payload = f.get("payload") if isinstance(f.get("payload"), dict) else {}
-        if f_kind == "host" and f_state != "live":
+        f_kind = str(f.get("kind") or f.get("fact_type") or "")
+        raw_state = f.get("state")
+        if isinstance(raw_state, dict):
+            f_state = str(raw_state.get("value_state") or "")
+        else:
+            f_state = str(raw_state or "")
+        f_id = str(f.get("id") or f.get("subject_ref") or f.get("fact_id") or "")
+        payload = f.get("payload") if isinstance(f.get("payload"), dict) else (f.get("value") if isinstance(f.get("value"), dict) else {})
+
+        if f_kind in ("host", "resource_vram") and f_state not in ("live", "lit"):
             locus_anomalies.append(
                 _classified(
                     {
@@ -173,12 +178,53 @@ def read_obligations_summary(
                     classify,
                 )
             )
-        elif f_kind == "locus":
-            live_loci.append(f)
-            loaded = [str(m) for m in (payload.get("loaded_models") or [])]
-            resident = [str(m) for m in (payload.get("resident_models") or [])]
-            admitted_by = [str(a) for a in (payload.get("admitted_by") or [])]
-            if loaded and not admitted_by:
+        elif f_kind == "declared_endpoint" and f_state == "lost":
+            locus_anomalies.append(
+                _classified(
+                    {
+                        "kind": "endpoint.lost",
+                        "id": f_id,
+                        "state": f_state,
+                        "subject": str(payload.get("port") or f_id),
+                        "attention": "action",
+                    },
+                    allowlist,
+                    classify,
+                )
+            )
+        elif f_kind in ("locus", "loaded_model"):
+            if f_kind == "loaded_model":
+                model_str = str(payload.get("model") or "")
+                loaded = [model_str] if model_str else []
+                resident = [str(m) for m in (payload.get("resident_models") or loaded)]
+                admit = str(payload.get("admitting_row") or "")
+                admitted_by = [admit] if admit else []
+                host_str = str(payload.get("host") or "")
+                port_str = str(payload.get("endpoint") or payload.get("port") or "")
+                topo_str = str(payload.get("topology") or "single-node")
+                norm_locus = {
+                    "id": f_id,
+                    "state": f_state,
+                    "payload": {
+                        "host": host_str,
+                        "port": port_str,
+                        "loaded_models": loaded,
+                        "resident_models": resident,
+                        "admitted_by": admitted_by,
+                        "topology": topo_str,
+                    },
+                }
+            else:
+                loaded = [str(m) for m in (payload.get("loaded_models") or [])]
+                resident = [str(m) for m in (payload.get("resident_models") or [])]
+                admitted_by = [str(a) for a in (payload.get("admitted_by") or [])]
+                host_str = str(payload.get("host") or "")
+                port_str = str(payload.get("port") or "")
+                topo_str = str(payload.get("topology") or "single-node")
+                norm_locus = f
+
+            live_loci.append(norm_locus)
+            if (loaded and not admitted_by) or f_state == "unexplained":
                 locus_anomalies.append(
                     _classified(
                         {
@@ -197,13 +243,13 @@ def read_obligations_summary(
                     _classified(
                         {
                             "id": f_id,
-                            "host": str(payload.get("host") or ""),
-                            "port": str(payload.get("port") or ""),
+                            "host": host_str,
+                            "port": port_str,
                             "state": f_state,
                             "loaded_models": loaded,
                             "resident_models_count": len(resident),
                             "admitted_by": admitted_by,
-                            "topology": str(payload.get("topology") or "single-node"),
+                            "topology": topo_str,
                         },
                         allowlist,
                         classify,
