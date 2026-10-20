@@ -6574,7 +6574,12 @@ def build_app(
             ss = read_seat_succession(session_cfg, allowlist, classify_air)
             try:
                 caps = read_capability_summary(council_root, allowlist, session_cfg)
-                cap_inner = caps.get("capabilities") if isinstance(caps, dict) else None
+                cap_inner = (
+                    caps.get("capabilities")
+                    if isinstance(caps, dict)
+                    and isinstance(caps.get("capabilities"), dict)
+                    else (caps if isinstance(caps, dict) else None)
+                )
                 if (
                     isinstance(cap_inner, dict)
                     and not cap_inner.get("routes")
@@ -6616,8 +6621,13 @@ def build_app(
                                 for r in raw_routes
                                 if isinstance(r, dict)
                             ]
-                            caps = dict(caps)
-                            caps["capabilities"] = cap_inner
+                            if "capabilities" in caps and isinstance(
+                                caps.get("capabilities"), dict
+                            ):
+                                caps = dict(caps)
+                                caps["capabilities"] = cap_inner
+                            else:
+                                caps = cap_inner
             except Exception:
                 caps = {}
             try:

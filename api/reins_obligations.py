@@ -777,6 +777,7 @@ def read_obligations_summary(
     return {
         "dark": overall_dark,
         "partial_dark": dark_sources_count > 0,
+        "dark_sources_count": dark_sources_count,
         "source_status": {
             k: ("dark" if v else "live") for k, v in source_dark_map.items()
         },
