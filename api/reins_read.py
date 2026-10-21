@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote
 from fastapi import FastAPI
 
+from reins_claim_custody import CustodyProjection
+
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
 from reins_quota_history import QuotaPhaseHistory
@@ -4834,6 +4836,7 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     @app.get("/read/quota-history")
     def read_quota_history() -> dict:
         return quota_history.snapshot(allowlist)
+    custody = CustodyProjection(session_cfg.get("claim_custody"))
 
     @app.get("/read/events")
     def read_events(limit: int = 80, before: str | None = None) -> dict:
@@ -5051,6 +5054,9 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
     @app.get("/read/seat-succession")
     def seat_succession() -> dict:
         return read_seat_succession(session_cfg, allowlist, classify_air)
+    @app.get("/read/claim-custody")
+    def claim_custody() -> dict:
+        return custody.read(allowlist)
 
     @app.get("/read/observe")
     def read_observe() -> dict:
@@ -5233,6 +5239,7 @@ def instance_config() -> dict:
         "quota_history_capacity": toml_cfg.get("quota_history_capacity", 512),
         "quota_history_interval_s": toml_cfg.get("quota_history_interval_s", 60),
         "seat_succession": toml_cfg.get("seat_succession"),
+        "claim_custody": toml_cfg.get("claim_custody"),
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }

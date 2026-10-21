@@ -142,6 +142,7 @@ def _collect_payload_attrs(value: object, out: set[str], parent_key: str = "") -
 # and therefore remain intentionally honest-dark in offline unit tests.
 POPULATED_ROUTES: frozenset[str] = frozenset({
     "/read/capabilities",
+    "/read/claim-custody",
     "/read/context",
     "/read/domains",
     "/read/dynamics",
@@ -419,6 +420,15 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
     charter_path.write_text("---\nassigned_to: alpha\n---\n", encoding="utf-8")
     marker_path = tmp_path / "cc-active-task-alpha"
     marker_path.write_text("task-1\n", encoding="utf-8")
+    custody_rows = tmp_path / "custody-rows"
+    custody_rows.mkdir(parents=True, exist_ok=True)
+    (custody_rows / "work-a-slug.md").write_text(
+        "---\ntask_id: work-a\nstatus: ready\nassigned_to: alpha\nbranch: feat/a\npr: null\ndepends_on: [work-b]\n---\n"
+        "## Session log\n- 2026-10-20T00:00:00Z alpha claimed (cc-claim, session=s1)\n",
+        encoding="utf-8",
+    )
+    custody_marker = tmp_path / "custody-claim"
+    custody_marker.write_text("work-a\n", encoding="utf-8")
 
     cfg = {
         "council_root": str(council_root),
@@ -438,6 +448,11 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
                     "charter_path": str(charter_path),
                 }
             ],
+        },
+        "claim_custody": {
+            "rows_dirs": [str(custody_rows)],
+            "task_ids": ["work-a", "work-missing"],
+            "claim_markers": [{"role": "alpha", "path": str(custody_marker)}],
         },
         "vault_root": str(vault_root),
         "capability_inventory_path": str(cap_inv),
@@ -765,6 +780,11 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         "prior_subscription_quota_state", "retention", "sample_interval_s", "sampled_at",
         "snapshot_captured_at", "source_age_s", "source_captured_at", "started_at",
         "subscription_quota_state",
+        # Reins #52 claim-custody operational fields (path-PII fields `marker_dir` and
+        # `marker_paths` are SENSITIVE -> deny on air):
+        "claim_state", "created_at", "dropped", "events_truncated", "guard",
+        "history_scope", "holders", "last_actor", "last_ts", "return_state",
+        "sequence", "started",
     }
     newly_aired = {
         attr for attr in fr.air_allowlist() if attr not in CURRENT_ALLOW
