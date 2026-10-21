@@ -103,6 +103,9 @@ FACET_BY_NAME: dict[str, str] = {
     "freshness_state": "posture",
     "resume_ready": "posture", "truncated": "posture", "freshness_ok": "posture",
     "parity": "posture", "posture": "posture", "maturity": "posture", "coverage": "posture",
+    "history_complete": "posture", "capture_coverage": "posture", "observation_gap": "posture",
+    "after_observation_gap": "posture", "prior_state": "posture",
+    "subscription_quota_state": "posture", "prior_subscription_quota_state": "posture",
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
     # the ack-receipt dir's condition: ok / missing / rejected (unknown = unmeasurable)
     "read_dir": "posture",
@@ -128,6 +131,11 @@ FACET_BY_NAME: dict[str, str] = {
     "stale_after": "time", "generated_at": "time", "output_age_s": "time", "relay_age_s": "time",
     "activity_age_s": "time", "age_bucket": "time",
     "issued_at": "time", "expires_at": "time", "oldest_ts": "time", "modified": "time",
+    "started_at": "time", "sample_interval_s": "time", "last_attempt_at": "time",
+    "last_success_at": "time", "source_captured_at": "time", "source_age_s": "time",
+    "captured_at": "time", "snapshot_captured_at": "time", "sampled_at": "time",
+    "prior_fresh_until": "time", "fresh_until": "time", "fresh_until_delta_s": "time",
+    "last_gap_started_at": "time", "last_gap_ended_at": "time",
     # unread age (now - mtime), per message and per inbox
     "age_s": "time", "oldest_unread_age_s": "time",
     # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
@@ -156,8 +164,10 @@ FACET_BY_NAME: dict[str, str] = {
     # with the totals so a partial sum is never read as a whole one)
     "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
     "unknown_inboxes": "measure", "unmeasured_inboxes": "measure",
+    "capacity": "measure", "evicted_rows": "measure", "observation_gap_count": "measure",
     # variant (capability/mode variant — the sub-faceted dimensional cross-product)
     "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
+    "retention": "variant",
     "quantization": "variant", "demand_vector": "variant", "hardening": "variant",
     "eval_plane": "variant", "review_obligation": "variant", "learning_eligibility": "variant",
     "benchmark_coverage": "variant", "fixed_overhead": "variant", "spend_model": "variant",

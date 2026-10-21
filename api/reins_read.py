@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
+from reins_quota_history import QuotaPhaseHistory
 
 _ROUTE_BINDING_TAIL_BYTES = 4 * 1024 * 1024
 
@@ -2326,8 +2327,13 @@ def read_capability_summary(council_root: str, allowlist: list[str], cfg: dict |
     registry_path = Path(os.path.expanduser(council_root)) / "config" / "platform-capability-registry.json"
 
     receipt_dir = Path(os.path.expanduser(str(cfg.get("capability_receipt_dir") or DEFAULT_PLATFORM_CAPABILITY_RECEIPT_DIR)))
-    quota_path = Path(os.path.expanduser(str(cfg.get("quota_spend_ledger_live") or DEFAULT_QUOTA_SPEND_LEDGER_LIVE)))
-    sources_obj = load_dispatch_policy_sources(receipt_dir=receipt_dir, registry_path=registry_path)
+    configured_quota_ledger = cfg.get("quota_spend_ledger_live")
+    quota_path = Path(os.path.expanduser(str(configured_quota_ledger or DEFAULT_QUOTA_SPEND_LEDGER_LIVE)))
+    sources_obj = load_dispatch_policy_sources(
+        receipt_dir=receipt_dir,
+        registry_path=registry_path,
+        quota_ledger_path=quota_path if configured_quota_ledger else None,
+    )
     registry = sources_obj.registry
     routes = list(getattr(registry, "routes", ()) or []) if registry is not None else []
     freshness = check_registry_freshness(registry) if registry is not None else None
@@ -4756,8 +4762,13 @@ def _load_context_bundle(council_root: str) -> dict | None:
 
 
 def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
-    app = FastAPI()
     session_cfg = session_cfg or {}
+    quota_history = QuotaPhaseHistory.from_config(session_cfg)
+    app = FastAPI(lifespan=quota_history.lifespan)
+
+    @app.get("/read/quota-history")
+    def read_quota_history() -> dict:
+        return quota_history.snapshot(allowlist)
 
     @app.get("/read/events")
     def read_events(limit: int = 80, before: str | None = None) -> dict:
@@ -5148,6 +5159,9 @@ def instance_config() -> dict:
         "hkp_bundles": hkp_bundles,
         "vault_root": vault_root,
         "lanebus_inboxes": lanebus_inboxes,
+        "quota_spend_ledger_live": os.environ.get("REINS_QUOTA_SPEND_LEDGER_LIVE") or toml_cfg.get("quota_spend_ledger_live", ""),
+        "quota_history_capacity": toml_cfg.get("quota_history_capacity", 512),
+        "quota_history_interval_s": toml_cfg.get("quota_history_interval_s", 60),
         "session_transcript_roots": session_transcript_roots,
         **intake_paths,
     }

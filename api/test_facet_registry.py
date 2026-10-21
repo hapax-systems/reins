@@ -93,6 +93,19 @@ INVENTORY: dict[str, list[str]] = {
     # Vault summary note rows (path-like fields vault_root, rel_path, folder are SENSITIVE -> deny on air).
     "VaultSummary": ["vault_root", "notes"],
     "VaultNote": ["rel_path", "folder", "title", "modified", "size", "status", "tags", "obsidian_uri"],
+    # Reins #53 — the read-only quota-phase-history projection.
+    "QuotaPhaseHistory": [
+        "schema_version", "state", "dark", "reason", "retention", "history_complete",
+        "capture_coverage", "started_at", "sample_interval_s", "capacity", "evicted_rows",
+        "route_count", "last_attempt_at", "last_success_at", "source_captured_at",
+        "source_age_s", "observation_gap", "observation_gap_count", "last_gap_started_at",
+        "last_gap_ended_at", "rows",
+    ],
+    "QuotaPhaseHistoryRow": [
+        "route_id", "captured_at", "snapshot_captured_at", "sampled_at", "kind",
+        "prior_state", "state", "prior_subscription_quota_state", "subscription_quota_state",
+        "prior_fresh_until", "fresh_until", "fresh_until_delta_s", "after_observation_gap", "air",
+    ],
 }
 
 
@@ -134,6 +147,7 @@ POPULATED_ROUTES: frozenset[str] = frozenset({
     "/read/intake",
     "/read/lanebus",
     "/read/observe",
+    "/read/quota-history",
     "/read/session/{role}",
     "/read/session/{role}/turns",
     "/read/sessions",
@@ -377,10 +391,30 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
     sec_state = tmp_path / "security-signals.json"
     sec_state.write_text(json.dumps({"open_count": 1}), encoding="utf-8")
 
+    quota_ledger = tmp_path / "quota-spend-ledger-live.json"
+    quota_ledger.write_text(
+        json.dumps(
+            {
+                "captured_at": "2026-10-20T00:05:00Z",
+                "quota_snapshots": [
+                    {
+                        "route_id": "claude.max2",
+                        "state": "admitted",
+                        "subscription_quota_state": "fresh",
+                        "fresh_until": "2026-10-20T05:00:00Z",
+                        "captured_at": "2026-10-20T00:04:00Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     cfg = {
         "council_root": str(council_root),
         "grant_dir": str(grants_dir),
         "grant_honor_ledger": str(honor_ledger),
+        "quota_spend_ledger_live": str(quota_ledger),
         "lanebus_inboxes": [
             {"inbox": "alpha", "path": str(inbox_dir), "count_only": False, "ack": "read-dir"}
         ],
@@ -692,6 +726,15 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         "preview", "prior_stage_state", "receipts", "request_attention",
         "request_malformed", "security_signals", "shape", "stale", "text_domain",
         "value_state",
+        # Reins #53 quota-phase-history operational/structural fields (timestamps, durations,
+        # bounded counts, posture states, and retention token; no PII or financial spend):
+        "after_observation_gap", "capacity", "capture_coverage", "captured_at",
+        "evicted_rows", "fresh_until", "fresh_until_delta_s", "history_complete",
+        "last_attempt_at", "last_gap_ended_at", "last_gap_started_at", "last_success_at",
+        "observation_gap", "observation_gap_count", "prior_fresh_until", "prior_state",
+        "prior_subscription_quota_state", "retention", "sample_interval_s", "sampled_at",
+        "snapshot_captured_at", "source_age_s", "source_captured_at", "started_at",
+        "subscription_quota_state",
     }
     newly_aired = {
         attr for attr in fr.air_allowlist() if attr not in CURRENT_ALLOW
