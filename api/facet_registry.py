@@ -57,6 +57,9 @@ EDGES: set[str] = {
     "focus_node_ids", "focus_edge_ids", "selection_id", "selection_group", "adapter_id",
     "task_link_state", "evidence_ref", "subject_ref", "windows", "surfaces", "commands",
     "source_refs", "source_ref_labels",
+    # #55 work-view / wait-census entity & route references (G1, G8, G10, G11, G12)
+    "depends_on", "open_depends_on", "unblocks_task_ids", "commission_task_id",
+    "downstream_tasks", "execution_route", "settled_carrier", "carrier",
 }
 # BODIES — free-text payload; default-DENY on air (never a facet).
 BODIES: set[str] = {
@@ -64,6 +67,9 @@ BODIES: set[str] = {
     "missing", "action", "next_evidence", "blocked_reasons", "hardening_notes", "must_include",
     "answer_shape", "blockers", "docs", "aliases", "tags", "remedy",
     "error", "reason", "reason_codes", "obsidian_uri",
+    # #55 work-view / wait-census free-text & prose-derived fields (G2, G6, A0)
+    "raw_status", "blocked_reason", "waiting_on", "release_when", "bounded_inability",
+    "text_summary", "heuristic_prose_mentions",
 }
 # ENVELOPES — structural wrappers / nesting / mirrors; not binnable row attributes.
 ENVELOPES: set[str] = {
@@ -73,6 +79,12 @@ ENVELOPES: set[str] = {
     "transitions", "prior", "current", "recorded_events",
     "grants", "binding", "lease", "honors",  # #50 grant-consumption structural wrappers
     "panes",  # #51 seat-succession per-lane live pane list wrapper
+    # #55 work-view / wait-census structural wrappers & dynamic vocab maps (G1..G12, A0)
+    "completeness", "universe", "cc_task_files", "requests", "requests_summary", "by_status",
+    "wait_bands", "wait_band_counts", "wait_census_active_distinct_ids", "on_party_decision",
+    "on_capacity_single_route", "no_reason_reconciliation", "state_normalization",
+    "active_status_vocab", "closed_status_vocab", "active_by_normalized_state",
+    "dependency_edges", "top_keystones", "top_active_keystones", "route_metadata", "provenance",
     "events", "traces", "tasks", "epistemics", "sessions", "turns", "blocks", "intake",
     "audiences", "projections", "capabilities", "gates", "domains", "notes", "dimensions",
     "producer", "artifacts", "why", "facts", "affordances",
@@ -96,6 +108,7 @@ FACET_BY_NAME: dict[str, str] = {
     "domain_id": "identity", "lifecycle_id": "identity", "row_id": "identity",
     "capability_id": "identity", "tool_id": "identity", "map_id": "identity",
     "grant_id": "identity", "fact_id": "identity", "key": "identity", "affordance_kind": "identity",
+    "request_id": "identity", "duplicate_task_id_list": "identity",
     "pid": "identity", "command": "identity",
     "label": "identity", "kind": "identity", "subject_kind": "identity", "map_kind": "identity",
     "family": "identity", "subject": "identity", "title": "identity",
@@ -116,21 +129,30 @@ FACET_BY_NAME: dict[str, str] = {
     "after_observation_gap": "posture", "prior_state": "posture",
     "subscription_quota_state": "posture", "prior_subscription_quota_state": "posture",
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
+    # #55 work-view / wait-census posture & source-availability states (G1..G5, A0)
+    "wait_band": "posture", "claimable": "posture",
+    "normalized_state": "posture", "terminal_status_in_active": "posture",
+    "duplicate_task_id": "posture", "contradiction_flags": "posture", "priority": "posture",
+    "fit_state": "posture", "risk_guess": "posture", "in_active": "posture",
+    "degraded": "posture", "errors_present": "posture",
+    "cc_active_dir": "posture", "cc_closed_dir": "posture",
+    "req_active_dir": "posture", "req_closed_dir": "posture", "coord": "posture",
     # the ack-receipt dir's condition: ok / missing / rejected (unknown = unmeasurable)
     "read_dir": "posture",
     # whether the unread ROW list was capped (unread_count is always complete)
     "unread_rows_truncated": "posture",
     # action (lifecycle motion)
     "stage": "action", "prior_stage": "action", "predicted_stage": "action", "intent": "action",
-    "lifecycle": "action",
+    "lifecycle": "action", "legal_next_stage": "action",
     # ownership (the "whose" labels)
     "owner": "ownership", "role": "ownership", "actor": "ownership", "assigned_to": "ownership",
-    "minting_lane": "ownership", "last_actor": "ownership",
+    "minting_lane": "ownership", "last_actor": "ownership", "lane": "ownership", "requester": "ownership",
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
     "paths": "place",
     "minting_session": "place", "vault_root": "place", "rel_path": "place", "folder": "place",
+    "preferred_platforms": "place", "allowed_platforms": "place", "prohibited_platforms": "place",
     # a configured DIRECTORY name (the class of `session`/`path`, not the declared `role`
     # vocabulary): place, and SENSITIVE below
     "inbox": "place",
@@ -146,13 +168,14 @@ FACET_BY_NAME: dict[str, str] = {
     "captured_at": "time", "snapshot_captured_at": "time", "sampled_at": "time",
     "prior_fresh_until": "time", "fresh_until": "time", "fresh_until_delta_s": "time",
     "last_gap_started_at": "time", "last_gap_ended_at": "time",
-    "created_at": "time", "last_ts": "time",
+    "created_at": "time", "last_ts": "time", "wait_duration_s": "time", "last_transition_ts": "time",
     # unread age (now - mtime), per message and per inbox
     "age_s": "time", "oldest_unread_age_s": "time",
     # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
     "ack": "variant",
     # provenance (evidence / authority / egress / permission)
     "authority": "provenance", "authority_case": "provenance", "authority_ceiling": "provenance",
+    "authority_level": "provenance",
     "claim_ceiling": "provenance", "claim_surface": "provenance", "mutation_surface": "provenance",
     "hkp_posture": "provenance", "privacy": "provenance", "raw_access": "provenance",
     "air_class": "provenance", "confidence": "provenance", "evidence": "provenance",
@@ -176,6 +199,26 @@ FACET_BY_NAME: dict[str, str] = {
     "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
     "unknown_inboxes": "measure", "unmeasured_inboxes": "measure",
     "capacity": "measure", "evicted_rows": "measure", "observation_gap_count": "measure",
+    # #55 work-view / wait-census scalar counts & wait-band counters (G1..G11, A0)
+    "reverse_dep_count": "measure", "depends_on_fanout": "measure",
+    "transitive_reverse_dep_count": "measure", "queue_position": "measure",
+    "session_log_transitions": "measure", "downstream_tasks_count": "measure",
+    "known_work": "measure", "observed_work": "measure", "active": "measure", "closed": "measure",
+    "coord_tasks": "measure", "coord_only_tasks": "measure", "reins_read_tasks": "measure",
+    "active_distinct_task_ids": "measure", "task_ids_on_two_files": "measure",
+    "duplicate_task_ids": "measure", "silently_dropped": "measure",
+    "unobserved_files": "measure", "excluded_files": "measure",
+    "active_status_spellings_count": "measure", "closed_status_spellings_count": "measure",
+    "status_blocked": "measure", "claimable_false": "measure", "both": "measure",
+    "union": "measure", "of_which_no_other_cause": "measure",
+    "no_other_cause_and_no_reason": "measure", "blocked_all_deps_closed": "measure",
+    "unrecognized_status": "measure", "value": "measure",
+    "moving": "measure", "review_merge": "measure", "runtime_witness": "measure",
+    "on_item_dependency_open": "measure", "on_gate_prerequisite": "measure",
+    "on_gate_prerequisite_prose": "measure", "unpulled_no_route_determined": "measure",
+    "record_contradiction": "measure", "waiting_review": "measure",
+    "waiting_witness": "measure", "ready_unpulled": "measure",
+    "terminal_in_active": "measure", "unrecognized": "measure",
     # variant (capability/mode variant — the sub-faceted dimensional cross-product)
     "effort": "variant", "context_mode": "variant", "fast_mode": "variant",
     "retention": "variant",
@@ -187,6 +230,8 @@ FACET_BY_NAME: dict[str, str] = {
     "lens": "variant", "inquiry_mode": "variant", "audience_mode": "variant", "audience": "variant",
     "explanation_path": "variant", "default_lens": "variant", "meta": "variant",
     "text_domain": "variant", "shape": "variant",
+    "quality_floor": "variant", "model_or_engine": "variant",
+    "thinking_posture": "variant", "routing_class": "variant",
 }
 
 # ── PER-(domain, attr) OVERRIDES (the field-level homonyms) ───────────────────

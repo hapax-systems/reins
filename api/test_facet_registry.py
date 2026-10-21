@@ -14,8 +14,16 @@ INVENTORY: dict[str, list[str]] = {
     "Trace": ["ts", "trace_id", "model", "prompt_tok", "completion_tok", "total_tok", "cost", "latency_ms", "air"],
     "Turn": ["ts", "role", "kind", "summary", "magnitude", "model", "route", "gate", "air"],
     "TurnBlock": ["kind", "summary", "magnitude", "meta", "air"],
-    "Task": ["task_id", "stage", "authority_case", "no_go", "prior_stage", "predicted_stage", "owner",
-             "freshness", "criticality", "rel_count", "air"],
+    "Task": [
+        "task_id", "stage", "authority_case", "no_go", "prior_stage", "predicted_stage", "owner",
+        "freshness", "criticality", "rel_count", "raw_status", "normalized_state", "in_active",
+        "wait_band", "wait_duration_s", "reverse_dep_count", "depends_on_fanout", "depends_on",
+        "open_depends_on", "unblocks_task_ids", "contradiction_flags", "fit_state", "route_metadata",
+        "waiting_on", "release_when", "bounded_inability", "blocked_reason", "claimable", "priority",
+        "lane", "assigned_to", "created_at", "updated_at", "last_transition_ts",
+        "session_log_transitions", "commission_task_id", "queue_position", "legal_next_stage",
+        "execution_route", "settled_carrier", "provenance", "air",
+    ],
     "Session": ["role", "session", "platform", "state", "alive", "idle", "stalled", "claimed_task",
                 "output_age_s", "relay_age_s", "readiness", "blocker", "attention", "route_id", "mode",
                 "profile", "route_binding_state", "route_evidence_ref", "air"],
@@ -111,6 +119,15 @@ INVENTORY: dict[str, list[str]] = {
     "SeatSuccessionRow": ["role", "session", "pane_state", "panes", "claims", "charter_state", "assigned_to", "air"],
     "SeatSuccessionPane": ["id", "pid", "command", "air"],
     "SeatSuccessionClaims": ["state", "present", "paths", "air"],
+    # Reins #55 — work-view G1..G12 & A0 wait census.
+    "WorkviewRequest": [
+        "request_id", "status", "requester", "risk_guess", "quality_floor", "authority_level",
+        "mutation_surface", "created_at", "updated_at", "downstream_tasks", "downstream_tasks_count",
+    ],
+    "WaitCensusKeystone": [
+        "task_id", "reverse_dep_count", "depends_on_fanout", "transitive_reverse_dep_count",
+        "status", "in_active", "wait_band", "unblocks_task_ids",
+    ],
 }
 
 
@@ -118,14 +135,18 @@ def _collect_payload_attrs(value: object, out: set[str], parent_key: str = "") -
     """Recursively collect every attribute key emitted in a /read/* JSON payload.
 
     Skips keys inside dynamic map envelopes whose keys are data values (e.g., `air` per-field
-    verdict maps, `by_kind` dynamic counters, `projections` keyed by audience name) while still
-    walking nested projection objects inside `projections`.
+    verdict maps, `by_kind`/`by_status`/`*_status_vocab`/`heuristic_prose_mentions` dynamic counters,
+    `projections` keyed by audience name) while still walking nested projection objects inside
+    `projections`.
     """
     if isinstance(value, list):
         for item in value:
             _collect_payload_attrs(item, out, parent_key)
     elif isinstance(value, dict):
-        if parent_key in ("air", "by_kind", "facet_by_name", "facets"):
+        if parent_key in (
+            "air", "by_kind", "by_status", "active_status_vocab", "closed_status_vocab",
+            "heuristic_prose_mentions", "facet_by_name", "facets",
+        ):
             return
         if parent_key == "projections":
             for nested in value.values():
@@ -160,6 +181,7 @@ POPULATED_ROUTES: frozenset[str] = frozenset({
     "/read/sessions",
     "/read/tasks",
     "/read/vault",
+    "/read/wait-census",
 })
 
 DARK_ONLY_ROUTES: frozenset[str] = frozenset({
@@ -256,6 +278,27 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
     (vault_root / "30-areas").mkdir(parents=True)
     (vault_root / "30-areas" / "note.md").write_text(
         "---\nstatus: active\ntags: [reins]\n---\n# Note\n",
+        encoding="utf-8",
+    )
+    cc_active = vault_root / "20-projects" / "hapax-cc-tasks" / "active"
+    cc_closed = vault_root / "20-projects" / "hapax-cc-tasks" / "closed"
+    req_active = vault_root / "20-projects" / "hapax-requests" / "active"
+    req_closed = vault_root / "20-projects" / "hapax-requests" / "closed"
+    cc_active.mkdir(parents=True)
+    cc_closed.mkdir(parents=True)
+    req_active.mkdir(parents=True)
+    req_closed.mkdir(parents=True)
+    (cc_active / "task-fixture-1.md").write_text(
+        "---\ntask_id: task-fixture-1\nstatus: in_progress\nassigned_to: cc-reins\npriority: P1\n"
+        "depends_on: [task-fixture-2]\n---\n## Session log\n- 2026-10-20T00:00:00Z claimed\n",
+        encoding="utf-8",
+    )
+    (cc_active / "task-fixture-2.md").write_text(
+        "---\ntask_id: task-fixture-2\nstatus: ready\npriority: P2\n---\n## Session log\n- 2026-10-20T00:00:00Z ready\n",
+        encoding="utf-8",
+    )
+    (req_active / "REQ-fixture-1.md").write_text(
+        "---\nrequest_id: REQ-fixture-1\nstatus: captured\nrequester: operator\ndownstream_tasks: [task-fixture-1]\n---\n# Req\n",
         encoding="utf-8",
     )
 
@@ -489,11 +532,12 @@ def test_every_live_attr_resolves(tmp_path, monkeypatch):
             if r.startswith("UNRESOLVED"):
                 unresolved.append(f"{domain}.{attr}")
 
-    # 1. Deterministic dark walk (unbound spine config and absent coordinator/context files).
+    # 1. Deterministic dark walk (unbound spine config and absent coordinator/context/vault files).
+    monkeypatch.setenv("HOME", str(tmp_path / "absent-home"))
     monkeypatch.delenv("HAPAX_SPINE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("REINS_COORDINATOR_STATE", str(tmp_path / "absent-coordinator-state.json"))
     monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(tmp_path / "absent-context-bundle.json"))
-    dark_app = rr.build_app("", fr.air_allowlist(), {})
+    dark_app = rr.build_app("", fr.air_allowlist(), {"vault_root": str(tmp_path / "absent-vault")})
     read_routes = sorted(
         r.path
         for r in dark_app.routes
@@ -576,6 +620,44 @@ def test_every_live_attr_resolves(tmp_path, monkeypatch):
     }
     unemitted_56 = newly_registered_56 - all_walked_attrs
     assert not unemitted_56, f"Newly registered #56 attrs not emitted by any fixture: {sorted(unemitted_56)}"
+
+    # Pin that every newly registered attribute in #55 (work-view G1..G12 & A0 wait census) is
+    # emitted by the route walk.
+    newly_registered_55 = {
+        "active", "active_by_normalized_state", "active_distinct_task_ids",
+        "active_status_spellings_count", "active_status_vocab", "allowed_platforms",
+        "authority_level", "blocked_all_deps_closed", "blocked_reason", "both",
+        "bounded_inability", "by_status", "carrier", "cc_active_dir", "cc_closed_dir",
+        "cc_task_files", "claimable", "claimable_false", "closed",
+        "closed_status_spellings_count", "closed_status_vocab", "commission_task_id",
+        "completeness", "contradiction_flags", "coord", "coord_only_tasks",
+        "coord_tasks", "degraded", "dependency_edges", "depends_on",
+        "depends_on_fanout", "downstream_tasks", "downstream_tasks_count",
+        "duplicate_task_id", "duplicate_task_id_list", "duplicate_task_ids",
+        "errors_present", "excluded_files", "execution_route", "fit_state",
+        "heuristic_prose_mentions", "in_active", "known_work", "lane",
+        "last_transition_ts", "legal_next_stage", "model_or_engine", "moving",
+        "no_other_cause_and_no_reason", "no_reason_reconciliation", "normalized_state",
+        "observed_work", "of_which_no_other_cause", "on_capacity_single_route",
+        "on_gate_prerequisite", "on_gate_prerequisite_prose",
+        "on_item_dependency_open", "on_party_decision", "open_depends_on",
+        "preferred_platforms", "priority", "prohibited_platforms", "provenance",
+        "quality_floor", "queue_position", "raw_status", "ready_unpulled",
+        "record_contradiction", "reins_read_tasks", "release_when", "req_active_dir",
+        "req_closed_dir", "request_id", "requester", "requests", "requests_summary",
+        "reverse_dep_count", "review_merge", "risk_guess", "route_metadata",
+        "routing_class", "runtime_witness", "session_log_transitions",
+        "settled_carrier", "silently_dropped", "state_normalization", "status_blocked",
+        "task_ids_on_two_files", "terminal_in_active", "terminal_status_in_active",
+        "text_summary", "thinking_posture", "top_active_keystones", "top_keystones",
+        "transitive_reverse_dep_count", "unblocks_task_ids", "union", "universe",
+        "unobserved_files", "unpulled_no_route_determined", "unrecognized",
+        "unrecognized_status", "value", "wait_band", "wait_band_counts", "wait_bands",
+        "wait_census_active_distinct_ids", "wait_duration_s", "waiting_on",
+        "waiting_review", "waiting_witness",
+    }
+    unemitted_55 = newly_registered_55 - all_walked_attrs
+    assert not unemitted_55, f"Newly registered #55 attrs not emitted by any fixture: {sorted(unemitted_55)}"
 
     assert not unresolved, (
         f"{len(unresolved)} attrs do not resolve to a facet/edge/body/envelope: {unresolved}"
@@ -785,6 +867,32 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         "claim_state", "created_at", "dropped", "events_truncated", "guard",
         "history_scope", "holders", "last_actor", "last_ts", "return_state",
         "sequence", "started",
+        # Reins #55 work-view G1..G12 & A0 wait-census structural/operational fields
+        # (free-text `blocked_reason`/`waiting_on`/`release_when`/`bounded_inability`/`text_summary`/
+        # `heuristic_prose_mentions` and unnormalized `raw_status` are BODIES -> deny on air):
+        "active", "active_distinct_task_ids", "active_status_spellings_count",
+        "allowed_platforms", "authority_level", "blocked_all_deps_closed", "both",
+        "carrier", "cc_active_dir", "cc_closed_dir", "claimable", "claimable_false",
+        "closed", "closed_status_spellings_count", "commission_task_id",
+        "contradiction_flags", "coord", "coord_only_tasks", "coord_tasks", "degraded",
+        "depends_on", "depends_on_fanout", "downstream_tasks", "downstream_tasks_count",
+        "duplicate_task_id", "duplicate_task_id_list", "duplicate_task_ids",
+        "errors_present", "excluded_files", "execution_route", "fit_state", "in_active",
+        "known_work", "lane", "last_transition_ts", "legal_next_stage",
+        "model_or_engine", "moving", "no_other_cause_and_no_reason", "normalized_state",
+        "observed_work", "of_which_no_other_cause", "on_gate_prerequisite",
+        "on_gate_prerequisite_prose", "on_item_dependency_open", "open_depends_on",
+        "preferred_platforms", "priority", "prohibited_platforms", "quality_floor",
+        "queue_position", "ready_unpulled", "record_contradiction", "reins_read_tasks",
+        "req_active_dir", "req_closed_dir", "request_id", "requester",
+        "reverse_dep_count", "review_merge", "risk_guess", "routing_class",
+        "runtime_witness", "session_log_transitions", "settled_carrier",
+        "silently_dropped", "status_blocked", "task_ids_on_two_files",
+        "terminal_in_active", "terminal_status_in_active", "thinking_posture",
+        "transitive_reverse_dep_count", "unblocks_task_ids", "union",
+        "unobserved_files", "unpulled_no_route_determined", "unrecognized",
+        "unrecognized_status", "value", "wait_band", "wait_duration_s",
+        "waiting_review", "waiting_witness",
     }
     newly_aired = {
         attr for attr in fr.air_allowlist() if attr not in CURRENT_ALLOW
@@ -872,3 +980,51 @@ def test_both_air_decision_points_agree_on_financial():
             if attr in fr.FINANCIAL:
                 assert fr.air_policy(domain, attr) == "deny", f"air_policy airs {attr!r}"
                 assert attr not in al, f"air_allowlist airs {attr!r}"
+
+
+def test_workview_tasks_and_wait_census_emit_zero_sensitive_or_financial_attrs(tmp_path, monkeypatch):
+    """Class check (E1.3 / #55): neither /read/tasks nor /read/wait-census emits any attribute in
+    fr.SENSITIVE or fr.FINANCIAL (either in the payload envelope or through classify_air), and all
+    free-text / raw fields in #55 (`raw_status`, `blocked_reason`, `waiting_on`, `release_when`,
+    `bounded_inability`, `text_summary`, `heuristic_prose_mentions`) classify as `body` (deny on air)."""
+    import reins_read as rr
+    import reins_seat_succession as ss
+    from fastapi.testclient import TestClient
+
+    for body_attr in (
+        "raw_status", "blocked_reason", "waiting_on", "release_when",
+        "bounded_inability", "text_summary", "heuristic_prose_mentions",
+    ):
+        assert fr.classify("Task", body_attr) == "body"
+        assert fr.air_policy("Task", body_attr) == "deny"
+        assert body_attr not in fr.air_allowlist()
+
+    council_root, pop_cfg = _populated_read_route_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ss,
+        "_pane_census",
+        lambda _spec: {"hapax-claude-alpha": [{"id": "%1", "pid": 101, "command": "bash"}]},
+    )
+    pop_app = rr.build_app(council_root, fr.air_allowlist(), pop_cfg)
+    with TestClient(pop_app) as client:
+        for route_path in ("/read/tasks", "/read/wait-census"):
+            resp = client.get(route_path)
+            assert resp.status_code == 200
+            payload = resp.json()
+            attrs: set[str] = set()
+            _collect_payload_attrs(payload, attrs)
+            leaked_sensitive = attrs & fr.SENSITIVE
+            leaked_financial = attrs & fr.FINANCIAL
+            assert not leaked_sensitive, f"{route_path} emitted SENSITIVE attrs: {sorted(leaked_sensitive)}"
+            assert not leaked_financial, f"{route_path} emitted FINANCIAL attrs: {sorted(leaked_financial)}"
+            if route_path == "/read/tasks":
+                for row in payload.get("tasks") or []:
+                    air_map = row.get("air") or {}
+                    assert not (set(air_map) & fr.SENSITIVE)
+                    assert not (set(air_map) & fr.FINANCIAL)
+                    for body_attr in (
+                        "raw_status", "blocked_reason", "waiting_on",
+                        "release_when", "bounded_inability",
+                    ):
+                        assert air_map.get(body_attr) == "deny"
+
