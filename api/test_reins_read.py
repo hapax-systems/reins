@@ -1246,7 +1246,7 @@ def test_checked_in_capability_surface_pack_carries_explicit_ontology():
 
 
 def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, tmp_path):
-    monkeypatch.setattr("reins_read._projection", lambda _root: {"tasks": {
+    monkeypatch.setattr("reins_read._projection", lambda _root, **kw: {"tasks": {
         "task-a": {
             "task_id": "task-a",
             "stage": "S7_RELEASE",
@@ -1914,7 +1914,8 @@ def test_g1_to_g12_and_a0_wait_census_end_to_end(tmp_path, monkeypatch):
     coord_root.mkdir(parents=True)
     monkeypatch.setattr(
         "reins_read._projection",
-        lambda _root: {
+        lambda _root, **kw: {
+            "_replay": {"source": "sqlite", "degraded": False, "errors_present": False},
             "tasks": {
                 "task-moving": {
                     "stage": "S4",
@@ -2051,6 +2052,10 @@ def test_workview_producer_kill_returns_dark_when_vault_root_missing(tmp_path, m
     monkeypatch.delenv("REINS_VAULT_ROOT", raising=False)
     monkeypatch.delenv("REINS_CC_TASKS_ACTIVE", raising=False)
 
+    def unavailable_projection(*args, **kwargs):
+        raise OSError("coord producer unavailable")
+
+    monkeypatch.setattr(reins_read, "_projection", unavailable_projection)
     census = build_wait_census(missing_vault)
     assert census["dark"] is True
     assert "unavailable" in census["reason"]

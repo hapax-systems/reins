@@ -208,8 +208,12 @@ def _task_history(council_root: str) -> tuple[dict, bool]:
     """
     from hapax.spine.coord_event_log import default_event_log
 
-    hist: dict = {}
     result = default_event_log().replay(fail_open=True)
+    return _task_history_from_replay(result)
+
+
+def _task_history_from_replay(result: Any) -> tuple[dict, bool]:
+    hist: dict = {}
     log_complete = not bool(getattr(result, "degraded", False))
     for e in result.events:
         r = e.to_record()
@@ -5418,11 +5422,21 @@ def read_traces(council_root: str, limit: int = 40, allowlist: list[str] | None 
         return {"dark": True, "error": str(e), "traces": []}
 
 
-def _projection(council_root: str) -> dict:
+def _projection(council_root: str, *, include_replay_metadata: bool = False) -> dict:
     from hapax.spine.coord_event_log import default_event_log
     from hapax.spine.coord_projection import CoordProjection
 
-    return CoordProjection.from_replay(default_event_log().replay(fail_open=True)).to_record()
+    replay = default_event_log().replay(fail_open=True)
+    record = CoordProjection.from_replay(replay).to_record()
+    if include_replay_metadata:
+        source = getattr(replay, "source", "unknown")
+        record["_replay"] = {
+            "source": source if source in {"sqlite", "jsonl_mirror"} else "unknown",
+            "degraded": bool(getattr(replay, "degraded", True)),
+            "errors_present": bool(getattr(replay, "errors", ())),
+        }
+        record["_history"], record["_log_complete"] = _task_history_from_replay(replay)
+    return record
 
 
 def _page_before(records: list[dict], before: str | None, limit: int) -> list[dict]:
@@ -5597,8 +5611,20 @@ def _load_yaml_frontmatter_and_log(path: Path) -> tuple[dict | None, str, int]:
     return data, last_ts, trans_count
 
 
+def _workview_markdown_paths(directory: Path | None) -> tuple[list[Path], bool]:
+    """Actually enumerate a source; glob/is_dir/access alone can hide permission errors."""
+    if directory is None:
+        return [], False
+    try:
+        with os.scandir(directory) as entries:
+            paths = sorted(Path(entry.path) for entry in entries if entry.name.endswith(".md"))
+        return paths, True
+    except OSError:
+        return [], False
+
+
 def _scan_closed_cc_tasks(
-    cc_closed_dir: Path | None,
+    paths: list[Path],
     unobserved: list[str] | None = None,
 ) -> tuple[set[str], dict[str, int], int]:
     """Fast scan of closed/*.md returning (closed_task_ids, closed_status_vocab, closed_file_count)."""
@@ -5607,9 +5633,7 @@ def _scan_closed_cc_tasks(
     closed_ids: set[str] = set()
     status_vocab: collections.Counter[str] = collections.Counter()
     file_count = 0
-    if cc_closed_dir is None or not cc_closed_dir.is_dir():
-        return closed_ids, {}, 0
-    for p in sorted(cc_closed_dir.glob("*.md")):
+    for p in paths:
         file_count += 1
         try:
             with p.open(encoding="utf-8", errors="replace") as fh:
@@ -5638,7 +5662,7 @@ def _scan_closed_cc_tasks(
 
 
 def _scan_requests(
-    req_active_dir: Path | None, req_closed_dir: Path | None
+    active_paths: list[Path], closed_paths: list[Path], *, active_available: bool
 ) -> dict[str, Any]:
     """G1: scan active and closed REQ files into a structured requests_summary + rows."""
     import collections
@@ -5648,8 +5672,8 @@ def _scan_requests(
     active_count = 0
     closed_count = 0
     unobserved = 0
-    if req_active_dir is not None and req_active_dir.is_dir():
-        for p in sorted(req_active_dir.glob("*.md")):
+    if active_available:
+        for p in active_paths:
             active_count += 1
             d, _, _ = _load_yaml_frontmatter_and_log(p)
             if d is None:
@@ -5676,10 +5700,9 @@ def _scan_requests(
                     "downstream_tasks_count": len(downstream),
                 }
             )
-    if req_closed_dir is not None and req_closed_dir.is_dir():
-        closed_count = sum(1 for _ in req_closed_dir.glob("*.md"))
+    closed_count = len(closed_paths)
     return {
-        "dark": req_active_dir is None,
+        "dark": not active_available,
         "active": active_count,
         "closed": closed_count,
         "total": active_count + closed_count,
@@ -5714,16 +5737,22 @@ def _scan_workview_universe(
     """Shared scanner for /read/tasks and build_wait_census (G1..G12 & A0)."""
     import collections
 
-    cc_active_dir: Path | None = dirs.get("cc_active_dir")
-    cc_closed_dir: Path | None = dirs.get("cc_closed_dir")
-    req_active_dir: Path | None = dirs.get("req_active_dir")
-    req_closed_dir: Path | None = dirs.get("req_closed_dir")
+    paths_by_source: dict[str, list[Path]] = {}
+    sources: dict[str, str] = {}
+    for key in ("cc_active_dir", "cc_closed_dir", "req_active_dir", "req_closed_dir"):
+        paths, available = _workview_markdown_paths(dirs.get(key))
+        paths_by_source[key] = paths
+        sources[key] = "live" if available else "dark"
 
     unobserved: list[str] = []
     closed_ids, closed_status_vocab, closed_cc_files = _scan_closed_cc_tasks(
-        cc_closed_dir, unobserved
+        paths_by_source["cc_closed_dir"], unobserved
     )
-    requests_summary = _scan_requests(req_active_dir, req_closed_dir)
+    requests_summary = _scan_requests(
+        paths_by_source["req_active_dir"],
+        paths_by_source["req_closed_dir"],
+        active_available=sources["req_active_dir"] == "live",
+    )
 
     active_cc_files = 0
     excluded_files = 0
@@ -5734,8 +5763,8 @@ def _scan_workview_universe(
     blocked_nr_files: set[str] = set()
     unclaim_nr_files: set[str] = set()
 
-    if cc_active_dir is not None and cc_active_dir.is_dir():
-        for p in sorted(cc_active_dir.glob("*.md")):
+    if sources["cc_active_dir"] == "live":
+        for p in paths_by_source["cc_active_dir"]:
             active_cc_files += 1
             d, last_ts, trans_count = _load_yaml_frontmatter_and_log(p)
             if not d:
@@ -5842,22 +5871,85 @@ def _scan_workview_universe(
         "coord_only_count": len(coord_only_ids),
         "unobserved_files": len(unobserved) + requests_summary["unobserved_files"],
         "excluded_files": excluded_files,
+        "sources": sources,
     }
 
 
 def _workview_completeness(
-    dirs: dict[str, Any], scan: dict[str, Any], *, coord_error: bool, has_coord: bool
+    scan: dict[str, Any], coord_state: str, coord_provenance: dict
 ) -> dict[str, Any]:
     """Name missing source coverage separately from a measured empty directory."""
-    sources = {
-        key: ("live" if dirs.get(key) is not None else "dark")
-        for key in ("cc_active_dir", "cc_closed_dir", "req_active_dir", "req_closed_dir")
-    }
-    sources["coord"] = "dark" if coord_error else ("live" if has_coord else "not_configured")
-    partial = "dark" in sources.values() or bool(scan["unobserved_files"])
+    sources = {**scan["sources"], "coord": coord_state}
+    partial = any(state in {"dark", "partial"} for state in sources.values()) or bool(
+        scan["unobserved_files"]
+    )
     return {
         "state": "partial" if partial else "complete",
         "sources": sources,
+        "provenance": {"coord": coord_provenance},
+        "unobserved_files": scan["unobserved_files"],
+        "excluded_files": scan["excluded_files"],
+    }
+
+
+def _workview_coord(council_root: str) -> tuple[dict, str, dict, dict, bool]:
+    if not council_root:
+        return {}, "not_configured", {}, {}, False
+    try:
+        projection = _projection(council_root, include_replay_metadata=True)
+        tasks = projection.get("tasks")
+        if tasks is None:
+            tasks = {}
+        if not isinstance(tasks, dict):
+            return {}, "dark", {}, {}, False
+        hist = projection.get("_history") or {}
+        if not isinstance(hist, dict):
+            hist = {}
+        log_complete = projection.get("_log_complete") is True
+        provenance = projection.get("_replay")
+        if not isinstance(provenance, dict):
+            return tasks, "partial", {"source": "unknown"}, hist, False
+        state = (
+            "live"
+            if provenance.get("source") == "sqlite"
+            and provenance.get("degraded") is False
+            and provenance.get("errors_present") is False
+            else "partial"
+        )
+        return tasks, state, provenance, hist, log_complete and state == "live"
+    except Exception:
+        return {}, "dark", {}, {}, False
+
+
+def _workview_universe(
+    scan: dict[str, Any], coord_tasks: dict, completeness: dict[str, Any]
+) -> dict[str, Any]:
+    sources = completeness["sources"]
+    requests = scan["requests_summary"]
+    observed_work = (
+        scan["active_cc_files"] + scan["closed_cc_files"]
+        + requests["active"] + requests["closed"] + scan["coord_only_count"]
+    )
+    return {
+        "known_work": (
+            None if any(state in {"dark", "partial"} for state in sources.values()) else observed_work
+        ),
+        "observed_work": observed_work,
+        "cc_task_files": {
+            "active": scan["active_cc_files"] if sources["cc_active_dir"] == "live" else None,
+            "closed": scan["closed_cc_files"] if sources["cc_closed_dir"] == "live" else None,
+        },
+        "requests": {
+            "active": requests["active"] if sources["req_active_dir"] == "live" else None,
+            "closed": requests["closed"] if sources["req_closed_dir"] == "live" else None,
+        },
+        "coord_tasks": None if sources["coord"] == "dark" else len(coord_tasks),
+        "coord_only_tasks": scan["coord_only_count"],
+        "reins_read_tasks": len(scan["act_by_id"]),
+        "active_distinct_task_ids": len(scan["act_by_id"]),
+        "task_ids_on_two_files": len(scan["duplicate_ids"]),
+        "duplicate_task_ids": sorted(scan["duplicate_ids"]),
+        "silently_dropped": 0,
         "unobserved_files": scan["unobserved_files"],
         "excluded_files": scan["excluded_files"],
     }
@@ -5873,54 +5965,11 @@ def build_wait_census(
     import collections
 
     dirs = _resolve_workview_dirs(vault_root)
-    if dirs["cc_active_dir"] is None:
-        err = f"vault root unavailable: {dirs['base']}"
-        return {
-            "dark": True,
-            "error": err,
-            "reason": err,
-            "universe": {
-                "known_work": None,
-                "cc_task_files": {"active": None, "closed": None},
-                "requests": {"active": None, "closed": None},
-                "coord_tasks": None,
-                "reins_read_tasks": None,
-                "active_distinct_task_ids": None,
-                "task_ids_on_two_files": None,
-                "duplicate_task_ids": [],
-                "silently_dropped": 0,
-            },
-            "wait_bands": {},
-            "wait_census_active_distinct_ids": {},
-            "record_contradiction": {},
-            "no_reason_reconciliation": {},
-            "state_normalization": {},
-            "dependency_edges": {},
-            "top_keystones": [],
-            "top_active_keystones": [],
-            "requests_summary": {
-                "dark": True,
-                "active": None,
-                "closed": None,
-                "total": None,
-                "by_status": {},
-                "rows": [],
-            },
-            "text_summary": f"A0 WAIT CENSUS · DARK ({err})",
-        }
-
-    coord_tasks: dict = {}
-    coord_error = False
-    if council_root:
-        try:
-            proj = _projection(council_root)
-            coord_tasks = proj.get("tasks") or {}
-        except Exception:
-            coord_error = True
+    coord_tasks, coord_state, coord_provenance, hist, hist_complete = _workview_coord(council_root)
     scan = _scan_workview_universe(dirs, council_root=council_root, coord_tasks=coord_tasks)
-    completeness = _workview_completeness(
-        dirs, scan, coord_error=coord_error, has_coord=bool(council_root)
-    )
+    completeness = _workview_completeness(scan, coord_state, coord_provenance)
+    universe = _workview_universe(scan, coord_tasks, completeness)
+    task_dark = scan["sources"]["cc_active_dir"] != "live" and coord_state not in {"live", "partial"}
     act_by_id = scan["act_by_id"]
     closed_ids = scan["closed_ids"]
     duplicate_ids = scan["duplicate_ids"]
@@ -5929,7 +5978,7 @@ def build_wait_census(
     rev_all = scan["rev_all"]
     reqs = scan["requests_summary"]
 
-    coord_tasks_count = None if coord_error else len(coord_tasks)
+    coord_tasks_count = universe["coord_tasks"]
 
     band_counts: collections.Counter[str] = collections.Counter(
         {b: 0 for b in WAIT_BANDS}
@@ -6013,16 +6062,11 @@ def build_wait_census(
     top_keystones = keystone_entries[:10]
     top_active_keystones = [k for k in keystone_entries if k["in_active"]][:10]
 
-    active_cc = scan["active_cc_files"]
-    closed_cc = scan["closed_cc_files"]
-    active_req = reqs["active"]
-    closed_req = reqs["closed"]
-    observed_work = active_cc + closed_cc + active_req + closed_req + scan["coord_only_count"]
-    known_work = (
-        None
-        if any(value == "dark" for value in completeness["sources"].values())
-        else observed_work
-    )
+    active_cc = universe["cc_task_files"]["active"]
+    closed_cc = universe["cc_task_files"]["closed"]
+    active_req = universe["requests"]["active"]
+    closed_req = universe["requests"]["closed"]
+    known_work = universe["known_work"]
     distinct_active = len(act_by_id)
     dup_list = sorted(duplicate_ids)
     dup_file_total = sum(len(scan["files_by_tid"][t]) for t in dup_list)
@@ -6055,32 +6099,10 @@ def build_wait_census(
 
     wait_bands_dict = {b: int(band_counts[b]) for b in WAIT_BANDS}
 
-    universe = {
-        "known_work": known_work,
-        "observed_work": observed_work,
-        "cc_task_files": {
-            "active": active_cc,
-            "closed": closed_cc if dirs["cc_closed_dir"] is not None else None,
-        },
-        "requests": {
-            "active": active_req if dirs["req_active_dir"] is not None else None,
-            "closed": closed_req if dirs["req_closed_dir"] is not None else None,
-        },
-        "coord_tasks": coord_tasks_count,
-        "coord_only_tasks": scan["coord_only_count"],
-        "reins_read_tasks": distinct_active,
-        "active_distinct_task_ids": distinct_active,
-        "task_ids_on_two_files": len(dup_list),
-        "duplicate_task_ids": dup_list,
-        "silently_dropped": 0,
-        "unobserved_files": scan["unobserved_files"],
-        "excluded_files": scan["excluded_files"],
-    }
-
     dep_edges = scan["dependency_edges"]
     summary_lines = [
         (
-            f"A0 WAIT CENSUS · {completeness['state'].upper()} known_work={known_work} "
+            f"A0 WAIT CENSUS · {'DARK' if task_dark else completeness['state'].upper()} known_work={known_work} "
             f"(cc_active={active_cc} cc_closed={closed_cc} "
             f"req_active={active_req} req_closed={closed_req} "
             f"coord={coord_tasks_count} unobserved_files={scan['unobserved_files']} silently_dropped=0)"
@@ -6138,10 +6160,11 @@ def build_wait_census(
     text_summary = "\n".join(summary_lines)
 
     return {
-        "dark": False,
+        "dark": task_dark,
         "partial": completeness["state"] != "complete",
         "completeness": completeness,
-        "error": "",
+        "error": "task_sources_unavailable" if task_dark else "",
+        "reason": "task sources unavailable" if task_dark else "",
         "universe": universe,
         "wait_bands": wait_bands_dict,
         "wait_census_active_distinct_ids": {
@@ -6191,83 +6214,12 @@ def read_workview_tasks(
 ) -> dict[str, Any]:
     """G1..G12: /read/tasks projection over vault cc-task rows + REQ files + coord projection."""
     dirs = _resolve_workview_dirs(session_cfg)
-    if (
-        dirs["explicit"]
-        and dirs["cc_active_dir"] is None
-        and dirs["req_active_dir"] is None
-    ):
-        return {
-            "dark": True,
-            "error": f"vault root unavailable: {dirs['base']}",
-            "tasks": [],
-            "wait_bands": {},
-            "wait_band_counts": {},
-            "requests": [],
-            "requests_summary": {
-                "dark": True,
-                "active": None,
-                "closed": None,
-                "total": None,
-                "by_status": {},
-                "rows": [],
-            },
-        }
-
-    vault_available = (
-        dirs["cc_active_dir"] is not None or dirs["req_active_dir"] is not None
-    )
-
-    proj: dict = {}
-    hist: dict = {}
-    hist_complete = False
-    proj_error: str | None = None
-    try:
-        proj = _projection(council_root)
-        hist, hist_complete = _task_history(council_root)
-    except Exception as e:
-        proj_error = str(e)
-        if not vault_available:
-            return {"dark": True, "error": proj_error, "tasks": []}
-
-    coord_tasks = (proj.get("tasks") or {}) if isinstance(proj, dict) else {}
-    if not vault_available and not coord_tasks and not council_root:
-        return {
-            "dark": True,
-            "error": proj_error or "vault root unavailable and coord projection empty",
-            "tasks": [],
-        }
-
+    coord_tasks, coord_state, coord_provenance, hist, hist_complete = _workview_coord(council_root)
     ref_now = now if now is not None else time.time()
-
-    if not vault_available:
-        tasks = [
-            to_task(tid, t, allowlist, hist, ref_now, hist_complete)
-            for tid, t in coord_tasks.items()
-        ]
-        wait_bands_grouped: dict[str, list[str]] = {b: [] for b in WAIT_BANDS}
-        for row in tasks:
-            wb = row.get("wait_band", "unpulled_no_route_determined")
-            wait_bands_grouped.setdefault(wb, []).append(row["task_id"])
-        return {
-            "dark": False,
-            "tasks": tasks,
-            "wait_bands": wait_bands_grouped,
-            "wait_band_counts": {k: len(v) for k, v in wait_bands_grouped.items()},
-            "requests": [],
-            "requests_summary": {
-                "dark": True,
-                "active": 0,
-                "closed": 0,
-                "total": 0,
-                "by_status": {},
-                "rows": [],
-            },
-        }
-
     scan = _scan_workview_universe(dirs, council_root=council_root, coord_tasks=coord_tasks)
-    completeness = _workview_completeness(
-        dirs, scan, coord_error=proj_error is not None, has_coord=bool(council_root)
-    )
+    completeness = _workview_completeness(scan, coord_state, coord_provenance)
+    universe = _workview_universe(scan, coord_tasks, completeness)
+    task_dark = scan["sources"]["cc_active_dir"] != "live" and coord_state not in {"live", "partial"}
     act_by_id = dict(scan["act_by_id"])
     closed_ids = scan["closed_ids"]
     duplicate_ids = scan["duplicate_ids"]
@@ -6299,7 +6251,8 @@ def read_workview_tasks(
     wait_band_counts = {k: len(v) for k, v in wait_bands_grouped.items()}
 
     return {
-        "dark": dirs["cc_active_dir"] is None and not coord_tasks,
+        "dark": task_dark,
+        "error": "task_sources_unavailable" if task_dark else "",
         "partial": completeness["state"] != "complete",
         "completeness": completeness,
         "tasks": tasks,
@@ -6307,42 +6260,7 @@ def read_workview_tasks(
         "wait_band_counts": wait_band_counts,
         "requests": requests_summary["rows"],
         "requests_summary": requests_summary,
-        "universe": {
-            "known_work": (
-                None
-                if any(value == "dark" for value in completeness["sources"].values())
-                else (
-                    scan["active_cc_files"]
-                    + scan["closed_cc_files"]
-                    + requests_summary["active"]
-                    + requests_summary["closed"]
-                    + scan["coord_only_count"]
-                )
-            ),
-            "observed_work": (
-                scan["active_cc_files"]
-                + scan["closed_cc_files"]
-                + requests_summary["active"]
-                + requests_summary["closed"]
-                + scan["coord_only_count"]
-            ),
-            "cc_task_files": {
-                "active": scan["active_cc_files"] if dirs["cc_active_dir"] is not None else None,
-                "closed": scan["closed_cc_files"] if dirs["cc_closed_dir"] is not None else None,
-            },
-            "requests": {
-                "active": requests_summary["active"] if dirs["req_active_dir"] is not None else None,
-                "closed": requests_summary["closed"] if dirs["req_closed_dir"] is not None else None,
-            },
-            "coord_tasks": None if proj_error is not None else len(coord_tasks),
-            "coord_only_tasks": scan["coord_only_count"],
-            "active_distinct_task_ids": len(tasks),
-            "task_ids_on_two_files": len(duplicate_ids),
-            "duplicate_task_ids": sorted(duplicate_ids),
-            "silently_dropped": 0,
-            "unobserved_files": scan["unobserved_files"],
-            "excluded_files": scan["excluded_files"],
-        },
+        "universe": universe,
     }
 
 
