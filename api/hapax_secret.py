@@ -18,8 +18,8 @@ Put never calls FileStore.put and never ``pass insert``. It POSTs
 never appear on argv. The command ledger records sha256 only.
 
 On a host that is not the FileStore machine, the same argv is forwarded
-with ``ssh`` (``-t`` only for put) to ``HAPAX_SECRETS_HOST`` (default
-``hapax-appendix``). ``:8799`` is not opened on the tailnet.
+with ``ssh`` (``-t`` only for put) to the configured ``HAPAX_SECRETS_HOST``
+(or ``~/.config/reins/secrets-host``). ``:8799`` is not opened on the tailnet.
 """
 
 from __future__ import annotations
@@ -92,15 +92,30 @@ def is_store_host() -> bool:
 
 
 def secrets_host() -> str:
-    return os.environ.get("HAPAX_SECRETS_HOST", "hapax-appendix").strip() or "hapax-appendix"
+    env_host = os.environ.get("HAPAX_SECRETS_HOST", "").strip()
+    if env_host:
+        return env_host
+    host_file = Path(
+        os.environ.get("REINS_SECRETS_HOST_FILE", "~/.config/reins/secrets-host")
+    ).expanduser()
+    try:
+        file_host = host_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        file_host = ""
+    if file_host:
+        return file_host
+    raise ValueError(
+        "HAPAX_SECRETS_HOST is not configured. Next action: set HAPAX_SECRETS_HOST "
+        "or write the FileStore hostname to ~/.config/reins/secrets-host"
+    )
 
 
 def ssh_argv(*, tty: bool, rest: list[str]) -> list[str]:
     host = secrets_host()
     if host.startswith("-"):
         raise ValueError(
-            "HAPAX_SECRETS_HOST must not start with '-'. Next action: set a hostname "
-            "like hapax-appendix"
+            "HAPAX_SECRETS_HOST must not start with '-'. Next action: set a valid "
+            "FileStore hostname"
         )
     remote = " ".join(shlex.quote(part) for part in ("$HOME/.local/bin/hapax-secret", *rest))
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
