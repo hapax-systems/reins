@@ -1466,7 +1466,11 @@ def test_read_vault_missing_root_is_dark(tmp_path):
     missing = tmp_path / "missing-vault"
     data = read_vault_summary({"vault_root": str(missing)})
 
-    assert data == {"vault_root": str(missing), "dark": True, "notes": []}
+    # The payload now carries its air map; with no allowlist both summary fields deny.
+    assert data == {
+        "vault_root": str(missing), "dark": True, "notes": [],
+        "air": {"vault_root": "deny", "dark": "deny"},
+    }
 
 
 def test_read_observe_summary_is_per_dimension_honest_dark(tmp_path, monkeypatch):

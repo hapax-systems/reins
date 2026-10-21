@@ -1070,8 +1070,8 @@ def test_every_read_route_denies_sensitive_and_financial_under_a_total_allowlist
     """Walk every registered GET /read/* route twice: first with the registry's names plus the deny-
     sets, then with every attribute any route emitted, so the allowlist names every attribute. No air
     map may mark a SENSITIVE or FINANCIAL attribute "ok". HOME is isolated and the estate is the
-    populated read-route fixture. /read/wait-census is walked but emits no air map (that route's AIR
-    is the /read/vault row's), so it cannot leak here and is not asserted to carry one."""
+    populated read-route fixture. /read/tasks, /read/vault and /read/wait-census must each emit air
+    maps (the last two were unclassified before the /read/vault row)."""
     from fastapi.testclient import TestClient
     from reins_read import build_app
 
@@ -1093,8 +1093,8 @@ def test_every_read_route_denies_sensitive_and_financial_under_a_total_allowlist
     emitted = {k for _, maps in walk(sorted(base)).values() for air in maps for k in air}
     walked = walk(sorted(base | emitted))
     assert len(walked) >= 23 and all(status == 200 for status, _ in walked.values()), walked
-    assert {"/read/tasks", "/read/wait-census"} <= set(walked)
-    assert walked["/read/tasks"][1], "/read/tasks must emit air maps under the populated fixture"
+    for route in ("/read/tasks", "/read/vault", "/read/wait-census"):
+        assert walked[route][1], f"{route} must emit air maps under the populated fixture"
     leaks = {
         (path, k) for path, (_, maps) in walked.items() for air in maps
         for k, v in air.items() if v == "ok" and k in NEVER_AIR
@@ -1102,4 +1102,23 @@ def test_every_read_route_denies_sensitive_and_financial_under_a_total_allowlist
     assert not leaks, f"never-air attributes aired: {sorted(leaks)}"
     seen = {k for _, maps in walked.values() for air in maps for k in air} & NEVER_AIR
     reached = {"path", "paths", "session", "subject", "label", "basename", "inbox", "parent_spec"}
+    reached |= {"vault_root", "rel_path", "folder", "title"}
     assert reached <= seen, f"the walk must reach never-air fields: {seen}"
+
+
+def test_vault_never_airs_its_root_or_any_path_bearing_note_field(tmp_path):
+    """/read/vault classifies through classify_air: under an allowlist naming every vault field,
+    vault_root and each path-bearing note field (title, rel_path, folder, obsidian_uri) deny, and the
+    structural fields still air."""
+    from reins_read import read_vault_summary
+
+    vault = tmp_path / "vault"
+    (vault / "folder").mkdir(parents=True)
+    (vault / "folder" / "note.md").write_text("# note", encoding="utf-8")
+    names = ["vault_root", "dark", "title", "rel_path", "obsidian_uri", "folder", "modified"]
+    data = read_vault_summary({"vault_root": str(vault)}, names)
+    assert data["air"] == {"vault_root": "deny", "dark": "ok"}
+    note_air = data["notes"][0]["air"]
+    assert note_air == {
+        "title": "deny", "rel_path": "deny", "obsidian_uri": "deny", "folder": "deny", "modified": "ok",
+    }
