@@ -620,7 +620,9 @@ def classify_wait_band(
         return "moving", contradictions, open_deps
     if open_deps:
         return "on_item_dependency_open", contradictions, open_deps
-    if deps and st == "blocked" and not has_typed_wait:
+    # A recorded blocked_reason is a gate cause exactly as a typed wait is, with or without closed
+    # depends_on; only a blocked row with neither is a contradiction here.
+    if deps and st == "blocked" and not has_gate_reason:
         contradictions.append("blocked_all_deps_closed")
         return "record_contradiction", contradictions, open_deps
     if (
@@ -6704,7 +6706,9 @@ def main(argv: list[str] | None = None) -> int:
     args, _ = parser.parse_known_args(argv)
     if args.wait_census:
         cfg = instance_config()
-        vroot = args.vault_root or cfg.get("vault_root") or cfg
+        # The same config the /read/wait-census route passes, so cc_tasks_active and
+        # REINS_CC_TASKS_ACTIVE are honoured; an explicit --vault-root still overrides.
+        vroot = args.vault_root or cfg
         census = build_wait_census(vroot, council_root=cfg.get("council_root", ""))
         if args.json:
             sys.stdout.write(json.dumps(census, indent=2) + "\n")

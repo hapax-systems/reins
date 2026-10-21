@@ -2083,3 +2083,42 @@ def test_workview_producer_kill_returns_dark_when_vault_root_missing(tmp_path, m
     rc = reins_read.main(["--wait-census", "--vault-root", str(missing_vault)])
     assert rc == 1
 
+
+def test_blocked_reason_is_a_gate_cause_with_or_without_closed_deps():
+    """CodeRabbit on #61: a blocked row with a recorded blocked_reason and all depends_on closed fell
+    into record_contradiction (blocked_all_deps_closed), while the same row without depends_on was
+    on_gate_prerequisite. A recorded reason is a gate cause on both paths; a blocked row with all
+    deps closed and no reason is still a genuine contradiction."""
+    base = {"status": "blocked", "blocked_reason": "waiting on an operator decision"}
+    with_deps = reins_read.classify_wait_band({**base, "depends_on": ["dep-a"]}, closed_ids={"dep-a"})
+    without_deps = reins_read.classify_wait_band(dict(base))
+    assert with_deps[0] == "on_gate_prerequisite" and "blocked_all_deps_closed" not in with_deps[1]
+    assert without_deps[0] == "on_gate_prerequisite"
+    genuine = reins_read.classify_wait_band(
+        {"status": "blocked", "depends_on": ["dep-a"]}, closed_ids={"dep-a"}
+    )
+    assert genuine[0] == "record_contradiction" and "blocked_all_deps_closed" in genuine[1]
+
+
+def test_wait_census_cli_and_route_scan_the_same_dirs_under_one_config(tmp_path, monkeypatch, capsys):
+    """CodeRabbit on #61: the --wait-census CLI passed only vault_root, so it ignored cc_tasks_active
+    while /read/wait-census used the whole config. Under one instance config both now scan the same
+    task directories: here the two tasks under cc_tasks_active, not the one under vault_root."""
+    from fastapi.testclient import TestClient
+
+    for var in ("REINS_VAULT_ROOT", "REINS_CC_TASKS_ACTIVE"):
+        monkeypatch.delenv(var, raising=False)
+    vault_root = tmp_path / "vault"
+    _write_md(vault_root / "20-projects" / "hapax-cc-tasks" / "active" / "v.md", ["task_id: vault-task", "status: offered"])
+    other = tmp_path / "other-tasks" / "active"
+    for name in ("a", "b"):
+        _write_md(other / f"{name}.md", [f"task_id: other-{name}", "status: offered"])
+    cfg = {"vault_root": str(vault_root), "cc_tasks_active": str(other), "council_root": ""}
+    monkeypatch.setattr(reins_read, "instance_config", lambda: cfg)
+
+    assert reins_read.main(["--wait-census", "--json"]) == 0
+    cli = json.loads(capsys.readouterr().out)
+    route = TestClient(reins_read.build_app("", [], cfg)).get("/read/wait-census").json()
+    assert cli["universe"] == {k: v for k, v in route["universe"].items()}
+    assert cli["universe"]["cc_task_files"]["active"] == 2
+
