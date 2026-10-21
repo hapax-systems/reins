@@ -2023,7 +2023,7 @@ def test_g1_to_g12_and_a0_wait_census_end_to_end(tmp_path, monkeypatch):
     census = census_resp.json()
     assert census["dark"] is False
     assert census["universe"]["cc_task_files"]["active"] == 10
-    assert census["universe"]["active_distinct_task_ids"] == 9
+    assert census["universe"]["active_distinct_task_ids"] == 10  # includes coord-only task
     assert census["universe"]["task_ids_on_two_files"] == 1
     assert census["universe"]["cc_task_files"]["closed"] == 1
     assert census["universe"]["requests"]["active"] == 1
