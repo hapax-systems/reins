@@ -62,7 +62,7 @@ EDGES: set[str] = {
 BODIES: set[str] = {
     "summary", "detail", "prompt", "takeaway", "caveat", "emphasis", "context", "thesis",
     "missing", "action", "next_evidence", "blocked_reasons", "hardening_notes", "must_include",
-    "answer_shape", "blockers", "docs", "aliases", "tags",
+    "answer_shape", "blockers", "docs", "aliases", "tags", "remedy",
     "error", "reason", "reason_codes", "obsidian_uri",
 }
 # ENVELOPES — structural wrappers / nesting / mirrors; not binnable row attributes.
@@ -70,6 +70,7 @@ ENVELOPES: set[str] = {
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
     "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
+    "transitions", "prior", "current", "recorded_events",
     "grants", "binding", "lease", "honors",  # #50 grant-consumption structural wrappers
     "panes",  # #51 seat-succession per-lane live pane list wrapper
     "events", "traces", "tasks", "epistemics", "sessions", "turns", "blocks", "intake",
@@ -85,6 +86,11 @@ ENVELOPES: set[str] = {
 
 # ── BY-NAME DEFAULT ASSIGNMENT (the unambiguous bulk) ────────────────────────
 FACET_BY_NAME: dict[str, str] = {
+    # Claim custody is a projection, never a lifecycle authority.
+    "started": "posture", "return_state": "posture", "guard": "posture",
+    "claim_state": "posture", "events_truncated": "posture",
+    "holders": "ownership", "history_scope": "provenance",
+    "sequence": "measure", "dropped": "measure",
     # identity (id-family + type/kind/label + subject)
     "id": "identity", "task_id": "identity", "trace_id": "identity", "gate_id": "identity",
     "domain_id": "identity", "lifecycle_id": "identity", "row_id": "identity",
@@ -119,7 +125,7 @@ FACET_BY_NAME: dict[str, str] = {
     "lifecycle": "action",
     # ownership (the "whose" labels)
     "owner": "ownership", "role": "ownership", "actor": "ownership", "assigned_to": "ownership",
-    "minting_lane": "ownership",
+    "minting_lane": "ownership", "last_actor": "ownership",
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
@@ -140,6 +146,7 @@ FACET_BY_NAME: dict[str, str] = {
     "captured_at": "time", "snapshot_captured_at": "time", "sampled_at": "time",
     "prior_fresh_until": "time", "fresh_until": "time", "fresh_until_delta_s": "time",
     "last_gap_started_at": "time", "last_gap_ended_at": "time",
+    "created_at": "time", "last_ts": "time",
     # unread age (now - mtime), per message and per inbox
     "age_s": "time", "oldest_unread_age_s": "time",
     # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
