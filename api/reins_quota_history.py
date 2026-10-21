@@ -213,11 +213,12 @@ class QuotaPhaseHistory:
 
     def snapshot(self, allowlist=()):
         """GET reads only the ring; returns copies so consumers cannot alter history."""
+        # The shared AIR point (registry never-air deny-sets included); imported here because
+        # reins_read imports this module at load.
+        from reins_read import classify_air
+
         with self._lock:
-            rows = [
-                {**row, "air": {k: "ok" if k in allowlist else "deny" for k in row}}
-                for row in self._rows
-            ]
+            rows = [{**row, "air": classify_air(row, list(allowlist))} for row in self._rows]
             return {
                 "schema_version": "quota-phase-history.read.v1",
                 "state": self._state,

@@ -1028,3 +1028,78 @@ def test_workview_tasks_and_wait_census_emit_zero_sensitive_or_financial_attrs(t
                     ):
                         assert air_map.get(body_attr) == "deny"
 
+
+NEVER_AIR = fr.SENSITIVE | fr.FINANCIAL
+
+
+def test_classify_air_denies_sensitive_and_financial_even_when_allowlisted():
+    """The shared point: an instance allowlist that names every SENSITIVE and FINANCIAL attribute
+    still airs none of them, on any route, while an allowlisted safe field still airs."""
+    from reins_read import classify_air
+
+    fields = {name: "x" for name in NEVER_AIR | {"role", "state"}}
+    air = classify_air(fields, sorted(fields))
+    assert {k for k, v in air.items() if v == "ok"} == {"role", "state"}
+    assert all(air[name] == "deny" for name in NEVER_AIR)
+
+
+def test_quota_history_rows_deny_sensitive_and_financial_under_a_total_allowlist():
+    """/read/quota-history built its own allowlist-only air map; it now goes through classify_air,
+    so a SENSITIVE or FINANCIAL key in a ring row denies even when the allowlist names it."""
+    from reins_quota_history import QuotaPhaseHistory
+
+    history = QuotaPhaseHistory.from_config({})
+    history._rows.append({"route_id": "glmcp.review.direct", "session": "s", "cost_usd": 1.0})
+    air = history.snapshot(["route_id", "session", "cost_usd"])["rows"][0]["air"]
+    assert air == {"route_id": "ok", "session": "deny", "cost_usd": "deny"}
+
+
+def _air_maps(node, out: list) -> list:
+    if isinstance(node, dict):
+        if isinstance(node.get("air"), dict):
+            out.append(node["air"])
+        for value in node.values():
+            _air_maps(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _air_maps(value, out)
+    return out
+
+
+def test_every_read_route_denies_sensitive_and_financial_under_a_total_allowlist(tmp_path, monkeypatch):
+    """Walk every registered GET /read/* route twice: first with the registry's names plus the deny-
+    sets, then with every attribute any route emitted, so the allowlist names every attribute. No air
+    map may mark a SENSITIVE or FINANCIAL attribute "ok". HOME is isolated and the estate is the
+    populated read-route fixture. /read/wait-census is walked but emits no air map (that route's AIR
+    is the /read/vault row's), so it cannot leak here and is not asserted to carry one."""
+    from fastapi.testclient import TestClient
+    from reins_read import build_app
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    council_root, cfg = _populated_read_route_cfg(tmp_path, monkeypatch)
+
+    def walk(allowlist: list[str]) -> dict[str, tuple[int, list]]:
+        app = build_app(council_root, allowlist, cfg)
+        client, walked = TestClient(app), {}
+        for route in app.routes:
+            path = getattr(route, "path", "")
+            if path.startswith("/read/") and "GET" in getattr(route, "methods", set()):
+                url = path.replace("{role}", "cc-reins").replace("{ts}", "2026-06-26T18:40:01Z")
+                response = client.get(url)
+                walked[path] = (response.status_code, _air_maps(response.json(), []))
+        return walked
+
+    base = set(fr.FACET_BY_NAME) | fr.EDGES | NEVER_AIR
+    emitted = {k for _, maps in walk(sorted(base)).values() for air in maps for k in air}
+    walked = walk(sorted(base | emitted))
+    assert len(walked) >= 23 and all(status == 200 for status, _ in walked.values()), walked
+    assert {"/read/tasks", "/read/wait-census"} <= set(walked)
+    assert walked["/read/tasks"][1], "/read/tasks must emit air maps under the populated fixture"
+    leaks = {
+        (path, k) for path, (_, maps) in walked.items() for air in maps
+        for k, v in air.items() if v == "ok" and k in NEVER_AIR
+    }
+    assert not leaks, f"never-air attributes aired: {sorted(leaks)}"
+    seen = {k for _, maps in walked.values() for air in maps for k in air} & NEVER_AIR
+    reached = {"path", "paths", "session", "subject", "label", "basename", "inbox", "parent_spec"}
+    assert reached <= seen, f"the walk must reach never-air fields: {seen}"
