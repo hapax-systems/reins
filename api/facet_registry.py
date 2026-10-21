@@ -276,6 +276,7 @@ SENSITIVE: set[str] = {
     "minting_session", "vault_root", "rel_path", "folder",  # session / vault path PII
     "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
+    "obsidian_uri",  # a vault note's open-URI embeds the note's absolute filesystem path
     "inbox",  # a configured directory name: free-text-chosen, may carry an identifier
     # a message FILENAME is free-text chosen by a sender and may carry a name or an identifier: the
     # one lanebus field an inbox can populate with anything, so it denies on air regardless of facet

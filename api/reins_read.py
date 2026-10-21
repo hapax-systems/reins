@@ -4110,14 +4110,22 @@ def _vault_note(path: Path, vault_root: Path) -> dict:
     }
 
 
-def read_vault_summary(cfg: dict | None = None) -> dict:
+def read_vault_summary(cfg: dict | None = None, allowlist: list[str] | None = None) -> dict:
     """List Obsidian vault notes as metadata only.
 
-    Bodies are default-deny: this only stats paths and never opens note files.
+    Bodies are default-deny: this only stats paths and never opens note files. The summary and
+    every note carry an air map from the shared classify_air, so vault_root and the path-bearing
+    note fields never air, whatever the instance allowlist names.
     """
+    allow = list(allowlist or [])
+
+    def summary(dark: bool, notes: list[dict]) -> dict:
+        fields = {"vault_root": str(root), "dark": dark}
+        return {**fields, "notes": notes, "air": classify_air(fields, allow)}
+
     root = _vault_root(cfg)
     if not root.is_dir() or not os.access(root, os.R_OK):
-        return {"vault_root": str(root), "dark": True, "notes": []}
+        return summary(True, [])
 
     notes: list[tuple[float, dict]] = []
     try:
@@ -4137,10 +4145,10 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
                 except OSError:
                     continue
     except OSError:
-        return {"vault_root": str(root), "dark": True, "notes": []}
+        return summary(True, [])
 
     notes.sort(key=lambda row: row[0], reverse=True)
-    return {"vault_root": str(root), "dark": False, "notes": [row for _, row in notes[:500]]}
+    return summary(False, [{**row, "air": classify_air(row, allow)} for _, row in notes[:500]])
 
 
 # ── lanebus unread projection (Reins convergence slice 1) ─────────────────────────────────────
@@ -6290,7 +6298,9 @@ def build_app(
 
     @app.get("/read/wait-census")
     def read_wait_census() -> dict:
-        return build_wait_census(session_cfg, council_root=council_root)
+        census = build_wait_census(session_cfg, council_root=council_root)
+        fields = {k: v for k, v in census.items() if k != "air"}
+        return {**fields, "air": classify_air(fields, allowlist)}
 
     @app.get("/read/dynamics")
     def read_dynamics() -> dict:
@@ -6467,7 +6477,7 @@ def build_app(
 
     @app.get("/read/vault")
     def read_vault() -> dict:
-        return read_vault_summary(session_cfg)
+        return read_vault_summary(session_cfg, allowlist)
 
     @app.get("/read/lanebus")
     def read_lanebus() -> dict:
