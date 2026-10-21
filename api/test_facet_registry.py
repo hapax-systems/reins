@@ -1102,7 +1102,7 @@ def test_every_read_route_denies_sensitive_and_financial_under_a_total_allowlist
     assert not leaks, f"never-air attributes aired: {sorted(leaks)}"
     seen = {k for _, maps in walked.values() for air in maps for k in air} & NEVER_AIR
     reached = {"path", "paths", "session", "subject", "label", "basename", "inbox", "parent_spec"}
-    reached |= {"vault_root", "rel_path", "folder", "title"}
+    reached |= {"vault_root", "rel_path", "folder", "title", "obsidian_uri"}
     assert reached <= seen, f"the walk must reach never-air fields: {seen}"
 
 
