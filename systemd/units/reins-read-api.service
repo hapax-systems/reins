@@ -54,8 +54,8 @@ WorkingDirectory=%h/projects/reins/api
 Environment=HOME=%h
 Environment=PYTHONPATH=%h/projects/reins/api
 Environment=REINS_PORT=8799
-Environment=REINS_COUNCIL_ROOT=%h/projects/hapax-council
-Environment=HAPAX_SPINE_CONFIG_DIR=%h/projects/hapax-council/config
+Environment=REINS_CONFIG=%h/.config/reins/instance.toml
+EnvironmentFile=-%h/.config/reins/reins-read-api.env
 EnvironmentFile=-/run/user/1000/hapax-secrets.env
 
 # Bind to loopback only. The module hardcodes host="127.0.0.1"; these settings

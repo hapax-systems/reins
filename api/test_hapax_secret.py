@@ -20,6 +20,8 @@ import reins_serve
 def _isolated_store_and_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
     monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
+    monkeypatch.setenv("REINS_SECRETS_HOST_FILE", str(tmp_path / "secrets-host"))
+    monkeypatch.setenv("HAPAX_SECRETS_HOST", "secrets-store.example")
     monkeypatch.delenv("HAPAX_SECRETS_FORCE_REMOTE", raising=False)
     # Tests run the store-host path; create a FileStore key so is_store_host can be true.
     from k0.key_capture import FileStore
@@ -40,7 +42,7 @@ def test_name_of_maps_slash_and_rejects_illegal():
 
 def test_require_loopback_refuses_tailnet():
     with pytest.raises(ValueError, match="loopback"):
-        hapax_secret.require_loopback_url("http://hapax-appendix.tailf9491.ts.net:8799/command/secret")
+        hapax_secret.require_loopback_url("http://secrets-store.tailf9491.ts.net:8799/command/secret")
     hapax_secret.require_loopback_url("http://127.0.0.1:8799/command/secret")
 
 
@@ -155,7 +157,7 @@ def test_launcher_script_sshes_without_baked_home():
     assert "ssh" in text
     assert " -t -- " in text or " -t --" in text
     assert "/home/" not in text
-    assert "hapax-appendix" in text
+    assert "HAPAX_SECRETS_HOST" in text
     assert "python3 -m hapax_secret" in text
     assert ".local/share/reins/current/api" in text
     assert 'HOST == -*' in text or 'HOST" == -*' in text
@@ -167,10 +169,21 @@ def test_ssh_argv_tty_only_for_put():
     assert put[:4] == ["ssh", "-o", "BatchMode=yes", "-o"]
     assert "-t" in put
     assert "--" in put
-    assert put[put.index("--") + 1] == "hapax-appendix"
+    assert put[put.index("--") + 1] == "secrets-store.example"
     assert "hapax-secret" in put[-1]
     assert "-t" not in get
     assert "litellm/master-key" in get[-1]
+
+
+def test_secrets_host_requires_explicit_config(monkeypatch, tmp_path):
+    monkeypatch.delenv("HAPAX_SECRETS_HOST", raising=False)
+    monkeypatch.setenv("REINS_SECRETS_HOST_FILE", str(tmp_path / "missing-host"))
+    with pytest.raises(ValueError, match="not configured"):
+        hapax_secret.secrets_host()
+    host_file = tmp_path / "configured-host"
+    host_file.write_text("configured-store.example\n", encoding="utf-8")
+    monkeypatch.setenv("REINS_SECRETS_HOST_FILE", str(host_file))
+    assert hapax_secret.secrets_host() == "configured-store.example"
 
 
 def test_ssh_argv_rejects_option_like_host(monkeypatch):
