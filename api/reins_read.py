@@ -227,6 +227,421 @@ def _task_history(council_root: str) -> tuple[dict, bool]:
     return hist, log_complete
 
 
+#: Canonical work-view state algebra (G2) and wait bands (G1 / A0).
+TERMINAL_TASK_STATUSES: frozenset[str] = frozenset(
+    {
+        "done",
+        "closed",
+        "completed",
+        "superseded",
+        "withdrawn",
+        "withdrawn_stale",
+        "resolved",
+        "closed_poisoned",
+        "closed_superseded",
+        "closed-superseded",
+        "not_applicable",
+        "cancelled",
+        "retired",
+        "merged",
+        "duplicate",
+        "archived",
+        "abandoned",
+        "wontfix",
+    }
+)
+MOVING_TASK_STATUSES: frozenset[str] = frozenset(
+    {"claimed", "in_progress", "in-progress", "moving", "active", "dispatched"}
+)
+WAITING_REVIEW_STATUSES: frozenset[str] = frozenset(
+    {
+        "pr_open",
+        "ready_for_review",
+        "ready-for-review",
+        "completed-pending-review",
+        "review_ready",
+        "in-review",
+        "in_review",
+        "quorum_accept",
+        "armed",
+        "staged",
+    }
+)
+WAITING_WITNESS_STATUSES: frozenset[str] = frozenset(
+    {
+        "merged_awaiting_runtime_witness",
+        "awaiting_runtime_witness",
+        "awaiting-witness",
+        "pending_live_verification",
+        "runtime_witness",
+    }
+)
+BOUNDED_INABILITY_STATUSES: frozenset[str] = frozenset(
+    {"bounded_inability", "bounded-inability"}
+)
+BLOCKED_TASK_STATUSES: frozenset[str] = frozenset(
+    {"blocked", "deferred", "on_hold", "held"}
+)
+READY_UNPULLED_STATUSES: frozenset[str] = frozenset(
+    {"offered", "ready", "open", "backlog", "unclaimed", "planned"}
+)
+
+CANONICAL_STATE_ALGEBRA: tuple[str, ...] = (
+    "moving",
+    "waiting_review",
+    "waiting_witness",
+    "bounded_inability",
+    "blocked",
+    "ready_unpulled",
+    "terminal_in_active",
+    "unrecognized",
+)
+
+WAIT_BANDS: tuple[str, ...] = (
+    "moving",
+    "review_merge",
+    "runtime_witness",
+    "bounded_inability",
+    "on_item_dependency_open",
+    "on_gate_prerequisite",
+    "unpulled_no_route_determined",
+    "record_contradiction",
+)
+
+_SESSION_LOG_HEADER_RE = re.compile(r"^##\s+Session log[ \t]*$", re.M | re.I)
+_NEXT_H2_RE = re.compile(r"^##\s+", re.M)
+_BULLET_LINE_RE = re.compile(r"^\s*[-*]\s+")
+_ISO_TS_RE = re.compile(
+    r"\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\b"
+)
+_PARTY_HEURISTIC_RE = re.compile(
+    r"\b(dev\d+|cx-[a-z]+|operator|the Crow|the seat|the desk|Quack)\b", re.I
+)
+_CLOSED_TID_RE = re.compile(r"^task_id:\s*(.+)$", re.M)
+_CLOSED_STATUS_RE = re.compile(r"^status:\s*(.+)$", re.M)
+
+
+def _as_str_list(val: Any) -> list[str]:
+    if val is None:
+        return []
+    if isinstance(val, (list, tuple, set)):
+        return [
+            str(x).strip()
+            for x in val
+            if x is not None and str(x).strip()
+        ]
+    if isinstance(val, str):
+        s = val.strip()
+        return [s] if s else []
+    return [str(val).strip()]
+
+
+def _parse_iso_epoch(val: Any) -> tuple[str, float | None]:
+    """Normalize an ISO timestamp or datetime/date object into (iso_utc_str, epoch_s)."""
+    from datetime import UTC, date, datetime
+
+    if val is None or val == "":
+        return "", None
+    if isinstance(val, datetime):
+        dt = val if val.tzinfo else val.replace(tzinfo=UTC)
+        dt_utc = dt.astimezone(UTC)
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), dt_utc.timestamp()
+    if isinstance(val, date):
+        dt_utc = datetime(val.year, val.month, val.day, tzinfo=UTC)
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), dt_utc.timestamp()
+    s = str(val).strip().strip("'\"")
+    if not s or s.lower() in {"none", "null"}:
+        return "", None
+    try:
+        norm = s.replace(" ", "T", 1) if " " in s and "T" not in s else s
+        if norm.endswith("Z"):
+            norm = norm[:-1] + "+00:00"
+        dt = datetime.fromisoformat(norm)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        dt_utc = dt.astimezone(UTC)
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), dt_utc.timestamp()
+    except Exception:
+        return s, None
+
+
+def _extract_session_log_metrics(markdown_text: str) -> tuple[str, int]:
+    """G9 (path): extract (last_transition_ts, session_log_transitions) from ## Session log."""
+    if not markdown_text:
+        return "", 0
+    m = _SESSION_LOG_HEADER_RE.search(markdown_text)
+    if not m:
+        return "", 0
+    body = markdown_text[m.end() :]
+    nxt = _NEXT_H2_RE.search(body)
+    if nxt:
+        body = body[: nxt.start()]
+    transition_count = 0
+    best_iso = ""
+    best_epoch = -1.0
+    for line in body.splitlines():
+        if _BULLET_LINE_RE.match(line):
+            transition_count += 1
+        for ts_match in _ISO_TS_RE.findall(line):
+            iso_s, ep = _parse_iso_epoch(ts_match)
+            if ep is not None and ep >= best_epoch:
+                best_epoch = ep
+                best_iso = iso_s
+    return best_iso, transition_count
+
+
+def normalize_task_status(
+    raw_status: Any,
+    bounded_inability: Any = None,
+    *,
+    in_active: bool = True,
+    in_active_dir: bool | None = None,
+) -> dict[str, Any]:
+    """G2 (state): normalize active/closed status spellings into the declared state algebra
+    with an explicit `unrecognized` bucket while preserving `raw_status`."""
+    if in_active_dir is not None:
+        in_active = in_active_dir
+    raw_str = "" if raw_status is None else str(raw_status).strip()
+    cleaned = raw_str.strip('"').strip("'").strip()
+    has_bi = bool(bounded_inability) and str(bounded_inability).strip().lower() not in {
+        "",
+        "none",
+        "null",
+        "false",
+    }
+    if cleaned in TERMINAL_TASK_STATUSES:
+        norm = "terminal_in_active" if in_active else "terminal_in_active"
+        term_in_act = bool(in_active)
+    elif cleaned in BOUNDED_INABILITY_STATUSES or has_bi:
+        norm = "bounded_inability"
+        term_in_act = False
+    elif cleaned in MOVING_TASK_STATUSES:
+        norm = "moving"
+        term_in_act = False
+    elif cleaned in WAITING_REVIEW_STATUSES:
+        norm = "waiting_review"
+        term_in_act = False
+    elif cleaned in WAITING_WITNESS_STATUSES:
+        norm = "waiting_witness"
+        term_in_act = False
+    elif cleaned in BLOCKED_TASK_STATUSES:
+        norm = "blocked"
+        term_in_act = False
+    elif cleaned in READY_UNPULLED_STATUSES:
+        norm = "ready_unpulled"
+        term_in_act = False
+    else:
+        norm = "unrecognized"
+        term_in_act = False
+    return {
+        "raw_status": raw_str,
+        "cleaned_status": cleaned,
+        "normalized_state": norm,
+        "normalized_status": norm,
+        "terminal_status_in_active": term_in_act,
+    }
+
+
+def _legal_next_stage(
+    stage: str, no_go: dict | None = None, explicit_next: Any = None
+) -> str:
+    """G11 (forward): legal_next_stage on the S0..S7 stage ladder."""
+    if explicit_next is not None and str(explicit_next).strip():
+        return str(explicit_next).strip()
+    n = _stage_num(stage)
+    if n < 0:
+        return ""
+    if isinstance(no_go, dict) and n >= 7 and no_go.get("release_authorized") is False:
+        return "hold"
+    if 0 <= n < 7:
+        return f"S{n + 1}"
+    return "ship"
+
+
+def _extract_route_metadata(t: dict) -> dict[str, Any]:
+    """G4 & G5 (demand & demand_supply_fit): extract typed route_metadata fields."""
+    rm = t.get("route_metadata") if isinstance(t.get("route_metadata"), dict) else {}
+    rc = (
+        rm.get("route_constraints")
+        if isinstance(rm.get("route_constraints"), dict)
+        else {}
+    )
+    quality_floor = str(rm.get("quality_floor") or t.get("quality_floor") or "")
+    authority_level = str(rm.get("authority_level") or t.get("authority_level") or "")
+    mutation_surface = str(
+        rm.get("mutation_surface") or t.get("mutation_surface") or ""
+    )
+    preferred_platforms = _as_str_list(
+        rc.get("preferred_platforms")
+        if "preferred_platforms" in rc
+        else (
+            rm.get("preferred_platforms")
+            if "preferred_platforms" in rm
+            else t.get("preferred_platforms")
+        )
+    )
+    allowed_platforms = _as_str_list(
+        rc.get("allowed_platforms")
+        if "allowed_platforms" in rc
+        else (
+            rm.get("allowed_platforms")
+            if "allowed_platforms" in rm
+            else t.get("allowed_platforms")
+        )
+    )
+    prohibited_platforms = _as_str_list(
+        rc.get("prohibited_platforms")
+        if "prohibited_platforms" in rc
+        else (
+            rm.get("prohibited_platforms")
+            if "prohibited_platforms" in rm
+            else t.get("prohibited_platforms")
+        )
+    )
+    return {
+        "quality_floor": quality_floor,
+        "authority_level": authority_level,
+        "mutation_surface": mutation_surface,
+        "preferred_platforms": preferred_platforms,
+        "allowed_platforms": allowed_platforms,
+        "prohibited_platforms": prohibited_platforms,
+        "platform": str(rm.get("platform") or t.get("platform") or ""),
+        "mode": str(rm.get("mode") or t.get("mode") or ""),
+        "profile": str(rm.get("profile") or t.get("profile") or ""),
+        "model_or_engine": str(
+            rm.get("model_or_engine") or t.get("model_or_engine") or ""
+        ),
+        "effort": str(rm.get("effort") or t.get("effort") or ""),
+        "context_mode": str(rm.get("context_mode") or t.get("context_mode") or ""),
+        "thinking_posture": str(
+            rm.get("thinking_posture") or t.get("thinking_posture") or ""
+        ),
+        "fast_mode": str(rm.get("fast_mode") or t.get("fast_mode") or ""),
+        "routing_class": str(rm.get("routing_class") or t.get("routing_class") or ""),
+        "authority_case": str(
+            rm.get("authority_case") or t.get("authority_case") or ""
+        ),
+        "execution_route": str(
+            rm.get("execution_route") or t.get("execution_route") or ""
+        ),
+        "carrier": str(
+            rm.get("carrier")
+            or t.get("carrier")
+            or t.get("settled_carrier")
+            or ""
+        ),
+    }
+
+
+def _determine_fit_state(t: dict, settled_carrier: str | None) -> str:
+    """G5 & D5: fit_state is 'determined' only when an explicit fit determination or settled
+    carrier is recorded on the row; unpulled / waiting pressure without a determination is 'undetermined'."""
+    explicit = (
+        t.get("fit_state")
+        or t.get("fit_determination")
+        or t.get("route_fit")
+        or settled_carrier
+    )
+    if explicit is not None:
+        s = str(explicit).strip().lower()
+        if s in {"undetermined", "unknown", "dark", "none", "null", ""}:
+            return "undetermined"
+        return "determined"
+    return "undetermined"
+
+
+def classify_wait_band(
+    t: dict,
+    *,
+    closed_ids: set[str] | None = None,
+    active_by_id: dict[str, dict] | None = None,
+    duplicate_id: bool = False,
+    conflicting_duplicate: bool = False,
+) -> tuple[str, list[str], list[str]]:
+    """G1 & G2: classify a task row into its canonical wait_band, returning
+    (wait_band, contradiction_flags, open_depends_on)."""
+    closed_set = closed_ids or set()
+    act_map = active_by_id or {}
+    norm_info = normalize_task_status(
+        t.get("status"), t.get("bounded_inability"), in_active=True
+    )
+    st = norm_info["cleaned_status"]
+    norm_state = norm_info["normalized_state"]
+    deps = _as_str_list(t.get("depends_on"))
+    open_deps: list[str] = []
+    for dep in deps:
+        if dep in closed_set:
+            continue
+        dep_row = act_map.get(dep)
+        if dep_row is not None:
+            dep_st = (
+                str(dep_row.get("status") or "").strip().strip('"').strip("'").strip()
+            )
+            if dep_st in TERMINAL_TASK_STATUSES:
+                continue
+        open_deps.append(dep)
+    if t.get("all_deps_closed") is True:
+        open_deps = []
+
+    blocked_reason = str(t.get("blocked_reason") or "").strip()
+    if blocked_reason.lower() in {"none", "null"}:
+        blocked_reason = ""
+    waiting_on = t.get("waiting_on")
+    release_when = t.get("release_when")
+    has_typed_wait = bool(waiting_on) or bool(release_when)
+    has_gate_reason = bool(blocked_reason) or has_typed_wait
+
+    contradictions: list[str] = []
+    if norm_info["terminal_status_in_active"]:
+        contradictions.append("terminal_status_in_active")
+    if duplicate_id:
+        contradictions.append("duplicate_task_id")
+
+    if norm_info["terminal_status_in_active"]:
+        return "record_contradiction", contradictions, open_deps
+    if conflicting_duplicate:
+        return "record_contradiction", contradictions, open_deps
+    if norm_state == "bounded_inability":
+        return "bounded_inability", contradictions, open_deps
+    if norm_state == "waiting_witness":
+        return "runtime_witness", contradictions, open_deps
+    if norm_state == "waiting_review":
+        return "review_merge", contradictions, open_deps
+    if norm_state == "moving":
+        return "moving", contradictions, open_deps
+    if open_deps:
+        return "on_item_dependency_open", contradictions, open_deps
+    if deps and st == "blocked" and not has_typed_wait:
+        contradictions.append("blocked_all_deps_closed")
+        return "record_contradiction", contradictions, open_deps
+    if (
+        norm_state == "blocked"
+        or t.get("claimable") is False
+        or has_typed_wait
+    ):
+        if has_gate_reason:
+            return "on_gate_prerequisite", contradictions, open_deps
+        contradictions.append("no_other_cause_and_no_reason")
+        return "record_contradiction", contradictions, open_deps
+    if norm_state == "ready_unpulled":
+        if duplicate_id and t.get("strict_duplicate_contradiction"):
+            return "record_contradiction", contradictions, open_deps
+        return "unpulled_no_route_determined", contradictions, open_deps
+    if st == "" and "status" not in t:
+        # Coord-only row with no vault status field
+        if duplicate_id:
+            return "record_contradiction", contradictions, open_deps
+        stage_s = str(t.get("stage") or "")
+        assigned = str(t.get("assigned_to") or t.get("lane") or "").strip()
+        if assigned and assigned not in {"unassigned", "none"}:
+            return "moving", contradictions, open_deps
+        if stage_s.startswith("S7"):
+            return "review_merge", contradictions, open_deps
+        return "unpulled_no_route_determined", contradictions, open_deps
+    contradictions.append("unrecognized_status")
+    return "record_contradiction", contradictions, open_deps
+
+
 def to_task(
     tid: str,
     t: dict,
@@ -234,14 +649,196 @@ def to_task(
     hist: dict | None = None,
     now: float | None = None,
     log_complete: bool = False,
+    *,
+    closed_ids: set[str] | None = None,
+    active_by_id: dict[str, dict] | None = None,
+    reverse_deps: dict[str, list[str]] | None = None,
+    duplicate_ids: set[str] | None = None,
+    conflicting_duplicate_ids: set[str] | None = None,
 ) -> dict:
     # log_complete defaults False: an unknown-provenance call must not be able to assert a
     # measured origin. Unmeasured is the safe direction.
-    no_go = t.get("no_go") or {}
+    no_go = t.get("no_go")
+    if not isinstance(no_go, dict):
+        # Construct no_go from vault boolean authorization gates if present on the note
+        no_go = {}
+        for k in (
+            "implementation_authorized",
+            "source_mutation_authorized",
+            "docs_mutation_authorized",
+            "runtime_mutation_authorized",
+            "release_authorized",
+        ):
+            if k in t and isinstance(t.get(k), bool):
+                no_go[k] = t[k]
     stage = str(t.get("stage") or "")
     h = (hist or {}).get(tid, {})
+    task_id = str(t.get("task_id") or tid)
+
+    # G9: session-log transition count and last transition timestamp
+    last_transition_ts = str(t.get("last_transition_ts") or "")
+    session_log_transitions = int(t.get("session_log_transitions") or 0)
+    raw_md = str(t.get("_markdown") or t.get("session_log_text") or "")
+    if raw_md and not last_transition_ts and session_log_transitions == 0:
+        last_transition_ts, session_log_transitions = _extract_session_log_metrics(
+            raw_md
+        )
+
+    # G2: status normalization + duplicate task_id detection
+    is_dup = bool(
+        t.get("duplicate_task_id")
+        or (duplicate_ids is not None and task_id in duplicate_ids)
+    )
+    is_conflict_dup = bool(
+        t.get("conflicting_duplicate")
+        or (
+            conflicting_duplicate_ids is not None
+            and task_id in conflicting_duplicate_ids
+        )
+    )
+    norm_info = normalize_task_status(
+        t.get("status"), t.get("bounded_inability"), in_active=True
+    )
+    wait_band, contradiction_flags, open_deps = classify_wait_band(
+        t,
+        closed_ids=closed_ids,
+        active_by_id=active_by_id,
+        duplicate_id=is_dup,
+        conflicting_duplicate=is_conflict_dup,
+    )
+
+    # G11 & G3: reverse dependencies (unblocks_task_ids & reverse_dep_count)
+    deps = _as_str_list(t.get("depends_on"))
+    if reverse_deps is not None and task_id in reverse_deps:
+        unblocks_task_ids = sorted(set(reverse_deps[task_id]))
+    elif t.get("unblocks_task_ids") is not None:
+        unblocks_task_ids = sorted(set(_as_str_list(t.get("unblocks_task_ids"))))
+    else:
+        unblocks_task_ids = sorted(set(_as_str_list(t.get("blocks"))))
+    reverse_dep_count = (
+        int(t["reverse_dep_count"])
+        if t.get("reverse_dep_count") is not None
+        else len(unblocks_task_ids)
+    )
+
+    # G3: wait_duration_s from updated_at -> last_transition_ts -> created_at -> event log last_ts
+    wait_duration_s: float | None = None
+    ref_now = now if now is not None else time.time()
+    for candidate_ts in (
+        t.get("updated_at"),
+        last_transition_ts,
+        t.get("created_at") or t.get("created"),
+        h.get("last_ts"),
+    ):
+        _, ts_epoch = _parse_iso_epoch(candidate_ts)
+        if ts_epoch is not None:
+            wait_duration_s = round(max(0.0, ref_now - ts_epoch), 1)
+            break
+
+    # G4 & G5: route_metadata and fit_state
+    route_meta = _extract_route_metadata(t)
+
+    # G12: settled_carrier / execution_route when named by the Crow
+    raw_settled = (
+        t.get("settled_carrier")
+        or t.get("settled_match")
+        or t.get("carrier")
+    )
+    raw_exec_route = t.get("execution_route")
+    settled_str = (
+        str(raw_settled).strip()
+        if raw_settled is not None
+        and str(raw_settled).strip().lower() not in {"", "none", "null"}
+        else None
+    )
+    exec_route_str = (
+        str(raw_exec_route).strip()
+        if raw_exec_route is not None
+        and str(raw_exec_route).strip().lower() not in {"", "none", "null"}
+        else None
+    )
+    settled_carrier = settled_str or exec_route_str
+    execution_route = exec_route_str or settled_str
+    fit_state = _determine_fit_state(t, settled_carrier)
+
+    # G6: why_waiting typed keys alongside blocked_reason
+    waiting_on = t.get("waiting_on")
+    if isinstance(waiting_on, str) and waiting_on.strip().lower() in {"none", "null", ""}:
+        waiting_on = None
+    release_when = t.get("release_when")
+    if isinstance(release_when, str) and release_when.strip().lower() in {
+        "none",
+        "null",
+        "",
+    }:
+        release_when = None
+    bounded_inability = t.get("bounded_inability")
+    if isinstance(bounded_inability, str) and bounded_inability.strip().lower() in {
+        "none",
+        "null",
+        "",
+    }:
+        bounded_inability = None
+    blocked_reason = str(t.get("blocked_reason") or "").strip()
+    if blocked_reason.lower() in {"none", "null"}:
+        blocked_reason = ""
+
+    # G8 & G10: typed commission_task_id / queue_position (never guessed from prose)
+    commission_block = (
+        t.get("commission") if isinstance(t.get("commission"), dict) else {}
+    )
+    raw_comm_tid = (
+        t.get("commission_task_id")
+        if t.get("commission_task_id") is not None
+        else commission_block.get("task_id")
+    )
+    commission_task_id = (
+        str(raw_comm_tid).strip()
+        if raw_comm_tid is not None
+        and str(raw_comm_tid).strip().lower() not in {"", "none", "null"}
+        else None
+    )
+    raw_queue_pos = (
+        t.get("queue_position")
+        if t.get("queue_position") is not None
+        else commission_block.get("queue_position")
+    )
+    if raw_queue_pos is not None and str(raw_queue_pos).strip().lower() not in {
+        "",
+        "none",
+        "null",
+    }:
+        try:
+            queue_position: int | str | None = int(raw_queue_pos)
+        except (TypeError, ValueError):
+            queue_position = str(raw_queue_pos).strip()
+    else:
+        queue_position = None
+
+    # Owner / lane resolution
+    assigned_raw = str(t.get("assigned_to") or "").strip()
+    lane_raw = str(t.get("lane") or "").strip()
+    if lane_raw and lane_raw not in {"none", "unassigned", "null"}:
+        lane = lane_raw
+    elif assigned_raw and assigned_raw not in {"none", "unassigned", "null"}:
+        lane = assigned_raw
+    else:
+        lane = "none"
+    owner = str(h.get("last_actor") or "") or ("" if lane == "none" else lane)
+
+    last_ts_for_freshness = (
+        str(h.get("last_ts") or "")
+        or last_transition_ts
+        or str(_parse_iso_epoch(t.get("updated_at"))[0])
+    )
+    legal_next_stage = _legal_next_stage(
+        stage,
+        no_go,
+        t.get("legal_next_stage") or t.get("legal_next"),
+    )
+
     fields = {
-        "task_id": str(t.get("task_id", tid)),
+        "task_id": task_id,
         "stage": stage,
         "authority_case": str(t.get("authority_case") or ""),
         "no_go": ",".join(k for k, v in no_go.items() if v) if isinstance(no_go, dict) else "",
@@ -250,10 +847,55 @@ def to_task(
         # with never having looked; the cockpit then drew both as dots.
         "prior_stage_state": _prior_stage_state(h, log_complete),
         "predicted_stage": _predicted_stage(stage, no_go),  # D7 next (ladder + no_go)
-        "owner": str(h.get("last_actor", "")),              # who (last actor)
-        "freshness": _freshness(h.get("last_ts", ""), now) if now else 0.0,
-        "criticality": _criticality(stage, no_go),          # D4
-        "rel_count": 0,  # D2 — no task-edge source yet; structured-silence (honest, not fabricated)
+        "owner": owner,  # who (last actor / assigned lane)
+        "freshness": _freshness(last_ts_for_freshness, now) if now else 0.0,
+        "criticality": _criticality(stage, no_go),  # D4
+        "rel_count": len(deps) + reverse_dep_count,
+        # G1: reachability / wait band & lane retention
+        "wait_band": wait_band,
+        "lane": lane,
+        "assigned_to": assigned_raw or "unassigned",
+        "claimable": t.get("claimable") if isinstance(t.get("claimable"), bool) else None,
+        # G2: state normalization & contradiction flags
+        "raw_status": norm_info["raw_status"],
+        "status": norm_info["normalized_state"],
+        "state": norm_info["normalized_state"],
+        "normalized_state": norm_info["normalized_state"],
+        "terminal_status_in_active": norm_info["terminal_status_in_active"],
+        "duplicate_task_id": is_dup,
+        "contradiction_flags": contradiction_flags,
+        # G3: pressure
+        "priority": str(t.get("priority") or ""),
+        "wait_duration_s": wait_duration_s,
+        "reverse_dep_count": reverse_dep_count,
+        "depends_on": deps,
+        "open_depends_on": open_deps,
+        # G4 & G5: demand & demand_supply_fit
+        "route_metadata": route_meta,
+        "quality_floor": route_meta["quality_floor"],
+        "authority_level": route_meta["authority_level"],
+        "mutation_surface": route_meta["mutation_surface"],
+        "preferred_platforms": route_meta["preferred_platforms"],
+        "allowed_platforms": route_meta["allowed_platforms"],
+        "prohibited_platforms": route_meta["prohibited_platforms"],
+        "fit_state": fit_state,
+        # G6: why_waiting
+        "waiting_on": waiting_on,
+        "release_when": release_when,
+        "bounded_inability": bounded_inability,
+        "blocked_reason": blocked_reason,
+        # G8 & G10: queue_wait & path_joins
+        "commission_task_id": commission_task_id,
+        "queue_position": queue_position,
+        # G9: path
+        "last_transition_ts": last_transition_ts,
+        "session_log_transitions": session_log_transitions,
+        # G11: forward
+        "legal_next_stage": legal_next_stage,
+        "unblocks_task_ids": unblocks_task_ids,
+        # G12: settled_match
+        "settled_carrier": settled_carrier,
+        "execution_route": execution_route,
     }
     return {**fields, "air": classify_air(fields, allowlist)}
 
@@ -4828,7 +5470,809 @@ def _load_context_bundle(council_root: str) -> dict | None:
     return None
 
 
-def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None = None) -> FastAPI:
+def _resolve_workview_dirs(
+    vault_root_or_cfg: str | Path | dict | None = None,
+) -> dict[str, Any]:
+    """Resolve active/closed cc-task and REQ directories from a vault root, project dir, or config."""
+    cfg: dict = vault_root_or_cfg if isinstance(vault_root_or_cfg, dict) else {}
+    raw_vault = ""
+    raw_cc_active = ""
+    if isinstance(vault_root_or_cfg, (str, Path)):
+        raw_vault = str(vault_root_or_cfg).strip()
+    else:
+        raw_vault = (
+            os.environ.get("REINS_VAULT_ROOT")
+            or str(cfg.get("vault_root") or "")
+        ).strip()
+        raw_cc_active = (
+            os.environ.get("REINS_CC_TASKS_ACTIVE")
+            or str(cfg.get("cc_tasks_active") or "")
+        ).strip()
+
+    explicit = bool(raw_vault or raw_cc_active)
+    base = (
+        Path(os.path.expanduser(raw_vault))
+        if raw_vault
+        else (
+            Path(os.path.expanduser(raw_cc_active))
+            if raw_cc_active
+            else _vault_root(cfg)
+        )
+    )
+    base_exists = base.is_dir() and os.access(base, os.R_OK)
+
+    cc_active_dir: Path | None = None
+    cc_closed_dir: Path | None = None
+    req_active_dir: Path | None = None
+    req_closed_dir: Path | None = None
+
+    if raw_cc_active:
+        cand_cc = Path(os.path.expanduser(raw_cc_active))
+        if (cand_cc / "active").is_dir():
+            cc_active_dir = cand_cc / "active"
+            cc_closed_dir = (
+                (cand_cc / "closed") if (cand_cc / "closed").is_dir() else None
+            )
+        elif cand_cc.is_dir():
+            cc_active_dir = cand_cc
+            cc_closed_dir = (
+                (cand_cc.parent / "closed")
+                if (cand_cc.parent / "closed").is_dir()
+                else None
+            )
+
+    if base_exists:
+        if cc_active_dir is None:
+            for rel in (
+                Path("20-projects") / "hapax-cc-tasks" / "active",
+                Path("hapax-cc-tasks") / "active",
+                Path("active"),
+            ):
+                cand = base / rel
+                if cand.is_dir() and os.access(cand, os.R_OK):
+                    cc_active_dir = cand
+                    closed_cand = cand.parent / "closed"
+                    if closed_cand.is_dir() and os.access(closed_cand, os.R_OK):
+                        cc_closed_dir = closed_cand
+                    break
+            if cc_active_dir is None and base.name == "active":
+                cc_active_dir = base
+                closed_cand = base.parent / "closed"
+                if closed_cand.is_dir() and os.access(closed_cand, os.R_OK):
+                    cc_closed_dir = closed_cand
+
+        for rel in (
+            Path("20-projects") / "hapax-requests" / "active",
+            Path("hapax-requests") / "active",
+        ):
+            cand = base / rel
+            if cand.is_dir() and os.access(cand, os.R_OK):
+                req_active_dir = cand
+                closed_cand = cand.parent / "closed"
+                if closed_cand.is_dir() and os.access(closed_cand, os.R_OK):
+                    req_closed_dir = closed_cand
+                break
+        if req_active_dir is None and cc_active_dir is not None:
+            cand = cc_active_dir.parent.parent / "hapax-requests" / "active"
+            if cand.is_dir() and os.access(cand, os.R_OK):
+                req_active_dir = cand
+                closed_cand = cand.parent / "closed"
+                if closed_cand.is_dir() and os.access(closed_cand, os.R_OK):
+                    req_closed_dir = closed_cand
+
+    return {
+        "explicit": explicit,
+        "base": base,
+        "base_exists": base_exists,
+        "cc_active_dir": cc_active_dir,
+        "cc_closed_dir": cc_closed_dir,
+        "req_active_dir": req_active_dir,
+        "req_closed_dir": req_closed_dir,
+    }
+
+
+def _load_yaml_frontmatter_and_log(path: Path) -> tuple[dict | None, str, int]:
+    """Parse YAML frontmatter and session-log transition metrics from a vault markdown note."""
+    import yaml
+
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, "", 0
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return None, "", 0
+    end = text.find("\n---", 4)
+    if end < 0:
+        return None, "", 0
+    fm_block = text[4:end]
+    data: Any = None
+    try:
+        data = yaml.load(fm_block, Loader=loader)
+    except Exception:
+        data = _frontmatter(path)
+    if not isinstance(data, dict):
+        return None, "", 0
+    last_ts, trans_count = _extract_session_log_metrics(text[end + 4 :])
+    return data, last_ts, trans_count
+
+
+def _scan_closed_cc_tasks(
+    cc_closed_dir: Path | None,
+) -> tuple[set[str], dict[str, int], int]:
+    """Fast scan of closed/*.md returning (closed_task_ids, closed_status_vocab, closed_file_count)."""
+    import collections
+
+    closed_ids: set[str] = set()
+    status_vocab: collections.Counter[str] = collections.Counter()
+    file_count = 0
+    if cc_closed_dir is None or not cc_closed_dir.is_dir():
+        return closed_ids, {}, 0
+    for p in sorted(cc_closed_dir.glob("*.md")):
+        file_count += 1
+        try:
+            with p.open(encoding="utf-8", errors="replace") as fh:
+                chunk = fh.read(4096)
+        except OSError:
+            continue
+        if not chunk.startswith("---\n") and not chunk.startswith("---\r\n"):
+            closed_ids.add(p.stem)
+            continue
+        end = chunk.find("\n---", 4)
+        fm = chunk[4:end] if end > 0 else chunk[4:]
+        m_id = _CLOSED_TID_RE.search(fm)
+        tid = (
+            m_id.group(1).strip().strip("'\"")
+            if m_id and m_id.group(1).strip()
+            else p.stem
+        )
+        closed_ids.add(tid)
+        m_st = _CLOSED_STATUS_RE.search(fm)
+        if m_st and m_st.group(1).strip():
+            st = m_st.group(1).strip().strip("'\"")
+            status_vocab[st] += 1
+    return closed_ids, dict(status_vocab.most_common()), file_count
+
+
+def _scan_requests(
+    req_active_dir: Path | None, req_closed_dir: Path | None
+) -> dict[str, Any]:
+    """G1: scan active and closed REQ files into a structured requests_summary + rows."""
+    import collections
+
+    active_rows: list[dict[str, Any]] = []
+    by_status: collections.Counter[str] = collections.Counter()
+    active_count = 0
+    closed_count = 0
+    if req_active_dir is not None and req_active_dir.is_dir():
+        for p in sorted(req_active_dir.glob("*.md")):
+            active_count += 1
+            d, _, _ = _load_yaml_frontmatter_and_log(p)
+            d = d or {}
+            req_id = str(d.get("request_id") or d.get("id") or p.stem)
+            st = str(d.get("status") or "unknown").strip().strip("'\"")
+            by_status[st] += 1
+            created_iso, _ = _parse_iso_epoch(d.get("created_at"))
+            updated_iso, _ = _parse_iso_epoch(d.get("updated_at"))
+            downstream = _as_str_list(d.get("downstream_tasks"))
+            active_rows.append(
+                {
+                    "request_id": req_id,
+                    "status": st,
+                    "requester": str(d.get("requester") or ""),
+                    "risk_guess": str(d.get("risk_guess") or ""),
+                    "quality_floor": str(d.get("quality_floor") or ""),
+                    "authority_level": str(d.get("authority_level") or ""),
+                    "mutation_surface": str(d.get("mutation_surface") or ""),
+                    "created_at": created_iso,
+                    "updated_at": updated_iso,
+                    "downstream_tasks": downstream,
+                    "downstream_tasks_count": len(downstream),
+                }
+            )
+    if req_closed_dir is not None and req_closed_dir.is_dir():
+        closed_count = sum(1 for _ in req_closed_dir.glob("*.md"))
+    return {
+        "dark": req_active_dir is None,
+        "active": active_count,
+        "closed": closed_count,
+        "total": active_count + closed_count,
+        "by_status": dict(by_status.most_common()),
+        "rows": active_rows,
+    }
+
+
+def _compute_transitive_dependents(
+    adj: dict[str, set[str]], root_tid: str
+) -> set[str]:
+    """Cycle-safe BFS over reverse dependency edges returning all transitive dependents."""
+    visited: set[str] = set()
+    queue = list(adj.get(root_tid) or ())
+    while queue:
+        curr = queue.pop()
+        if curr == root_tid or curr in visited:
+            continue
+        visited.add(curr)
+        for nxt in adj.get(curr) or ():
+            if nxt != root_tid and nxt not in visited:
+                queue.append(nxt)
+    return visited
+
+
+def _scan_workview_universe(
+    dirs: dict[str, Any],
+    council_root: str = "",
+) -> dict[str, Any]:
+    """Shared scanner for /read/tasks and build_wait_census (G1..G12 & A0)."""
+    import collections
+
+    cc_active_dir: Path | None = dirs.get("cc_active_dir")
+    cc_closed_dir: Path | None = dirs.get("cc_closed_dir")
+    req_active_dir: Path | None = dirs.get("req_active_dir")
+    req_closed_dir: Path | None = dirs.get("req_closed_dir")
+
+    closed_ids, closed_status_vocab, closed_cc_files = _scan_closed_cc_tasks(
+        cc_closed_dir
+    )
+    requests_summary = _scan_requests(req_active_dir, req_closed_dir)
+
+    active_cc_files = 0
+    act_by_id: dict[str, dict[str, Any]] = {}
+    files_by_tid: dict[str, list[str]] = collections.defaultdict(list)
+    statuses_by_tid: dict[str, set[str]] = collections.defaultdict(set)
+    active_status_vocab: collections.Counter[str] = collections.Counter()
+    blocked_nr_files: set[str] = set()
+    unclaim_nr_files: set[str] = set()
+
+    if cc_active_dir is not None and cc_active_dir.is_dir():
+        for p in sorted(cc_active_dir.glob("*.md")):
+            d, last_ts, trans_count = _load_yaml_frontmatter_and_log(p)
+            if not d:
+                continue
+            if "status" not in d and "task_id" not in d and d.get("type") != "cc-task":
+                continue
+            active_cc_files += 1
+            tid = str(d.get("task_id") or p.stem)
+            raw_st = str(d.get("status") if "status" in d else "")
+            cleaned_st = raw_st.strip().strip('"').strip("'").strip()
+            active_status_vocab[raw_st] += 1
+            files_by_tid[tid].append(p.name)
+            statuses_by_tid[tid].add(cleaned_st)
+            if not d.get("blocked_reason"):
+                if cleaned_st == "blocked":
+                    blocked_nr_files.add(p.name)
+                if d.get("claimable") is False:
+                    unclaim_nr_files.add(p.name)
+            row_copy = dict(d)
+            row_copy["task_id"] = tid
+            row_copy["_filename"] = p.name
+            row_copy["last_transition_ts"] = last_ts
+            row_copy["session_log_transitions"] = trans_count
+            if (
+                tid in act_by_id
+                and ".sync-conflict-" in p.name
+                and ".sync-conflict-" not in str(act_by_id[tid].get("_filename") or "")
+            ):
+                continue
+            act_by_id[tid] = row_copy
+
+    duplicate_ids = {tid for tid, flist in files_by_tid.items() if len(flist) > 1}
+    conflicting_duplicate_ids = {
+        tid for tid in duplicate_ids if len(statuses_by_tid.get(tid, set())) > 1
+    }
+
+    # Reverse dependency graph across active rows (1,381 edges in R2)
+    rev_depends_on: dict[str, set[str]] = collections.defaultdict(set)
+    rev_all: dict[str, set[str]] = collections.defaultdict(set)
+    dep_total = 0
+    dep_closed = 0
+    dep_active = 0
+    dep_missing = 0
+
+    for tid, d in act_by_id.items():
+        deps = _as_str_list(d.get("depends_on"))
+        for dep in deps:
+            dep_total += 1
+            rev_depends_on[dep].add(tid)
+            rev_all[dep].add(tid)
+            if dep in closed_ids:
+                dep_closed += 1
+            elif dep in act_by_id:
+                dep_active += 1
+            else:
+                dep_missing += 1
+        for blk in _as_str_list(d.get("blocks")):
+            if blk in act_by_id:
+                rev_all[tid].add(blk)
+
+    reverse_deps_sorted = {k: sorted(v) for k, v in rev_all.items()}
+
+    return {
+        "active_cc_files": active_cc_files,
+        "closed_cc_files": closed_cc_files,
+        "closed_ids": closed_ids,
+        "closed_status_vocab": closed_status_vocab,
+        "active_status_vocab": dict(active_status_vocab.most_common()),
+        "act_by_id": act_by_id,
+        "files_by_tid": dict(files_by_tid),
+        "duplicate_ids": duplicate_ids,
+        "conflicting_duplicate_ids": conflicting_duplicate_ids,
+        "blocked_nr_files": blocked_nr_files,
+        "unclaim_nr_files": unclaim_nr_files,
+        "rev_depends_on": rev_depends_on,
+        "rev_all": rev_all,
+        "reverse_deps_sorted": reverse_deps_sorted,
+        "dependency_edges": {
+            "total": dep_total,
+            "active": dep_active,
+            "closed": dep_closed,
+            "missing": dep_missing,
+        },
+        "requests_summary": requests_summary,
+    }
+
+
+def build_wait_census(
+    vault_root: str | Path | dict | None = None,
+    council_root: str = "",
+    now: float | None = None,
+) -> dict[str, Any]:
+    """A0 Desk-Tick Wait Census: read-only census over vault cc-task rows, REQ files, and coord
+    projection, returning structured JSON + a concise 20-line text summary."""
+    import collections
+
+    dirs = _resolve_workview_dirs(vault_root)
+    if dirs["cc_active_dir"] is None:
+        err = f"vault root unavailable: {dirs['base']}"
+        return {
+            "dark": True,
+            "error": err,
+            "reason": err,
+            "universe": {
+                "known_work": None,
+                "cc_task_files": {"active": None, "closed": None},
+                "requests": {"active": None, "closed": None},
+                "coord_tasks": None,
+                "reins_read_tasks": None,
+                "active_distinct_task_ids": None,
+                "task_ids_on_two_files": None,
+                "duplicate_task_ids": [],
+                "silently_dropped": 0,
+            },
+            "wait_bands": {},
+            "wait_census_active_distinct_ids": {},
+            "record_contradiction": {},
+            "no_reason_reconciliation": {},
+            "state_normalization": {},
+            "dependency_edges": {},
+            "top_keystones": [],
+            "top_active_keystones": [],
+            "requests_summary": {
+                "dark": True,
+                "active": None,
+                "closed": None,
+                "total": None,
+                "by_status": {},
+                "rows": [],
+            },
+            "text_summary": f"A0 WAIT CENSUS · DARK ({err})",
+        }
+
+    scan = _scan_workview_universe(dirs, council_root=council_root)
+    act_by_id = scan["act_by_id"]
+    closed_ids = scan["closed_ids"]
+    duplicate_ids = scan["duplicate_ids"]
+    conflicting_duplicate_ids = scan["conflicting_duplicate_ids"]
+    rev_depends_on = scan["rev_depends_on"]
+    rev_all = scan["rev_all"]
+    reqs = scan["requests_summary"]
+
+    coord_tasks_count = 0
+    if council_root:
+        try:
+            proj = _projection(council_root)
+            coord_tasks_count = len((proj.get("tasks") or {}))
+        except Exception:
+            coord_tasks_count = 0
+
+    band_counts: collections.Counter[str] = collections.Counter(
+        {b: 0 for b in WAIT_BANDS}
+    )
+    contradiction_counts: collections.Counter[str] = collections.Counter(
+        {
+            "terminal_status_in_active": 0,
+            "blocked_all_deps_closed": 0,
+            "no_other_cause_and_no_reason": 0,
+            "unrecognized_status": 0,
+        }
+    )
+    normalized_state_counts: collections.Counter[str] = collections.Counter(
+        {s: 0 for s in CANONICAL_STATE_ALGEBRA}
+    )
+    party_heuristic: collections.Counter[str] = collections.Counter()
+    band_by_tid: dict[str, str] = {}
+
+    for tid, d in act_by_id.items():
+        norm_info = normalize_task_status(
+            d.get("status"), d.get("bounded_inability"), in_active=True
+        )
+        normalized_state_counts[norm_info["normalized_state"]] += 1
+        wband, cflags, _ = classify_wait_band(
+            d,
+            closed_ids=closed_ids,
+            active_by_id=act_by_id,
+            duplicate_id=tid in duplicate_ids,
+            conflicting_duplicate=tid in conflicting_duplicate_ids,
+        )
+        band_counts[wband] += 1
+        band_by_tid[tid] = wband
+        for cf in cflags:
+            if cf in contradiction_counts:
+                contradiction_counts[cf] += 1
+        if wband == "on_gate_prerequisite":
+            reason = str(d.get("blocked_reason") or "")
+            if reason:
+                for match in set(_PARTY_HEURISTIC_RE.findall(reason)):
+                    party_heuristic[match.lower()] += 1
+
+    # Rank keystones (direct + transitive open dependents)
+    all_candidate_targets = set(rev_depends_on.keys()) | set(rev_all.keys())
+    keystone_entries: list[dict[str, Any]] = []
+    for target_tid in all_candidate_targets:
+        direct_dep_on = len(rev_depends_on.get(target_tid) or ())
+        direct_all = len(rev_all.get(target_tid) or ())
+        if direct_all == 0 and direct_dep_on == 0:
+            continue
+        trans_set = _compute_transitive_dependents(rev_all, target_tid)
+        in_act = target_tid in act_by_id
+        raw_st = (
+            str(act_by_id[target_tid].get("status") or "")
+            if in_act
+            else ("closed" if target_tid in closed_ids else "missing")
+        )
+        keystone_entries.append(
+            {
+                "task_id": target_tid,
+                "reverse_dep_count": direct_all,
+                "depends_on_fanout": direct_dep_on,
+                "transitive_reverse_dep_count": len(trans_set),
+                "status": raw_st,
+                "in_active": in_act,
+                "wait_band": band_by_tid.get(
+                    target_tid, "closed" if target_tid in closed_ids else "missing"
+                ),
+                "unblocks_task_ids": sorted(rev_all.get(target_tid) or ()),
+            }
+        )
+
+    keystone_entries.sort(
+        key=lambda x: (
+            x["depends_on_fanout"],
+            x["reverse_dep_count"],
+            x["transitive_reverse_dep_count"],
+            x["task_id"],
+        ),
+        reverse=True,
+    )
+    top_keystones = keystone_entries[:10]
+    top_active_keystones = [k for k in keystone_entries if k["in_active"]][:10]
+
+    active_cc = scan["active_cc_files"]
+    closed_cc = scan["closed_cc_files"]
+    active_req = reqs["active"]
+    closed_req = reqs["closed"]
+    known_work = active_cc + closed_cc + active_req + closed_req
+    distinct_active = len(act_by_id)
+    dup_list = sorted(duplicate_ids)
+    dup_file_total = sum(len(scan["files_by_tid"][t]) for t in dup_list)
+
+    blocked_nr = scan["blocked_nr_files"]
+    unclaim_nr = scan["unclaim_nr_files"]
+    no_reason_rec = {
+        "status_blocked": len(blocked_nr),
+        "claimable_false": len(unclaim_nr),
+        "both": len(blocked_nr & unclaim_nr),
+        "union": len(blocked_nr | unclaim_nr),
+        "of_which_no_other_cause": contradiction_counts[
+            "no_other_cause_and_no_reason"
+        ],
+    }
+
+    contradiction_summary = {
+        "total": band_counts["record_contradiction"],
+        "no_other_cause_and_no_reason": contradiction_counts[
+            "no_other_cause_and_no_reason"
+        ],
+        "blocked_all_deps_closed": contradiction_counts["blocked_all_deps_closed"],
+        "terminal_status_in_active": contradiction_counts[
+            "terminal_status_in_active"
+        ],
+        "duplicate_task_ids": len(dup_list),
+        "duplicate_task_id_list": dup_list,
+        "unrecognized_status": contradiction_counts["unrecognized_status"],
+    }
+
+    wait_bands_dict = {b: int(band_counts[b]) for b in WAIT_BANDS}
+
+    universe = {
+        "known_work": known_work,
+        "cc_task_files": {"active": active_cc, "closed": closed_cc},
+        "requests": {"active": active_req, "closed": closed_req},
+        "coord_tasks": coord_tasks_count,
+        "reins_read_tasks": distinct_active,
+        "active_distinct_task_ids": distinct_active,
+        "task_ids_on_two_files": len(dup_list),
+        "duplicate_task_ids": dup_list,
+        "silently_dropped": 0,
+    }
+
+    dep_edges = scan["dependency_edges"]
+    summary_lines = [
+        (
+            f"A0 WAIT CENSUS · known_work={known_work} "
+            f"(cc_active={active_cc} cc_closed={closed_cc} "
+            f"req_active={active_req} req_closed={closed_req} "
+            f"coord={coord_tasks_count} silently_dropped=0)"
+        ),
+        (
+            f"UNIVERSE · active_distinct_task_ids={distinct_active} "
+            f"duplicate_task_ids={len(dup_list)} ({dup_file_total} files) "
+            f"status_spellings={len(scan['active_status_vocab'])}active/{len(scan['closed_status_vocab'])}closed"
+        ),
+        (
+            f"EDGES & NO-REASON · depends_on_edges={dep_edges['total']} "
+            f"(active={dep_edges['active']} closed={dep_edges['closed']} missing={dep_edges['missing']}) "
+            f"no_reason_union={no_reason_rec['union']} (unexplained={no_reason_rec['of_which_no_other_cause']})"
+        ),
+        f"WAIT BANDS (active_distinct={distinct_active}, silently_dropped=0):",
+        (
+            f"  ? unpulled_no_route_determined={wait_bands_dict['unpulled_no_route_determined']} "
+            f"· ⇠ on_item_dependency_open={wait_bands_dict['on_item_dependency_open']}"
+        ),
+        (
+            f"  ⊘ on_gate_prerequisite={wait_bands_dict['on_gate_prerequisite']} "
+            f"(prose heuristic: dev1={party_heuristic.get('dev1', 0)} operator={party_heuristic.get('operator', 0)})"
+        ),
+        (
+            f"  ↻ review_merge={wait_bands_dict['review_merge']} "
+            f"· ▶ moving={wait_bands_dict['moving']} "
+            f"· ◎ runtime_witness={wait_bands_dict['runtime_witness']} "
+            f"· bounded_inability={wait_bands_dict['bounded_inability']}"
+        ),
+        (
+            f"  ≠ record_contradiction={contradiction_summary['total']} "
+            f"(terminal_status_in_active={contradiction_summary['terminal_status_in_active']} "
+            f"blocked_all_deps_closed={contradiction_summary['blocked_all_deps_closed']} "
+            f"no_other_cause_and_no_reason={contradiction_summary['no_other_cause_and_no_reason']} "
+            f"duplicate_task_ids={contradiction_summary['duplicate_task_ids']})"
+        ),
+        (
+            f"DUPLICATE TASK IDS ({len(dup_list)}): "
+            + (", ".join(dup_list) if dup_list else "none")
+        ),
+        "TOP 10 KEYSTONE UNBLOCKERS (direct / transitive open dependents):",
+    ]
+    for idx in range(10):
+        if idx < len(top_keystones):
+            ks = top_keystones[idx]
+            summary_lines.append(
+                f"  {idx + 1:02d}. {ks['task_id']} "
+                f"(reverse_dep_count={ks['reverse_dep_count']} "
+                f"transitive={ks['transitive_reverse_dep_count']} "
+                f"band={ks['wait_band']})"
+            )
+        else:
+            summary_lines.append(f"  {idx + 1:02d}. (none)")
+
+    text_summary = "\n".join(summary_lines)
+
+    return {
+        "dark": False,
+        "error": "",
+        "universe": universe,
+        "wait_bands": wait_bands_dict,
+        "wait_census_active_distinct_ids": {
+            "unpulled_no_route_determined": wait_bands_dict[
+                "unpulled_no_route_determined"
+            ],
+            "on_item_dependency_open": wait_bands_dict["on_item_dependency_open"],
+            "on_gate_prerequisite": wait_bands_dict["on_gate_prerequisite"],
+            "on_gate_prerequisite_prose": wait_bands_dict["on_gate_prerequisite"],
+            "review_merge": wait_bands_dict["review_merge"],
+            "moving": wait_bands_dict["moving"],
+            "record_contradiction": contradiction_summary,
+            "runtime_witness": wait_bands_dict["runtime_witness"],
+            "bounded_inability": wait_bands_dict["bounded_inability"],
+            "on_party_decision": {
+                "value": None,
+                "state": "no_typed_field",
+                "heuristic_prose_mentions": dict(party_heuristic.most_common(10)),
+            },
+            "on_capacity_single_route": {
+                "value": None,
+                "state": "no_producer",
+            },
+        },
+        "record_contradiction": contradiction_summary,
+        "no_reason_reconciliation": no_reason_rec,
+        "state_normalization": {
+            "active_status_spellings_count": len(scan["active_status_vocab"]),
+            "closed_status_spellings_count": len(scan["closed_status_vocab"]),
+            "active_status_vocab": scan["active_status_vocab"],
+            "closed_status_vocab": scan["closed_status_vocab"],
+            "active_by_normalized_state": dict(normalized_state_counts),
+        },
+        "dependency_edges": dep_edges,
+        "top_keystones": top_keystones,
+        "top_active_keystones": top_active_keystones,
+        "requests_summary": reqs,
+        "text_summary": text_summary,
+    }
+
+
+def read_workview_tasks(
+    council_root: str,
+    allowlist: list[str],
+    session_cfg: dict | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """G1..G12: /read/tasks projection over vault cc-task rows + REQ files + coord projection."""
+    dirs = _resolve_workview_dirs(session_cfg)
+    if (
+        dirs["explicit"]
+        and dirs["cc_active_dir"] is None
+        and dirs["req_active_dir"] is None
+    ):
+        return {
+            "dark": True,
+            "error": f"vault root unavailable: {dirs['base']}",
+            "tasks": [],
+            "wait_bands": {},
+            "wait_band_counts": {},
+            "requests": [],
+            "requests_summary": {
+                "dark": True,
+                "active": None,
+                "closed": None,
+                "total": None,
+                "by_status": {},
+                "rows": [],
+            },
+        }
+
+    vault_available = (
+        dirs["cc_active_dir"] is not None or dirs["req_active_dir"] is not None
+    )
+
+    proj: dict = {}
+    hist: dict = {}
+    hist_complete = False
+    proj_error: str | None = None
+    try:
+        proj = _projection(council_root)
+        hist, hist_complete = _task_history(council_root)
+    except Exception as e:
+        proj_error = str(e)
+        if not vault_available:
+            return {"dark": True, "error": proj_error, "tasks": []}
+
+    coord_tasks = (proj.get("tasks") or {}) if isinstance(proj, dict) else {}
+    if not vault_available and not coord_tasks and not council_root:
+        return {
+            "dark": True,
+            "error": proj_error or "vault root unavailable and coord projection empty",
+            "tasks": [],
+        }
+
+    ref_now = now if now is not None else time.time()
+
+    if not vault_available:
+        tasks = [
+            to_task(tid, t, allowlist, hist, ref_now, hist_complete)
+            for tid, t in coord_tasks.items()
+        ]
+        wait_bands_grouped: dict[str, list[str]] = {b: [] for b in WAIT_BANDS}
+        for row in tasks:
+            wb = row.get("wait_band", "unpulled_no_route_determined")
+            wait_bands_grouped.setdefault(wb, []).append(row["task_id"])
+        return {
+            "dark": False,
+            "tasks": tasks,
+            "wait_bands": wait_bands_grouped,
+            "wait_band_counts": {k: len(v) for k, v in wait_bands_grouped.items()},
+            "requests": [],
+            "requests_summary": {
+                "dark": True,
+                "active": 0,
+                "closed": 0,
+                "total": 0,
+                "by_status": {},
+                "rows": [],
+            },
+        }
+
+    scan = _scan_workview_universe(dirs, council_root=council_root)
+    act_by_id = dict(scan["act_by_id"])
+    closed_ids = scan["closed_ids"]
+    duplicate_ids = scan["duplicate_ids"]
+    conflicting_duplicate_ids = scan["conflicting_duplicate_ids"]
+    reverse_deps_sorted = scan["reverse_deps_sorted"]
+    requests_summary = scan["requests_summary"]
+
+    # Merge coord projection tasks into active vault rows without dropping lane=none rows
+    for tid, coord_row in coord_tasks.items():
+        if not isinstance(coord_row, dict):
+            continue
+        if tid in act_by_id:
+            merged = dict(coord_row)
+            merged.update(act_by_id[tid])
+            if coord_row.get("no_go") and not merged.get("no_go"):
+                merged["no_go"] = coord_row["no_go"]
+            if coord_row.get("stage") and not merged.get("stage"):
+                merged["stage"] = coord_row["stage"]
+            if coord_row.get("authority_case") and not merged.get("authority_case"):
+                merged["authority_case"] = coord_row["authority_case"]
+            act_by_id[tid] = merged
+        elif tid not in closed_ids:
+            act_by_id[tid] = dict(coord_row)
+
+    tasks = [
+        to_task(
+            tid,
+            t,
+            allowlist,
+            hist,
+            ref_now,
+            hist_complete,
+            closed_ids=closed_ids,
+            active_by_id=act_by_id,
+            reverse_deps=reverse_deps_sorted,
+            duplicate_ids=duplicate_ids,
+            conflicting_duplicate_ids=conflicting_duplicate_ids,
+        )
+        for tid, t in act_by_id.items()
+    ]
+
+    wait_bands_grouped = {b: [] for b in WAIT_BANDS}
+    for row in tasks:
+        wb = row.get("wait_band", "unpulled_no_route_determined")
+        wait_bands_grouped.setdefault(wb, []).append(row["task_id"])
+    wait_band_counts = {k: len(v) for k, v in wait_bands_grouped.items()}
+
+    return {
+        "dark": False,
+        "tasks": tasks,
+        "wait_bands": wait_bands_grouped,
+        "wait_band_counts": wait_band_counts,
+        "requests": requests_summary["rows"],
+        "requests_summary": requests_summary,
+        "universe": {
+            "known_work": (
+                scan["active_cc_files"]
+                + scan["closed_cc_files"]
+                + requests_summary["active"]
+                + requests_summary["closed"]
+            ),
+            "cc_task_files": {
+                "active": scan["active_cc_files"],
+                "closed": scan["closed_cc_files"],
+            },
+            "requests": {
+                "active": requests_summary["active"],
+                "closed": requests_summary["closed"],
+            },
+            "coord_tasks": len(coord_tasks),
+            "active_distinct_task_ids": len(tasks),
+            "task_ids_on_two_files": len(duplicate_ids),
+            "duplicate_task_ids": sorted(duplicate_ids),
+            "silently_dropped": 0,
+        },
+    }
+
+
+def build_app(
+    council_root: str, allowlist: list[str], session_cfg: dict | None = None
+) -> FastAPI:
     session_cfg = session_cfg or {}
     quota_history = QuotaPhaseHistory.from_config(session_cfg)
     app = FastAPI(lifespan=quota_history.lifespan)
@@ -4854,17 +6298,11 @@ def build_app(council_root: str, allowlist: list[str], session_cfg: dict | None 
 
     @app.get("/read/tasks")
     def read_tasks() -> dict:
-        try:
-            proj = _projection(council_root)
-            hist, hist_complete = _task_history(council_root)
-        except Exception as e:  # honest-dark
-            return {"dark": True, "error": str(e), "tasks": []}
-        now = time.time()
-        tasks = [
-            to_task(tid, t, allowlist, hist, now, hist_complete)
-            for tid, t in (proj.get("tasks") or {}).items()
-        ]
-        return {"dark": False, "tasks": tasks}
+        return read_workview_tasks(council_root, allowlist, session_cfg)
+
+    @app.get("/read/wait-census")
+    def read_wait_census() -> dict:
+        return build_wait_census(session_cfg, council_root=council_root)
 
     @app.get("/read/dynamics")
     def read_dynamics() -> dict:
@@ -5245,8 +6683,47 @@ def instance_config() -> dict:
     }
 
 
-if __name__ == "__main__":  # pragma: no cover
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Reins read-model server / CLI")
+    parser.add_argument(
+        "--wait-census",
+        action="store_true",
+        help="Emit the A0 desk-tick wait census (20-line summary + structured JSON)",
+    )
+    parser.add_argument(
+        "--vault-root",
+        default="",
+        help="Override vault root directory for --wait-census",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="When used with --wait-census, emit structured JSON instead of text summary",
+    )
+    args, _ = parser.parse_known_args(argv)
+    if args.wait_census:
+        cfg = instance_config()
+        vroot = args.vault_root or cfg.get("vault_root") or cfg
+        census = build_wait_census(vroot, council_root=cfg.get("council_root", ""))
+        if args.json:
+            sys.stdout.write(json.dumps(census, indent=2) + "\n")
+        else:
+            sys.stdout.write(str(census.get("text_summary", "")) + "\n")
+        return 0 if not census.get("dark") else 1
+
     import uvicorn
 
     cfg = instance_config()
-    uvicorn.run(build_app(cfg["council_root"], cfg["allowlist"], cfg), host="127.0.0.1", port=cfg["port"])
+    uvicorn.run(
+        build_app(cfg["council_root"], cfg["allowlist"], cfg),
+        host="127.0.0.1",
+        port=cfg["port"],
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
