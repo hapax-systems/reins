@@ -63,12 +63,17 @@ BODIES: set[str] = {
     "summary", "detail", "prompt", "takeaway", "caveat", "emphasis", "context", "thesis",
     "missing", "action", "next_evidence", "blocked_reasons", "hardening_notes", "must_include",
     "answer_shape", "blockers", "docs", "aliases", "tags",
+    "error", "reason", "reason_codes", "obsidian_uri",
 }
 # ENVELOPES — structural wrappers / nesting / mirrors; not binnable row attributes.
 ENVELOPES: set[str] = {
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
     "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
+    "grants", "binding", "lease", "honors",  # #50 grant-consumption structural wrappers
+    "events", "traces", "tasks", "epistemics", "sessions", "turns", "blocks", "intake",
+    "audiences", "projections", "capabilities", "gates", "domains", "notes", "dimensions",
+    "producer", "artifacts", "why", "facts", "affordances",
     "workbench_contract", "layers", "nodes", "edges", "package", "health", "tmux", "task",
     "evidence_refs", "evidence_summary", "resume", "defaults", "inquiry_modes", "audience_modes",
     "explanation_paths", "follow_on_tranches", "scenes", "by_kind", "scene_count",
@@ -83,15 +88,19 @@ FACET_BY_NAME: dict[str, str] = {
     "id": "identity", "task_id": "identity", "trace_id": "identity", "gate_id": "identity",
     "domain_id": "identity", "lifecycle_id": "identity", "row_id": "identity",
     "capability_id": "identity", "tool_id": "identity", "map_id": "identity",
+    "grant_id": "identity", "fact_id": "identity", "key": "identity", "affordance_kind": "identity",
     "label": "identity", "kind": "identity", "subject_kind": "identity", "map_kind": "identity",
     "family": "identity", "subject": "identity", "title": "identity",
     # a message filename: free-text-capable, so identity + SENSITIVE (denies on air)
     "basename": "identity",
     # posture (current condition / health / admission)
-    "state": "posture", "no_go": "posture", "readiness": "posture", "criticality": "posture",
+    "state": "posture", "dark": "posture", "no_go": "posture", "readiness": "posture", "criticality": "posture",
     "severity": "posture", "blocker": "posture", "route_state": "posture", "quota_state": "posture",
     "route_binding_state": "posture", "alive": "posture", "idle": "posture", "stalled": "posture",
     "exists": "posture", "attached": "posture", "available": "posture", "ready": "posture",
+    "grant_record_present": "posture", "partial": "posture", "fixture_only": "posture",
+    "prior_stage_state": "posture", "bundle_state": "posture", "value_state": "posture",
+    "freshness_state": "posture",
     "resume_ready": "posture", "truncated": "posture", "freshness_ok": "posture",
     "parity": "posture", "posture": "posture", "maturity": "posture", "coverage": "posture",
     "status": "posture",  # DEFAULT; overridden -> provenance on graph/epistemic domains
@@ -101,11 +110,14 @@ FACET_BY_NAME: dict[str, str] = {
     "unread_rows_truncated": "posture",
     # action (lifecycle motion)
     "stage": "action", "prior_stage": "action", "predicted_stage": "action", "intent": "action",
+    "lifecycle": "action",
     # ownership (the "whose" labels)
     "owner": "ownership", "role": "ownership", "actor": "ownership", "assigned_to": "ownership",
+    "minting_lane": "ownership",
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
+    "minting_session": "place", "vault_root": "place", "rel_path": "place", "folder": "place",
     # a configured DIRECTORY name (the class of `session`/`path`, not the declared `role`
     # vocabulary): place, and SENSITIVE below
     "inbox": "place",
@@ -115,6 +127,7 @@ FACET_BY_NAME: dict[str, str] = {
     "ts": "time", "freshness": "time", "mtime": "time", "updated_at": "time", "observed_at": "time",
     "stale_after": "time", "generated_at": "time", "output_age_s": "time", "relay_age_s": "time",
     "activity_age_s": "time", "age_bucket": "time",
+    "issued_at": "time", "expires_at": "time", "oldest_ts": "time", "modified": "time",
     # unread age (now - mtime), per message and per inbox
     "age_s": "time", "oldest_unread_age_s": "time",
     # the declared ack protocol per inbox: which mode decides "acked" (read-dir | none)
@@ -124,6 +137,7 @@ FACET_BY_NAME: dict[str, str] = {
     "claim_ceiling": "provenance", "claim_surface": "provenance", "mutation_surface": "provenance",
     "hkp_posture": "provenance", "privacy": "provenance", "raw_access": "provenance",
     "air_class": "provenance", "confidence": "provenance", "evidence": "provenance",
+    "confidence_word": "provenance", "prov": "provenance",
     "dark_policy": "provenance", "freshness_policy": "provenance", "egress_class": "provenance",
     "receipt_requirement": "provenance", "receipt_contracts": "provenance", "authority_use": "provenance",
     # measure (scalar quantities)
@@ -131,7 +145,13 @@ FACET_BY_NAME: dict[str, str] = {
     "prompt_tok": "measure", "completion_tok": "measure", "total_tok": "measure", "size": "measure",
     "attention": "measure", "route_count": "measure", "ok_count": "measure", "blocked_count": "measure",
     "evidence_count": "measure", "rel_count": "measure", "receipt_count": "measure", "count": "measure",
-    "total": "measure", "depth_count": "measure",
+    "total": "measure", "depth_count": "measure", "honor_count": "measure", "fact_count": "measure",
+    "receipts": "measure", "stale": "measure",
+    "missing_sources": "measure", "missing_evidence": "measure", "map_nodes": "measure",
+    "map_edges": "measure", "package_rows": "measure", "blocked": "measure", "false_gates": "measure",
+    "lanes": "measure", "preview": "measure", "p0_incidents": "measure", "p0_ledger_tail": "measure",
+    "planning_attention": "measure", "planning_requests": "measure", "request_attention": "measure",
+    "request_malformed": "measure", "security_signals": "measure",
     # lanebus counts: present / acked / unread, and inboxes that could not be read at all (travels
     # with the totals so a partial sum is never read as a whole one)
     "files_present": "measure", "files_acked": "measure", "unread_count": "measure",
@@ -143,8 +163,9 @@ FACET_BY_NAME: dict[str, str] = {
     "benchmark_coverage": "variant", "fixed_overhead": "variant", "spend_model": "variant",
     "capability_class": "variant", "surface_family": "variant", "model": "variant",
     "model_id": "variant", "mode": "variant", "profile": "variant", "res": "variant",
-    "lens": "variant", "inquiry_mode": "variant", "audience_mode": "variant",
+    "lens": "variant", "inquiry_mode": "variant", "audience_mode": "variant", "audience": "variant",
     "explanation_path": "variant", "default_lens": "variant", "meta": "variant",
+    "text_domain": "variant", "shape": "variant",
 }
 
 # ── PER-(domain, attr) OVERRIDES (the field-level homonyms) ───────────────────
@@ -185,6 +206,7 @@ def classify(domain: str, attr: str) -> str:
 # per-attribute, not only per-facet.)
 SENSITIVE: set[str] = {
     "path", "session",          # filesystem / tmux PII
+    "minting_session", "vault_root", "rel_path", "folder",  # session / vault path PII
     "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
     "inbox",  # a configured directory name: free-text-chosen, may carry an identifier

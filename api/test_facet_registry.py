@@ -85,18 +85,425 @@ INVENTORY: dict[str, list[str]] = {
     "LanebusUnread": ["basename", "mtime", "age_s", "air"],
     "LanebusTotals": ["inboxes", "unknown_inboxes", "files_present", "files_acked", "unread_count",
                       "unmeasured_inboxes", "oldest_unread_age_s"],
+    # Reins #50 — the read-only grant-consumption projection.
+    "GrantConsumption": ["dark", "error", "authority", "coverage", "grants"],
+    "GrantRow": ["grant_id", "grant_record_present", "minting_lane", "minting_session", "binding", "lease",
+                 "issued_at", "expires_at", "state", "honors", "honor_count", "air"],
+    "GrantHonor": ["role", "session", "ts", "air"],
+    # Vault summary note rows (path-like fields vault_root, rel_path, folder are SENSITIVE -> deny on air).
+    "VaultSummary": ["vault_root", "notes"],
+    "VaultNote": ["rel_path", "folder", "title", "modified", "size", "status", "tags", "obsidian_uri"],
 }
 
 
-def test_every_live_attr_resolves():
-    """Exhaustiveness: no live (domain, attr) lands in UNRESOLVED limbo — the whole point of the cut."""
+def _collect_payload_attrs(value: object, out: set[str], parent_key: str = "") -> None:
+    """Recursively collect every attribute key emitted in a /read/* JSON payload.
+
+    Skips keys inside dynamic map envelopes whose keys are data values (e.g., `air` per-field
+    verdict maps, `by_kind` dynamic counters, `projections` keyed by audience name) while still
+    walking nested projection objects inside `projections`.
+    """
+    if isinstance(value, list):
+        for item in value:
+            _collect_payload_attrs(item, out, parent_key)
+    elif isinstance(value, dict):
+        if parent_key in ("air", "by_kind", "facet_by_name", "facets"):
+            return
+        if parent_key == "projections":
+            for nested in value.values():
+                _collect_payload_attrs(nested, out, "")
+            return
+        for key, item in value.items():
+            key_str = str(key)
+            out.add(key_str)
+            _collect_payload_attrs(item, out, key_str)
+
+
+# Routes that emit populated domain rows/keys beyond their dark envelope in _populated_read_route_cfg,
+# vs. the two routes whose live producers are external (Langfuse HTTP and CapabilityIO block stream)
+# and therefore remain intentionally honest-dark in offline unit tests.
+POPULATED_ROUTES: frozenset[str] = frozenset({
+    "/read/capabilities",
+    "/read/context",
+    "/read/domains",
+    "/read/dynamics",
+    "/read/epistemics",
+    "/read/events",
+    "/read/gates",
+    "/read/grant-consumption",
+    "/read/intake",
+    "/read/lanebus",
+    "/read/observe",
+    "/read/session/{role}",
+    "/read/session/{role}/turns",
+    "/read/sessions",
+    "/read/tasks",
+    "/read/vault",
+})
+
+DARK_ONLY_ROUTES: frozenset[str] = frozenset({
+    "/read/session/{role}/turns/{ts}/blocks",
+    "/read/traces",
+})
+
+
+def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
+    """Build a temporary read-only fixture config so all 16 POPULATED_ROUTES emit populated rows
+    and keys beyond their unconfigured/dark envelopes (including empty bound HAPAX_SPINE_CONFIG_DIR
+    and capability_inventory_path)."""
+    import json
+    import os
+    from hapax.spine.coord_event_log import CoordEvent, CoordWriter, default_event_log
+
+    council_root = tmp_path / "council"
+    (council_root / "config").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HAPAX_SPINE_CONFIG_DIR", str(council_root / "config"))
+
+    coord_dir = tmp_path / "coord"
+    coord_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HAPAX_COORD_DIR", str(coord_dir))
+    log = default_event_log()
+    log.append(
+        CoordEvent(
+            event_id="evt-fixture-1",
+            event_type="sdlc.stage_transition",
+            timestamp="2026-10-20T00:00:00Z",
+            actor="cc-reins",
+            subject="task-fixture-1",
+            authority_case="A1",
+            payload={"from_stage": "S1", "to_stage": "S2", "summary": "fixture transition"},
+        ),
+        writer=CoordWriter(kind="daemon", name="coord-daemon"),
+    )
+
+    state_file = tmp_path / "coordinator-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "lanes": {
+                    "cc-reins": {
+                        "platform": "claude",
+                        "state": "active",
+                        "session": "tmux-reins",
+                        "claimed_task": "task-fixture-1",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(state_file, (1000.0, 1000.0))
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(state_file))
+
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    gid = "a" * 32
+    (grants_dir / "first.grant").write_text(
+        json.dumps(
+            {
+                "kind": "escape",
+                "grant_id": gid,
+                "role": "lane-mint",
+                "session": "session-mint",
+                "issued_at": "2026-10-20T00:00:00Z",
+                "expires_at": "2026-10-20T01:00:00Z",
+                "lease_state": "active",
+            }
+        ),
+        encoding="utf-8",
+    )
+    honor_ledger = tmp_path / "honors.jsonl"
+    honor_ledger.write_text(
+        json.dumps(
+            {
+                "kind": "escape_grant_honored",
+                "grant_id": gid,
+                "role": "lane-use",
+                "session": "session-use",
+                "ts": "2026-10-20T00:05:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    inbox_dir = tmp_path / "inbox-alpha"
+    (inbox_dir / "read").mkdir(parents=True)
+    (inbox_dir / "20261020T000000Z-sample.md").write_text("hello\n", encoding="utf-8")
+
+    vault_root = tmp_path / "vault"
+    (vault_root / "30-areas").mkdir(parents=True)
+    (vault_root / "30-areas" / "note.md").write_text(
+        "---\nstatus: active\ntags: [reins]\n---\n# Note\n",
+        encoding="utf-8",
+    )
+
+    bundle_path = council_root / "reins-context-bundle.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "evaluation": {"bundle_state": "lit"},
+                "facts": {
+                    "tasks": [
+                        {
+                            "fact_id": "f-1",
+                            "subject_ref": "task-1",
+                            "freshness_state": "fresh",
+                            "confidence_word": "observed",
+                            "text_domain": True,
+                            "state": {"value_state": "lit", "reason_codes": []},
+                            "air": {
+                                "operator_private": "allow",
+                                "yard_context": "allow",
+                                "hapax_substrate": "allow",
+                                "public_or_air": "deny",
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(bundle_path))
+
+    arch_dir = council_root / "docs" / "architecture"
+    arch_dir.mkdir(parents=True, exist_ok=True)
+    (arch_dir / "system-dynamics-map.seed.json").write_text(
+        json.dumps(
+            {
+                "map_id": "sdm-1",
+                "thesis": "fixture thesis",
+                "layers": [{"id": "L1", "label": "Layer 1"}],
+                "nodes": [
+                    {
+                        "id": "N1",
+                        "label": "Node 1",
+                        "kind": "stock",
+                        "layer": "L1",
+                        "status": "observed",
+                        "resolution": "high",
+                        "summary": "s",
+                        "context": "c",
+                        "docs": ["doc-1"],
+                    }
+                ],
+                "edges": [
+                    {
+                        "id": "E1",
+                        "source": "N1",
+                        "target": "N1",
+                        "relation": "drives",
+                        "status": "observed",
+                        "layer": "L1",
+                        "resolution": "high",
+                        "confidence": "high",
+                        "summary": "e",
+                        "docs": ["doc-1"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (arch_dir / "system-dynamics-map.claims.json").write_text(
+        json.dumps({"claims": [{"id": "C1", "status": "observed", "summary": "claim"}]}),
+        encoding="utf-8",
+    )
+
+    cap_inv = tmp_path / "capability-inventory.json"
+    cap_inv.write_text(
+        json.dumps(
+            {
+                "total": 1,
+                "with_validation_gaps": 0,
+                "freshness_counts": {"dark": 0},
+                "rows": [
+                    {
+                        "capability_id": "cap-fixture-1",
+                        "shape": "cli",
+                        "domain": "sdlc",
+                        "freshness_state": "fresh",
+                        "authority_ceiling": "metadata-only",
+                        "gaps": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    domain_pack = tmp_path / "domain-pack.json"
+    domain_pack.write_text(
+        json.dumps(
+            {
+                "authority": "metadata-only",
+                "generated_at": "2026-10-20T00:00:00Z",
+                "default_lens": "overview",
+                "domains": [
+                    {
+                        "domain_id": "dom-1",
+                        "label": "Domain 1",
+                        "lifecycle": "sdlc",
+                        "terrain": "code",
+                        "depth": "deep",
+                        "scope": "instance",
+                        "state": "observed",
+                        "windows": ["w1"],
+                        "surfaces": ["s1"],
+                        "parity": "full",
+                    }
+                ],
+                "relations": [{"source": "dom-1", "target": "dom-1", "relation": "contains"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    req_intake = tmp_path / "request-intake.json"
+    req_intake.write_text(
+        json.dumps({"combined_attention_count": 1, "malformed_count": 1, "unread_count": 0, "stale_count": 0}),
+        encoding="utf-8",
+    )
+    plan_intake = tmp_path / "planning-feed.json"
+    plan_intake.write_text(
+        json.dumps({"total_requests": 2, "attention_count": 1}),
+        encoding="utf-8",
+    )
+    p0_state = tmp_path / "p0-state.json"
+    p0_state.write_text(json.dumps({"open_count": 1}), encoding="utf-8")
+    p0_events = tmp_path / "p0-events.jsonl"
+    p0_events.write_text(json.dumps({"id": "p0-1", "status": "open"}) + "\n", encoding="utf-8")
+    sec_state = tmp_path / "security-signals.json"
+    sec_state.write_text(json.dumps({"open_count": 1}), encoding="utf-8")
+
+    cfg = {
+        "council_root": str(council_root),
+        "grant_dir": str(grants_dir),
+        "grant_honor_ledger": str(honor_ledger),
+        "lanebus_inboxes": [
+            {"inbox": "alpha", "path": str(inbox_dir), "count_only": False, "ack": "read-dir"}
+        ],
+        "vault_root": str(vault_root),
+        "capability_inventory_path": str(cap_inv),
+        "domain_pack_paths": [str(domain_pack)],
+        "request_intake_state": str(req_intake),
+        "planning_feed_state": str(plan_intake),
+        "p0_incident_state": str(p0_state),
+        "p0_incident_events": str(p0_events),
+        "security_signal_state": str(sec_state),
+    }
+    return str(council_root), cfg
+
+
+def test_every_live_attr_resolves(tmp_path, monkeypatch):
+    """Exhaustiveness: no live (domain, attr) in INVENTORY or registered /read/* route payload key
+    lands in UNRESOLVED limbo.
+
+    Walks all 18 registered GET /read/* routes (excluding /read/facets) in both deterministic dark
+    mode and populated fixture mode:
+      - 16 routes in POPULATED_ROUTES must emit populated keys beyond their dark envelope (with
+        non-empty grants + honors pinned on /read/grant-consumption, and empty bound
+        HAPAX_SPINE_CONFIG_DIR + capability_inventory_path pinned on /read/capabilities);
+      - 2 routes in DARK_ONLY_ROUTES (/read/traces and /read/session/{role}/turns/{ts}/blocks) are
+        explicitly declared dark-only in offline unit tests, so no newly added route can silently
+        pass as an unpopulated envelope."""
+    import reins_read as rr
+    from fastapi.testclient import TestClient
+
     unresolved = []
     for domain, attrs in INVENTORY.items():
         for attr in attrs:
             r = fr.classify(domain, attr)
             if r.startswith("UNRESOLVED"):
                 unresolved.append(f"{domain}.{attr}")
-    assert not unresolved, f"{len(unresolved)} attrs do not resolve to a facet/edge/body/envelope: {unresolved}"
+
+    # 1. Deterministic dark walk (unbound spine config and absent coordinator/context files).
+    monkeypatch.delenv("HAPAX_SPINE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(tmp_path / "absent-coordinator-state.json"))
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(tmp_path / "absent-context-bundle.json"))
+    dark_app = rr.build_app("", fr.air_allowlist(), {})
+    read_routes = sorted(
+        r.path
+        for r in dark_app.routes
+        if getattr(r, "path", "").startswith("/read/") and r.path != "/read/facets"
+    )
+    assert set(read_routes) == (POPULATED_ROUTES | DARK_ONLY_ROUTES), (
+        f"Every /read/* route must be explicitly classified in POPULATED_ROUTES or DARK_ONLY_ROUTES; "
+        f"diff={set(read_routes) ^ (POPULATED_ROUTES | DARK_ONLY_ROUTES)}"
+    )
+    assert not (POPULATED_ROUTES & DARK_ONLY_ROUTES)
+
+    dark_attrs_by_route: dict[str, set[str]] = {}
+    all_walked_attrs: set[str] = set()
+    with TestClient(dark_app) as client:
+        for route_path in read_routes:
+            url = route_path.replace("{role}", "absent-role").replace("{ts}", "2026-06-26T18:40:01Z")
+            resp = client.get(url)
+            assert resp.status_code == 200, f"{route_path} (dark) returned {resp.status_code}"
+            attrs: set[str] = set()
+            _collect_payload_attrs(resp.json(), attrs)
+            assert attrs, f"{route_path} (dark) emitted an empty payload"
+            dark_attrs_by_route[route_path] = attrs
+            all_walked_attrs |= attrs
+            for attr in sorted(attrs):
+                if fr.classify("", attr).startswith("UNRESOLVED"):
+                    unresolved.append(f"{route_path}[dark].{attr}")
+
+    # 2. Populated fixture walk (bound HAPAX_SPINE_CONFIG_DIR + populated fixtures for all 16 POPULATED_ROUTES).
+    council_root, pop_cfg = _populated_read_route_cfg(tmp_path, monkeypatch)
+    pop_app = rr.build_app(council_root, fr.air_allowlist(), pop_cfg)
+    with TestClient(pop_app) as client:
+        for route_path in read_routes:
+            url = route_path.replace("{role}", "cc-reins").replace("{ts}", "2026-06-26T18:40:01Z")
+            resp = client.get(url)
+            assert resp.status_code == 200, f"{route_path} (populated) returned {resp.status_code}"
+            payload = resp.json()
+            if route_path == "/read/grant-consumption":
+                assert payload.get("dark") is False
+                assert len(payload.get("grants") or []) >= 1, "populated /read/grant-consumption must emit grants"
+                assert len(payload["grants"][0].get("honors") or []) >= 1, "populated grant must emit honors"
+            if route_path == "/read/capabilities":
+                assert payload.get("dark") is False
+            attrs = set()
+            _collect_payload_attrs(payload, attrs)
+            assert attrs, f"{route_path} (populated) emitted an empty payload"
+            all_walked_attrs |= attrs
+            if route_path in POPULATED_ROUTES:
+                if route_path == "/read/gates":
+                    assert payload.get("dark") is False and len((payload.get("gates") or {}).get("rows") or []) >= 1
+                elif route_path == "/read/observe":
+                    assert len(payload.get("dimensions") or []) >= 1
+                else:
+                    added = attrs - dark_attrs_by_route[route_path]
+                    assert added, (
+                        f"Populated route {route_path} emitted no keys beyond its dark shape: {sorted(attrs)}"
+                    )
+            for attr in sorted(attrs):
+                if fr.classify("", attr).startswith("UNRESOLVED"):
+                    unresolved.append(f"{route_path}[populated].{attr}")
+
+    # Pin that every newly registered attribute in #56 is actually emitted by the route walk (R2).
+    newly_registered_56 = {
+        "affordance_kind", "affordances", "artifacts", "audience", "audiences", "binding",
+        "blocked", "blocks", "bundle_state", "capabilities", "confidence_word", "dark",
+        "dimensions", "domains", "epistemics", "error", "events", "expires_at", "fact_count",
+        "fact_id", "facts", "false_gates", "fixture_only", "folder", "freshness_state", "gates",
+        "grant_id", "grant_record_present", "grants", "honor_count", "honors", "intake",
+        "issued_at", "key", "lanes", "lease", "lifecycle", "map_edges", "map_nodes",
+        "minting_lane", "minting_session", "missing_evidence", "missing_sources", "modified",
+        "notes", "obsidian_uri", "oldest_ts", "p0_incidents", "p0_ledger_tail", "package_rows",
+        "partial", "planning_attention", "planning_requests", "preview", "prior_stage_state",
+        "producer", "projections", "prov", "reason", "reason_codes", "receipts", "rel_path",
+        "request_attention", "request_malformed", "security_signals", "sessions", "shape",
+        "stale", "tasks", "text_domain", "traces", "turns", "value_state", "vault_root", "why",
+    }
+    unemitted_56 = newly_registered_56 - all_walked_attrs
+    assert not unemitted_56, f"Newly registered #56 attrs not emitted by any fixture: {sorted(unemitted_56)}"
+
+    assert not unresolved, (
+        f"{len(unresolved)} attrs do not resolve to a facet/edge/body/envelope: {unresolved}"
+    )
 
 
 def test_exactly_nine_facets_in_citation_order():
@@ -188,10 +595,15 @@ def test_relations_are_edges_not_facets():
 
 
 def test_sensitive_attrs_deny_on_air_regardless_of_facet():
-    # path (filesystem PII) and session (tmux name) are place-facet but DENY on air (per-attr override).
+    # path (filesystem PII), session/minting_session (tmux/session name), and vault path fields
+    # (vault_root, rel_path, folder) are place-facet but DENY on air (per-attr override).
     assert fr.classify("EvidenceRef", "path") == "place"
     assert fr.air_policy("EvidenceRef", "path") == "deny"
     assert fr.air_policy("Session", "session") == "deny"
+    for pii_place in ("rel_path", "vault_root", "folder", "minting_session"):
+        assert fr.classify("", pii_place) == "place", f"{pii_place} must classify as place"
+        assert fr.air_policy("", pii_place) == "deny", f"{pii_place} must DENY on air"
+        assert pii_place not in fr.air_allowlist(), f"{pii_place} must NOT enter air_allowlist()"
     # a non-sensitive place attr still airs:
     assert fr.air_policy("Session", "platform") == "air"
 
@@ -237,38 +649,61 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
     PII-bearing field, and NEVER a financial one. Pins that adopting the registry as the live
     allowlist cannot leak.
 
+    Vets EVERY name that the whole allowlist (`fr.air_allowlist()`) newly airs vs `CURRENT_ALLOW`
+    (not only `INVENTORY`), so removing any entry from `SENSITIVE` (e.g., `rel_path`, `vault_root`,
+    `folder`, `minting_session`) immediately turns this test red.
+
     Two deny-reasons, not one: PII (who) and FINANCIAL (how much). This test originally modelled only
     PII, which is exactly how "cost" came to be vetted as safe — it is numbers with no PII, and it
     still must not broadcast."""
-    # VETTED safe newly-aired set (each eyeballed: structural/operational, NO PII/free-text). A NEW
-    # field that newly-airs trips this test for re-vetting (drift guard) — the safety review is pinned.
+    # VETTED safe newly-aired set across the WHOLE air_allowlist() (each eyeballed: structural/
+    # operational, NO PII/free-text). A NEW field that newly-airs trips this test for re-vetting.
     VETTED_NEWLY_AIR = {
         # the skeleton repair (were denied, operational metadata):
         "criticality", "freshness", "prior_stage", "predicted_stage", "rel_count",
         "magnitude", "gate", "meta",
-        # Trace LLM-metadata repair (numbers, no PII) — the flat list also omitted these.
-        # "cost" was vetted here as "numbers, no PII" — true, and the wrong criterion: the operator
-        # bar denies spend for broadcast-economics reasons, not privacy ones. It is FINANCIAL-denied.
+        # Trace LLM-metadata repair (numbers, no PII) — "cost" is FINANCIAL-denied:
         "latency_ms", "prompt_tok", "completion_tok", "total_tok", "size", "total",
         # recency timestamps (Time facet):
-        "activity_age_s", "mtime", "updated_at",
-        # structured identity/ownership/action/variant (ids, lane names, verbs — not free-text):
+        "activity_age_s", "mtime", "updated_at", "modified", "oldest_ts",
+        # structured identity/ownership/action/variant/provenance (ids, lane names, verbs, enum tokens — not free-text):
         "actor", "assigned_to", "model", "trace_id", "intent", "ready", "attached",
         "lens", "inquiry_mode", "audience_mode", "explanation_path",
+        "authority_case", "confidence", "prov",
         # edge ref IDs (task/node/route ids — safe; path-like refs are SENSITIVE-denied):
         "claimed_task", "route", "focus_node_ids", "focus_edge_ids", "selection_group", "selection_id",
-        # Reins slice 1: four counts, a directory condition token, two ages. The projection's three
-        # NAME-bearing fields are NOT here — `basename` and `inbox` are SENSITIVE (deny on air).
+        # Reins slice 1: four counts, a directory condition token, two ages. `basename` and `inbox`
+        # are SENSITIVE (deny on air).
         "files_present", "files_acked", "unread_count", "unknown_inboxes", "read_dir",
         "oldest_unread_age_s", "age_s", "ack", "unread_rows_truncated", "unmeasured_inboxes",
+        # Reins #50 + honest-dark: operational grant metadata (8-hex id prefix, presence bool,
+        # minting lane role, lease timestamps, honor count, dark bool). `minting_session` is
+        # SENSITIVE (denies on air), `error` is a BODY (denies on air), and `grants`/`binding`/
+        # `lease`/`honors` are ENVELOPES (do not enter air_allowlist).
+        "dark", "grant_id", "grant_record_present", "minting_lane", "issued_at", "expires_at",
+        "honor_count",
+        # Reins #56 read-surface structural/operational fields (counts, booleans, state tokens,
+        # enum-like ids/labels; path-PII fields `rel_path`, `vault_root`, `folder` are SENSITIVE):
+        "affordance_kind", "audience", "blocked", "bundle_state", "confidence_word",
+        "depth_count", "fact_count", "fact_id", "false_gates", "fixture_only",
+        "freshness_state", "key", "lanes", "map_edges", "map_nodes",
+        "missing_evidence", "missing_sources", "p0_incidents", "p0_ledger_tail",
+        "package_rows", "partial", "planning_attention", "planning_requests",
+        "preview", "prior_stage_state", "receipts", "request_attention",
+        "request_malformed", "security_signals", "shape", "stale", "text_domain",
+        "value_state",
     }
-    newly_aired = set()
+    newly_aired = {
+        attr for attr in fr.air_allowlist() if attr not in CURRENT_ALLOW
+    }
     for domain, attrs in INVENTORY.items():
         for attr in attrs:
             if attr not in CURRENT_ALLOW and fr.air_policy(domain, attr) == "air":
                 newly_aired.add(attr)
     unexpected = newly_aired - VETTED_NEWLY_AIR
     assert not unexpected, f"registry would newly-air UNVETTED fields vs _DEFAULT_ALLOW: {sorted(unexpected)}"
+    unexercised = VETTED_NEWLY_AIR - newly_aired
+    assert not unexercised, f"VETTED_NEWLY_AIR contains stale/non-aired entries: {sorted(unexercised)}"
 
 
 def test_air_allowlist_airs_skeleton_denies_pii_and_bodies():
@@ -280,7 +715,7 @@ def test_air_allowlist_airs_skeleton_denies_pii_and_bodies():
     # PII + free-text bodies + path-like refs do NOT air:
     for deny in ("path", "session", "subject", "label", "title", "parent_spec", "evidence_ref",
                  "route_evidence_ref", "summary", "detail", "missing", "action", "blockers",
-                 "basename", "inbox"):
+                 "basename", "inbox", "rel_path", "vault_root", "folder", "minting_session"):
         assert deny not in al, f"{deny} must NOT air"
 
 
