@@ -1246,7 +1246,7 @@ def test_checked_in_capability_surface_pack_carries_explicit_ontology():
 
 
 def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, tmp_path):
-    monkeypatch.setattr("reins_read._projection", lambda _root: {"tasks": {
+    monkeypatch.setattr("reins_read._projection", lambda _root, **kw: {"tasks": {
         "task-a": {
             "task_id": "task-a",
             "stage": "S7_RELEASE",
@@ -1668,3 +1668,410 @@ def test_read_sessions_marks_a_live_producer(tmp_path, monkeypatch):
     body = TestClient(app).get("/read/sessions").json()
     assert body.get("partial") is not True
     assert body["producer"]["state"] == "live"
+
+
+# --- E1.3 Reins Work-View G1-G12 & A0 Wait Census -----------------------------------------------
+
+
+def _write_md(path: Path, fm_lines: list[str], body: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+    path.write_text(text, encoding="utf-8")
+
+
+def test_g2_normalize_task_status_covers_all_active_and_closed_spellings():
+    """G2: All 17 active + 13 closed status spellings map deterministically into the declared
+    state algebra; unknown values land in 'unrecognized' and preserve raw_status."""
+    expected_map = {
+        "in-progress": ("moving", False),
+        "in_progress": ("moving", False),
+        "active": ("moving", False),
+        "dispatched": ("moving", False),
+        "completed-pending-review": ("waiting_review", False),
+        "ready-for-review": ("waiting_review", False),
+        "in-review": ("waiting_review", False),
+        "staged": ("waiting_review", False),
+        "awaiting-witness": ("waiting_witness", False),
+        "pending_live_verification": ("waiting_witness", False),
+        "bounded-inability": ("bounded_inability", False),
+        "blocked": ("blocked", False),
+        "open": ("ready_unpulled", False),
+        "ready": ("ready_unpulled", False),
+        "planned": ("ready_unpulled", False),
+        "done": ("terminal_in_active", True),
+        "completed": ("terminal_in_active", True),
+        "closed": ("terminal_in_active", True),
+        "cancelled": ("terminal_in_active", True),
+        "superseded": ("terminal_in_active", True),
+        "retired": ("terminal_in_active", True),
+        "merged": ("terminal_in_active", True),
+        "closed-superseded": ("terminal_in_active", True),
+        "duplicate": ("terminal_in_active", True),
+        "resolved": ("terminal_in_active", True),
+        "archived": ("terminal_in_active", True),
+        "abandoned": ("terminal_in_active", True),
+        "wontfix": ("terminal_in_active", True),
+    }
+    for raw, (expected_norm, expected_term) in expected_map.items():
+        res = reins_read.normalize_task_status(raw, in_active_dir=True)
+        assert res["raw_status"] == raw
+        assert res["normalized_status"] == expected_norm
+        assert res["terminal_status_in_active"] is expected_term
+
+    # Closed directory does not flag terminal_status_in_active
+    closed_res = reins_read.normalize_task_status("done", in_active_dir=False)
+    assert closed_res["normalized_status"] == "terminal_in_active"
+    assert closed_res["terminal_status_in_active"] is False
+
+    # Unknown status maps to unrecognized and preserves raw_status
+    unk = reins_read.normalize_task_status("mystery-state-xyz", in_active_dir=True)
+    assert unk["raw_status"] == "mystery-state-xyz"
+    assert unk["normalized_status"] == "unrecognized"
+    assert unk["terminal_status_in_active"] is False
+
+
+def test_g1_to_g12_and_a0_wait_census_end_to_end(tmp_path, monkeypatch):
+    """End-to-end verification of G1-G12 and A0 wait census across synthetic vault + coord."""
+    from fastapi.testclient import TestClient
+
+    from reins_read import build_app, build_wait_census
+
+    vault_root = tmp_path / "20-projects"
+    cc_active = vault_root / "hapax-cc-tasks" / "active"
+    cc_closed = vault_root / "hapax-cc-tasks" / "closed"
+    req_active = vault_root / "hapax-requests" / "active"
+    req_closed = vault_root / "hapax-requests" / "closed"
+
+    # Closed dependency
+    _write_md(
+        cc_closed / "2026-10-01-dep-closed.md",
+        [
+            "task_id: dep-closed",
+            "status: done",
+            "stage: S7",
+        ],
+    )
+
+    # 1. Moving row (with determined fit_state, commission_task_id, queue_position, session log)
+    _write_md(
+        cc_active / "2026-10-15-task-moving.md",
+        [
+            "task_id: task-moving",
+            "title: Moving task with full route",
+            "status: in-progress",
+            "stage: S4",
+            "lane: alpha",
+            "routing_class: x_tactical",
+            "carrier: governable_cli",
+            "platform: claude",
+            "mode: subscription_cli",
+            "profile: claude-opus",
+            "model_or_engine: claude-opus-4-7",
+            "effort: xhigh",
+            "context_mode: 1m",
+            "thinking_posture: adaptive",
+            "fast_mode: off",
+            "authority_case: code_review_and_merge",
+            "execution_route: claude-code",
+            "commission_task_id: comm-001",
+            "queue_position: 3",
+            "depends_on: [dep-closed]",
+            "created: 2026-10-15T10:00:00Z",
+        ],
+        body=(
+            "# Task Moving\n\n"
+            "## Session log\n"
+            "- 2026-10-15T10:05:00Z claimed by alpha\n"
+            "- 2026-10-15T11:30:00Z status -> in-progress\n"
+        ),
+    )
+
+    # 2. Review/merge wait band
+    _write_md(
+        cc_active / "2026-10-15-task-review.md",
+        [
+            "task_id: task-review",
+            "status: completed-pending-review",
+            "stage: S5",
+            "lane: none",
+            "release_when: PR #42 merged",
+            "updated_at: 2026-10-15T12:00:00Z",
+        ],
+    )
+
+    # 3. Runtime witness wait band
+    _write_md(
+        cc_active / "2026-10-15-task-witness.md",
+        [
+            "task_id: task-witness",
+            "status: awaiting-witness",
+            "stage: S6",
+            "lane: none",
+            "waiting_on: console-systemd-timer",
+            "release_when: live timer fires once",
+        ],
+    )
+
+    # 4. Bounded inability wait band
+    _write_md(
+        cc_active / "2026-10-15-task-inability.md",
+        [
+            "task_id: task-inability",
+            "status: bounded-inability",
+            "stage: S4",
+            "bounded_inability: Needs hardware YubiKey touch",
+            "release_when: Operator touch at console",
+        ],
+    )
+
+    # 5. Blocked on open item dependency
+    _write_md(
+        cc_active / "2026-10-15-task-dep-open.md",
+        [
+            "task_id: task-dep-open",
+            "status: open",
+            "stage: S3",
+            "depends_on:",
+            "  - task-moving",
+            "  - REQ-001",
+        ],
+    )
+
+    # 6. Blocked on gate prerequisite (depends_on all closed, but status=blocked)
+    _write_md(
+        cc_active / "2026-10-15-task-gate.md",
+        [
+            "task_id: task-gate",
+            "status: blocked",
+            "stage: S2",
+            "depends_on: [dep-closed]",
+            "blocked_reason: Awaiting P3 gate signoff",
+            "waiting_on: operator-gate-p3",
+        ],
+    )
+
+    # 7. Record contradiction: terminal status in active/ + all-closed depends_on while blocked
+    _write_md(
+        cc_active / "2026-10-15-task-contradiction-terminal.md",
+        [
+            "task_id: task-contradiction-terminal",
+            "status: done",
+            "stage: S7",
+        ],
+    )
+
+    # 8. Duplicate task_id contradiction (two files with same task_id and conflicting status)
+    _write_md(
+        cc_active / "2026-10-15-task-dup-a.md",
+        [
+            "task_id: task-dup",
+            "status: open",
+            "stage: S1",
+        ],
+    )
+    _write_md(
+        cc_active / "2026-10-15-task-dup-b.md",
+        [
+            "task_id: task-dup",
+            "status: blocked",
+            "stage: S1",
+        ],
+    )
+
+    # 9. Ready unpulled (lane=none, undetermined fit_state)
+    _write_md(
+        cc_active / "2026-10-15-task-unpulled.md",
+        [
+            "task_id: task-unpulled",
+            "status: open",
+            "stage: S0",
+            "lane: none",
+            "routing_class: x_tactical",
+        ],
+        body="Prose mentions queue_position: 1 and commission_task_id: fake-123, which must NOT be guessed.\n",
+    )
+
+    # Active and closed REQ files
+    _write_md(
+        req_active / "REQ-001.md",
+        [
+            "req_id: REQ-001",
+            "status: open",
+            "stage: S1",
+        ],
+    )
+    _write_md(
+        req_closed / "REQ-002.md",
+        [
+            "req_id: REQ-002",
+            "status: closed",
+            "stage: S7",
+        ],
+    )
+
+    # Coord projection state
+    coord_root = tmp_path / "coord"
+    coord_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "reins_read._projection",
+        lambda _root, **kw: {
+            "_replay": {"source": "sqlite", "degraded": False, "errors_present": False},
+            "tasks": {
+                "task-moving": {
+                    "stage": "S4",
+                    "lane": "alpha",
+                    "role": "alpha",
+                    "updated_at": "2026-10-15T11:30:00Z",
+                },
+                "coord-only-task": {
+                    "stage": "S3",
+                    "status": "in-progress",
+                    "lane": "beta",
+                    "role": "beta",
+                    "updated_at": "2026-10-15T12:00:00Z",
+                },
+            }
+        },
+    )
+    monkeypatch.setattr("reins_read._task_history", lambda _root: ({}, True))
+
+    allow = reins_read.facet_registry.air_allowlist()
+    app = build_app(str(coord_root), allow, {"vault_root": str(vault_root)})
+    client = TestClient(app)
+
+    resp = client.get("/read/tasks")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["dark"] is False
+    assert payload["requests_summary"]["active"] == 1
+    assert payload["requests_summary"]["closed"] == 1
+
+    by_id = {r["task_id"]: r for r in payload["tasks"]}
+    # Coord-only row and vault lane=none rows are both present
+    assert "coord-only-task" in by_id
+    assert "task-unpulled" in by_id
+
+    # Check G1 wait_bands across all 8 bands
+    assert by_id["task-moving"]["wait_band"] == "moving"
+    assert by_id["task-review"]["wait_band"] == "review_merge"
+    assert by_id["task-witness"]["wait_band"] == "runtime_witness"
+    assert by_id["task-inability"]["wait_band"] == "bounded_inability"
+    assert by_id["task-dep-open"]["wait_band"] == "on_item_dependency_open"
+    assert by_id["task-gate"]["wait_band"] == "on_gate_prerequisite"
+    assert by_id["task-contradiction-terminal"]["wait_band"] == "record_contradiction"
+    assert by_id["task-dup"]["wait_band"] == "record_contradiction"
+    assert by_id["task-unpulled"]["wait_band"] == "unpulled_no_route_determined"
+
+    # Check G3: reverse_dep_count and wait_duration_s
+    assert by_id["task-moving"]["reverse_dep_count"] == 1
+    assert "task-dep-open" in by_id["task-moving"]["unblocks_task_ids"]
+    assert by_id["task-moving"]["wait_duration_s"] is not None
+    assert by_id["task-moving"]["wait_duration_s"] > 0
+
+    # Check G4, G5, G12: route_metadata, fit_state, settled_carrier
+    moving = by_id["task-moving"]
+    assert moving["fit_state"] == "determined"
+    assert moving["settled_carrier"] == "governable_cli"
+    assert moving["route_metadata"]["platform"] == "claude"
+    assert moving["route_metadata"]["model_or_engine"] == "claude-opus-4-7"
+    assert moving["route_metadata"]["effort"] == "xhigh"
+    assert moving["route_metadata"]["execution_route"] == "claude-code"
+
+    unpulled = by_id["task-unpulled"]
+    assert unpulled["fit_state"] == "undetermined"
+    assert unpulled["settled_carrier"] is None
+    # G8 & G10: never guessed from prose
+    assert unpulled["commission_task_id"] is None
+    assert unpulled["queue_position"] is None
+    assert moving["commission_task_id"] == "comm-001"
+    assert moving["queue_position"] == 3
+
+    # Check G6: waiting_on, release_when, bounded_inability, blocked_reason
+    assert by_id["task-witness"]["waiting_on"] == "console-systemd-timer"
+    assert by_id["task-witness"]["release_when"] == "live timer fires once"
+    assert by_id["task-inability"]["bounded_inability"] == "Needs hardware YubiKey touch"
+    assert by_id["task-gate"]["blocked_reason"] == "Awaiting P3 gate signoff"
+
+    # Check G9: session_log_transitions and last_transition_ts
+    assert moving["session_log_transitions"] == 2
+    assert moving["last_transition_ts"] == "2026-10-15T11:30:00Z"
+
+    # Check G11: stage and legal_next_stage
+    assert moving["stage"] == "S4"
+    assert moving["legal_next_stage"] == "S5"
+    assert by_id["task-contradiction-terminal"]["stage"] == "S7"
+    assert by_id["task-contradiction-terminal"]["legal_next_stage"] == "ship"
+
+    # Mutation check (G5): removing carrier from task-moving turns fit_state to undetermined
+    mutated = reins_read.to_task(
+        "task-moving-mutated",
+        {
+            "status": "open",
+            "stage": "S3",
+            "lane": "none",
+            "routing_class": "x_tactical",
+            "carrier": "",
+            "platform": "claude",
+        },
+        allow,
+    )
+    assert mutated["fit_state"] == "undetermined"
+    assert mutated["wait_band"] == "unpulled_no_route_determined"
+
+    # Check A0 wait census endpoint and function
+    census_resp = client.get("/read/wait-census")
+    assert census_resp.status_code == 200
+    census = census_resp.json()
+    assert census["dark"] is False
+    assert census["universe"]["cc_task_files"]["active"] == 10
+    assert census["universe"]["active_distinct_task_ids"] == 10  # includes coord-only task
+    assert census["universe"]["task_ids_on_two_files"] == 1
+    assert census["universe"]["cc_task_files"]["closed"] == 1
+    assert census["universe"]["requests"]["active"] == 1
+    assert census["universe"]["requests"]["closed"] == 1
+    assert census["record_contradiction"]["terminal_status_in_active"] == 1
+    assert census["record_contradiction"]["duplicate_task_ids"] == 1
+    lines = census["text_summary"].splitlines()
+    assert len(lines) == 20
+    assert "A0 WAIT CENSUS" in lines[0]
+
+    # CLI --wait-census check
+    rc = reins_read.main(["--wait-census", "--vault-root", str(vault_root)])
+    assert rc == 0
+
+
+def test_workview_producer_kill_returns_dark_when_vault_root_missing(tmp_path, monkeypatch):
+    """Producer-Kill test: pointing vault_root and council_root at nonexistent directories
+    returns explicit DARK state (never fabricated zero counts or silent empty rows)."""
+    from fastapi.testclient import TestClient
+
+    from reins_read import build_app, build_wait_census
+
+    missing_vault = tmp_path / "does-not-exist-vault"
+    missing_coord = tmp_path / "does-not-exist-coord"
+    monkeypatch.delenv("REINS_VAULT_ROOT", raising=False)
+    monkeypatch.delenv("REINS_CC_TASKS_ACTIVE", raising=False)
+
+    def unavailable_projection(*args, **kwargs):
+        raise OSError("coord producer unavailable")
+
+    monkeypatch.setattr(reins_read, "_projection", unavailable_projection)
+    census = build_wait_census(missing_vault)
+    assert census["dark"] is True
+    assert "unavailable" in census["reason"]
+
+    allow = reins_read.facet_registry.air_allowlist()
+    app = build_app(str(missing_coord), allow, {"vault_root": str(missing_vault)})
+    client = TestClient(app)
+
+    tasks_resp = client.get("/read/tasks").json()
+    assert tasks_resp["dark"] is True
+    assert tasks_resp["tasks"] == []
+
+    wc_resp = client.get("/read/wait-census").json()
+    assert wc_resp["dark"] is True
+    assert "DARK" in wc_resp["text_summary"]
+
+    rc = reins_read.main(["--wait-census", "--vault-root", str(missing_vault)])
+    assert rc == 1
+
