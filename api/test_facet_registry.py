@@ -106,6 +106,11 @@ INVENTORY: dict[str, list[str]] = {
         "prior_state", "state", "prior_subscription_quota_state", "subscription_quota_state",
         "prior_fresh_until", "fresh_until", "fresh_until_delta_s", "after_observation_gap", "air",
     ],
+    # Reins #51 — the read-only seat-succession projection.
+    "SeatSuccession": ["state", "rows"],
+    "SeatSuccessionRow": ["role", "session", "pane_state", "panes", "claims", "charter_state", "assigned_to", "air"],
+    "SeatSuccessionPane": ["id", "pid", "command", "air"],
+    "SeatSuccessionClaims": ["state", "present", "paths", "air"],
 }
 
 
@@ -148,6 +153,7 @@ POPULATED_ROUTES: frozenset[str] = frozenset({
     "/read/lanebus",
     "/read/observe",
     "/read/quota-history",
+    "/read/seat-succession",
     "/read/session/{role}",
     "/read/session/{role}/turns",
     "/read/sessions",
@@ -409,6 +415,10 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
         ),
         encoding="utf-8",
     )
+    charter_path = tmp_path / "charter-alpha.md"
+    charter_path.write_text("---\nassigned_to: alpha\n---\n", encoding="utf-8")
+    marker_path = tmp_path / "cc-active-task-alpha"
+    marker_path.write_text("task-1\n", encoding="utf-8")
 
     cfg = {
         "council_root": str(council_root),
@@ -418,6 +428,17 @@ def _populated_read_route_cfg(tmp_path, monkeypatch) -> tuple[str, dict]:
         "lanebus_inboxes": [
             {"inbox": "alpha", "path": str(inbox_dir), "count_only": False, "ack": "read-dir"}
         ],
+        "seat_succession": {
+            "socket": str(tmp_path / "dead.sock"),
+            "lanes": [
+                {
+                    "role": "alpha",
+                    "session": "hapax-claude-alpha",
+                    "claim_marker_pattern": str(tmp_path / "cc-active-task-alpha*"),
+                    "charter_path": str(charter_path),
+                }
+            ],
+        },
         "vault_root": str(vault_root),
         "capability_inventory_path": str(cap_inv),
         "domain_pack_paths": [str(domain_pack)],
@@ -434,15 +455,16 @@ def test_every_live_attr_resolves(tmp_path, monkeypatch):
     """Exhaustiveness: no live (domain, attr) in INVENTORY or registered /read/* route payload key
     lands in UNRESOLVED limbo.
 
-    Walks all 18 registered GET /read/* routes (excluding /read/facets) in both deterministic dark
+    Walks all registered GET /read/* routes (excluding /read/facets) in both deterministic dark
     mode and populated fixture mode:
-      - 16 routes in POPULATED_ROUTES must emit populated keys beyond their dark envelope (with
+      - routes in POPULATED_ROUTES must emit populated keys beyond their dark envelope (with
         non-empty grants + honors pinned on /read/grant-consumption, and empty bound
         HAPAX_SPINE_CONFIG_DIR + capability_inventory_path pinned on /read/capabilities);
       - 2 routes in DARK_ONLY_ROUTES (/read/traces and /read/session/{role}/turns/{ts}/blocks) are
         explicitly declared dark-only in offline unit tests, so no newly added route can silently
         pass as an unpopulated envelope."""
     import reins_read as rr
+    import reins_seat_succession as ss
     from fastapi.testclient import TestClient
 
     unresolved = []
@@ -484,8 +506,13 @@ def test_every_live_attr_resolves(tmp_path, monkeypatch):
                 if fr.classify("", attr).startswith("UNRESOLVED"):
                     unresolved.append(f"{route_path}[dark].{attr}")
 
-    # 2. Populated fixture walk (bound HAPAX_SPINE_CONFIG_DIR + populated fixtures for all 16 POPULATED_ROUTES).
+    # 2. Populated fixture walk (bound HAPAX_SPINE_CONFIG_DIR + populated fixtures for all POPULATED_ROUTES).
     council_root, pop_cfg = _populated_read_route_cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ss,
+        "_pane_census",
+        lambda _spec: {"hapax-claude-alpha": [{"id": "%1", "pid": 101, "command": "bash"}]},
+    )
     pop_app = rr.build_app(council_root, fr.air_allowlist(), pop_cfg)
     with TestClient(pop_app) as client:
         for route_path in read_routes:
@@ -716,6 +743,9 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
         # `lease`/`honors` are ENVELOPES (do not enter air_allowlist).
         "dark", "grant_id", "grant_record_present", "minting_lane", "issued_at", "expires_at",
         "honor_count",
+        # Reins #51: operational seat-succession posture/identity fields. `paths` and `command`
+        # are SENSITIVE (deny on air), and `panes` is an ENVELOPE.
+        "pane_state", "present", "charter_state", "pid",
         # Reins #56 read-surface structural/operational fields (counts, booleans, state tokens,
         # enum-like ids/labels; path-PII fields `rel_path`, `vault_root`, `folder` are SENSITIVE):
         "affordance_kind", "audience", "blocked", "bundle_state", "confidence_word",

@@ -71,6 +71,7 @@ ENVELOPES: set[str] = {
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
     "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
     "grants", "binding", "lease", "honors",  # #50 grant-consumption structural wrappers
+    "panes",  # #51 seat-succession per-lane live pane list wrapper
     "events", "traces", "tasks", "epistemics", "sessions", "turns", "blocks", "intake",
     "audiences", "projections", "capabilities", "gates", "domains", "notes", "dimensions",
     "producer", "artifacts", "why", "facts", "affordances",
@@ -89,6 +90,7 @@ FACET_BY_NAME: dict[str, str] = {
     "domain_id": "identity", "lifecycle_id": "identity", "row_id": "identity",
     "capability_id": "identity", "tool_id": "identity", "map_id": "identity",
     "grant_id": "identity", "fact_id": "identity", "key": "identity", "affordance_kind": "identity",
+    "pid": "identity", "command": "identity",
     "label": "identity", "kind": "identity", "subject_kind": "identity", "map_kind": "identity",
     "family": "identity", "subject": "identity", "title": "identity",
     # a message filename: free-text-capable, so identity + SENSITIVE (denies on air)
@@ -98,6 +100,7 @@ FACET_BY_NAME: dict[str, str] = {
     "severity": "posture", "blocker": "posture", "route_state": "posture", "quota_state": "posture",
     "route_binding_state": "posture", "alive": "posture", "idle": "posture", "stalled": "posture",
     "exists": "posture", "attached": "posture", "available": "posture", "ready": "posture",
+    "present": "posture", "pane_state": "posture", "charter_state": "posture",
     "grant_record_present": "posture", "partial": "posture", "fixture_only": "posture",
     "prior_stage_state": "posture", "bundle_state": "posture", "value_state": "posture",
     "freshness_state": "posture",
@@ -120,6 +123,7 @@ FACET_BY_NAME: dict[str, str] = {
     # place (locus)
     "platform": "place", "layer": "place", "domain": "place", "scope": "place", "depth": "place",
     "plant": "place", "capacity_pool": "place", "terrain": "place", "session": "place", "path": "place",
+    "paths": "place",
     "minting_session": "place", "vault_root": "place", "rel_path": "place", "folder": "place",
     # a configured DIRECTORY name (the class of `session`/`path`, not the declared `role`
     # vocabulary): place, and SENSITIVE below
@@ -215,7 +219,8 @@ def classify(domain: str, attr: str) -> str:
 # PII regardless of facet (filesystem paths, tmux session names) and DENY on air. (framework: AIR is
 # per-attribute, not only per-facet.)
 SENSITIVE: set[str] = {
-    "path", "session",          # filesystem / tmux PII
+    "path", "paths", "session",  # filesystem / tmux PII
+    "command",                   # tmux pane current command — free-text process name
     "minting_session", "vault_root", "rel_path", "folder",  # session / vault path PII
     "subject", "label", "title",  # free-text-capable identity fields — conservative deny on air
     "parent_spec", "evidence_ref", "route_evidence_ref",  # path-like edge refs (can be filesystem paths)
