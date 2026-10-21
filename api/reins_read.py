@@ -57,7 +57,12 @@ def score_event(ev: dict, age_s: float) -> float:
 
 
 def classify_air(fields: dict, allowlist: list[str]) -> dict:
-    return {k: ("ok" if k in allowlist else "deny") for k in fields}
+    """The per-field AIR verdict for every read route: a field airs only when the instance
+    allowlist names it AND the registry does not deny it by category. SENSITIVE (PII) and FINANCIAL
+    (spend) are never-air here, at the one shared point, so no REINS_AIR_ALLOWLIST entry can
+    re-expose a path, a session, a command or a spend figure on any route."""
+    never_air = facet_registry.SENSITIVE | facet_registry.FINANCIAL
+    return {k: ("ok" if k in allowlist and k not in never_air else "deny") for k in fields}
 
 
 def to_event(raw: dict, allowlist: list[str], age_s: float) -> dict:
@@ -4143,11 +4148,8 @@ def read_vault_summary(cfg: dict | None = None) -> dict:
 # ACKED when a same-named file exists under ``read/``. Nothing is indexed and nothing is written, so
 # it is re-derived on every read and no message is opened (name + mtime only).
 
-#: The registry denies these by CATEGORY (SENSITIVE = PII, FINANCIAL = spend) as per-attribute
-#: policy, not a default — but classify_air() consults only the instance allowlist, so an explicit
-#: REINS_AIR_ALLOWLIST entry would re-expose a path, a message name or an inbox name. (The same hole
-#: exists estate-wide on every classify_air() endpoint.)
-_LANEBUS_NEVER_AIR = facet_registry.SENSITIVE | facet_registry.FINANCIAL
+#: A path, a message name and an inbox name are denied on air by classify_air() itself
+#: (SENSITIVE | FINANCIAL never air on any route), so this route needs no guard of its own.
 
 #: The ack protocols an inbox may declare. ``read-dir``: a same-named file under ``read/`` is the
 #: receipt. ``none``: acks are recorded elsewhere (e.g. a message queue's processed set), so the
@@ -4167,14 +4169,6 @@ _LANEBUS_UNREAD_ROW_CAP = 50
 
 def _lanebus_stamp(now: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-
-
-def _lanebus_air(fields: dict, allowlist: list[str]) -> dict:
-    air = classify_air(fields, allowlist)
-    for name in fields:
-        if name in _LANEBUS_NEVER_AIR:
-            air[name] = "deny"
-    return air
 
 
 def _lanebus_canonical_path(raw: Any) -> str:
@@ -4292,7 +4286,7 @@ def _lanebus_unread_row(basename: str, mtime: float, policy: str, now: float, al
     }
     if policy == "metadata":
         fields = {"basename": basename, **fields}
-    return {**fields, "air": _lanebus_air(fields, allowlist)}
+    return {**fields, "air": classify_air(fields, allowlist)}
 
 
 def _lanebus_inbox_row(spec: dict[str, str], now: float, allowlist: list[str]) -> dict:
@@ -4360,7 +4354,7 @@ def _lanebus_inbox_row(spec: dict[str, str], now: float, allowlist: list[str]) -
         # the row LIST is capped at the oldest _LANEBUS_UNREAD_ROW_CAP; unread_count is not
         "unread_rows_truncated": truncated,
     }
-    return {**fields, "unread": rows, "air": _lanebus_air(fields, allowlist)}
+    return {**fields, "unread": rows, "air": classify_air(fields, allowlist)}
 
 
 def _lanebus_total(rows: list[dict], key: str) -> int | None:

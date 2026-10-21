@@ -120,8 +120,11 @@ def test_page_before_returns_strictly_older_window():
 
 
 def test_air_is_default_deny():
-    air = classify_air({"subject": "4284", "summary": "secret name"}, allowlist=["subject"])
-    assert air["subject"] == "ok" and air["summary"] == "deny"
+    # An allowlisted non-sensitive field airs; an unlisted field denies; and an allowlisted SENSITIVE
+    # field (subject) still denies: the instance allowlist cannot re-expose the registry's deny-set.
+    fields = {"kind": "pr.merged", "subject": "4284", "summary": "secret name"}
+    air = classify_air(fields, allowlist=["kind", "subject"])
+    assert air["kind"] == "ok" and air["summary"] == "deny" and air["subject"] == "deny"
 
 
 def test_to_event_shape():
@@ -129,7 +132,8 @@ def test_to_event_shape():
            "payload": {"summary": "PR#4284 merged"}, "ts": "2026-06-24T14:22:00Z"}
     ev = to_event(raw, allowlist=["kind", "subject"], age_s=2)
     assert ev["kind"] == "pr.merged" and ev["subject"] == "4284"
-    assert ev["air"]["actor"] == "deny" and ev["air"]["subject"] == "ok"
+    assert ev["air"]["actor"] == "deny" and ev["air"]["kind"] == "ok"
+    assert ev["air"]["subject"] == "deny", "subject is SENSITIVE: it never airs, allowlisted or not"
 
 
 def test_read_session_turns_returns_typed_receipts_with_bimodal_air():
