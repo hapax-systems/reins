@@ -246,3 +246,137 @@ func (m Model) renderPresence(w int) string {
 		},
 		"honest-dark-with-dignity: the presence-plane design (agy) is pending. This separates figure/control (what the operator acts on) from ground/presence (ambient state), rendered honestly empty until the design lands.")
 }
+
+// renderObligations — ligatory obligations (owes), locus anomalies, local substrate memory occupancy,
+// and capability route fulfillment from /read/obligations. Read-only projection; seals debtor/subject/locus
+// identities on air while structural counts and states air.
+func (m Model) renderObligations(w int) string {
+	var b strings.Builder
+	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
+	b.WriteString(" " + grammar.C("brt", "OBLIGATIONS") + grammar.C("mut", "  ligatory owes · substrate occupancy · route fulfillment (read-only)") + "\n")
+	b.WriteString(" " + rule + "\n")
+	rep := m.Obligations
+	if m.ObligationsDark || (rep.Dark != nil && *rep.Dark) {
+		b.WriteString(" " + grammar.C("mut", "(obligations dark — the cockpit read endpoint is unreachable or all sources are dark)"))
+		return strings.TrimRight(b.String(), "\n")
+	}
+	partial := rep.PartialDark != nil && *rep.PartialDark
+	for _, state := range rep.SourceStatus {
+		partial = partial || state == "dark"
+	}
+	if partial {
+		b.WriteString(" PARTIAL — some source evidence is dark\n")
+	}
+	if rep.Dark == nil || rep.PartialDark == nil || rep.SourceStatus == nil {
+		b.WriteString(" source status UNKNOWN\n")
+	}
+	for _, source := range []string{"lanebus", "grants", "claim_custody", "seat_succession", "capabilities", "context_bundle"} {
+		state := rep.SourceStatus[source]
+		if state != "live" && state != "dark" {
+			state = "UNKNOWN"
+		}
+		fmt.Fprintf(&b, " %s=%s", source, state)
+	}
+	b.WriteString("\n")
+	s := rep.Summary
+	b.WriteString(fmt.Sprintf(" %s  owes=%s (lanebus=%s · grants=%s · custody=%s)  anomalies=%s  action=%s  warn=%s\n",
+		grammar.C("2nd", "POSTURE"),
+		obligationCount(s.TotalOwes), obligationCount(s.LanebusOwesCount), obligationCount(s.GrantOwesCount), obligationCount(s.CustodyOwesCount),
+		obligationCount(s.LocusAnomalyCount), obligationCount(s.ActionCount), obligationCount(s.WarningCount)))
+	b.WriteString(fmt.Sprintf(" %s  local_loci_occupied=%s/%s  routes_occupied_in_memory=%s/%s\n",
+		grammar.C("2nd", "LOCI   "),
+		obligationCount(s.LocalLociOccupiedInMemory), obligationCount(s.LocalLociTotal), obligationCount(s.RoutesOccupiedInMemory), obligationCount(s.RoutesTotal)))
+
+	b.WriteString(" " + rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "SUBSTRATE LOCI (MEMORY OCCUPANCY VS DISK RESIDENCY)") + "\n")
+	if rep.LocalSubstrateLoci == nil {
+		b.WriteString(" substrate loci UNKNOWN\n")
+	} else if len(rep.LocalSubstrateLoci) == 0 {
+		b.WriteString(" " + grammar.C("mut", "· no local substrate loci observed") + "\n")
+	}
+	for _, loc := range rep.LocalSubstrateLoci {
+		g, tok := "●", "grn"
+		if loc.State != "lit" && loc.State != "live" && loc.State != "ok" {
+			g, tok = "◌", "yel"
+		}
+		if m.AIR {
+			b.WriteString(fmt.Sprintf(" %s %-10s  ▒▒▒ (loaded=%s · resident=%s)\n",
+				grammar.C(tok, g), obligationText(loc.State), obligationListCount(loc.LoadedModels), obligationCount(loc.ResidentModelsCount)))
+			continue
+		}
+		models := strings.Join(loc.LoadedModels, ",")
+		if loc.LoadedModels == nil {
+			models = "UNKNOWN"
+		} else if models == "" {
+			models = "(none observed)"
+		}
+		line := fmt.Sprintf(" %s %-22s  %-6s  models=%s  res=%s  topo=%s",
+			grammar.C(tok, g), fmt.Sprintf("%s:%s", obligationText(loc.Host), obligationText(loc.Port)), obligationText(loc.State), models, obligationCount(loc.ResidentModelsCount), obligationText(loc.Topology))
+		b.WriteString(clipRunes(line, maxVisible(12, w-2)) + "\n")
+	}
+
+	b.WriteString(" " + rule + "\n")
+	b.WriteString(" " + grammar.C("brt", "LOCUS ANOMALIES & LIGATORY OWES") + "\n")
+	for _, missing := range []struct {
+		name   string
+		absent bool
+	}{
+		{"lanebus", rep.LanebusOwes == nil}, {"grants", rep.GrantOwes == nil},
+		{"custody", rep.CustodyOwes == nil}, {"anomalies", rep.LocusAnomalies == nil},
+		{"fulfillment", rep.CapabilityFulfillment == nil},
+	} {
+		if missing.absent {
+			fmt.Fprintf(&b, " %s UNKNOWN\n", missing.name)
+		}
+	}
+	for _, a := range rep.LocusAnomalies {
+		subj := a.Subject
+		if m.AIR {
+			subj = "▒▒▒"
+		}
+		b.WriteString(clipRunes(fmt.Sprintf(" ! %-28s  [%s]  %s", a.Kind, a.Attention, subj), maxVisible(12, w-2)) + "\n")
+	}
+	allOwes := make([]grammar.ObligationRow, 0, len(rep.LanebusOwes)+len(rep.GrantOwes)+len(rep.CustodyOwes))
+	allOwes = append(allOwes, rep.CustodyOwes...)
+	allOwes = append(allOwes, rep.LanebusOwes...)
+	allOwes = append(allOwes, rep.GrantOwes...)
+	limit := 12
+	if len(allOwes) < limit {
+		limit = len(allOwes)
+	}
+	for i := 0; i < limit; i++ {
+		o := allOwes[i]
+		creditor, debtor, subj := obligationText(o.Creditor), obligationText(o.Debtor), obligationText(o.Subject)
+		if m.AIR {
+			creditor, debtor, subj = "▒▒▒", "▒▒▒", "▒▒▒"
+		}
+		b.WriteString(clipRunes(fmt.Sprintf(" ▸ %-28s  %s <- %s : %s", o.Kind, creditor, debtor, subj), maxVisible(12, w-2)) + "\n")
+	}
+	if len(allOwes) > limit {
+		b.WriteString(fmt.Sprintf(" %s\n", grammar.C("mut", fmt.Sprintf("… +%d additional obligation rows", len(allOwes)-limit))))
+	}
+	if m.AIR {
+		b.WriteString(" " + rule + "\n")
+		b.WriteString(" " + grammar.C("mut", "▒ identities sealed on air — counts and structural states air, debtor/locus names do not"))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func obligationCount(n *int) string {
+	if n == nil || *n < 0 {
+		return "UNKNOWN"
+	}
+	return fmt.Sprint(*n)
+}
+func obligationText(s string) string {
+	if s == "" {
+		return "UNKNOWN"
+	}
+	return s
+}
+func obligationListCount[T any](items []T) string {
+	if items == nil {
+		return "UNKNOWN"
+	}
+	return fmt.Sprint(len(items))
+}

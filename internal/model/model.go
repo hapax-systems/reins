@@ -46,6 +46,7 @@ const (
 	PagePresence     = 28 // E11.8 presence-plane binder (figure/control vs ground/presence) — honest-dark pending agy
 	PageDeck         = 29 // E8.3 DECK — the non-evicting operator-readout history (no-loss, vs the event STREAM)
 	PageRoute        = 30 // U5 E6.2 ROUTE — the capability-routing PROJECTION (spine evidence; reins mints no decision)
+	PageObligations  = 31 // Ligatory obligations (owes), substrate memory occupancy, and route fulfillment
 )
 
 const (
@@ -522,6 +523,9 @@ type Model struct {
 	RoutePosture        grammar.RoutePosture     // U5 ROUTE — spine routing posture (NO SPINE DECISION until echoed)
 	RouteCandidates     []grammar.RouteCandidate // U5 — measured demand per routing_class
 	RouteDark           bool
+	Obligations         grammar.ObligationsReport
+	ObligationsDark     bool
+	ObligationsError    string
 	DynamicsDark        bool
 	EpistemicsDark      bool
 	EventsError         string
@@ -978,7 +982,7 @@ func (m Model) isReferencePage() bool {
 		m.Page == PageCommands || m.Page == PageWindows || m.Page == PageIntent ||
 		m.Page == PageSurfaces || m.Page == PageDomains || m.Page == PageLifecycles || m.Page == PageYard ||
 		m.Page == PageReadiness || m.Page == PageCaps || m.Page == PageIntake ||
-		m.Page == PageEpistemics
+		m.Page == PageEpistemics || m.Page == PageObligations
 }
 
 // hasRows reports whether the current page has any selectable rows.
@@ -1605,7 +1609,7 @@ func New(title string) Model {
 	// RouteDark defaults TRUE: an un-fetched ROUTE projection must render honest-dark, never live-empty.
 	// Paths that don't FetchRoute (--probe, driveLiveModel) would otherwise show a fabricated empty-but-live
 	// surface (RouteDark=false + zero posture); FoldRoute flips it on the first real fetch.
-	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true, DeviceOverride: parseDeviceClass(os.Getenv("REINS_DEVICE"))}
+	return Model{Title: title, Sel: Selection{Rank: RankRow, Type: "task"}, EventScrollback: Scrollback{Cap: 512}, WindowSeen: map[int]string{}, RouteDark: true, ObligationsDark: true, DeviceOverride: parseDeviceClass(os.Getenv("REINS_DEVICE"))}
 }
 
 // toggleFilesZone flips the coordinator lens between task rows and the filebrowser. On entering the
@@ -1916,6 +1920,13 @@ func (m Model) FoldRoute(posture grammar.RoutePosture, candidates []grammar.Rout
 	return m
 }
 
+// FoldObligations is the pure projection for :obligations — ligatory owes + substrate fulfillment.
+func (m Model) FoldObligations(rep grammar.ObligationsReport, dark bool) Model {
+	m.Obligations = rep
+	m.ObligationsDark = dark
+	return m
+}
+
 // FoldContext is the pure projection for the tri-audience /read/context substrate: the operator-cockpit
 // affordances (classification→affordance→WHY), grouped by subject. Honest-dark until the spine producer
 // emits the fact bundle. Readout only — reins mints nothing; action routes through the governed apply seam.
@@ -2060,6 +2071,7 @@ var verbs = []verbDef{
 	{name: "presence", aliases: []string{"concourse"}, kind: commandRead, group: "window", gloss: "E11.8 presence-plane binder — figure/control vs ground/presence (honest-dark, pending design)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "deck", kind: commandRead, group: "window", gloss: "E8.3 the non-evicting operator-readout DECK — no-loss history vs the windowed event STREAM", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "route", aliases: []string{"routing"}, kind: commandRead, group: "window", gloss: "U5 E6.2 ROUTE — capability-routing projection (spine evidence; reins mints no decision)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
+	{name: "obligations", aliases: []string{"owes"}, kind: commandRead, group: "window", gloss: "OBLIGATIONS — ligatory graph (lanebus owes · custody · loci · route fulfillment)", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "swap", kind: commandRead, group: "engine", gloss: "U6b hot-plug: exec-handover into the store's current generation with --resume (self-hosted development; zero posture loss)", authority: "local_read", receipt: "swap witness (U11)", uiDelta: "release terminal + re-exec"},
 	{name: "legend", aliases: []string{"?"}, kind: commandRead, group: "reference", gloss: "decode the grammar — every glyph/color/cell", authority: "local_read", receipt: "none", uiDelta: "switch window"},
 	{name: "help", aliases: []string{"h"}, kind: commandRead, group: "reference", gloss: "the help page", authority: "local_read", receipt: "none", uiDelta: "switch window"},
@@ -2220,6 +2232,9 @@ func (m Model) Exec(line string) Model {
 	case "route", "routing":
 		m = m.switchPage(PageRoute)
 		m.Status = ":route"
+	case "obligations", "owes":
+		m = m.switchPage(PageObligations)
+		m.Status = ":obligations"
 	case "air":
 		switch arg0(args) {
 		case "on":
@@ -2586,6 +2601,11 @@ type RouteMsg struct {
 	Dark       bool
 	Error      string
 }
+type ObligationsMsg struct {
+	Report grammar.ObligationsReport
+	Dark   bool
+	Error  string
+}
 type GatesMsg struct {
 	Gates grammar.GateSummary
 	Dark  bool
@@ -2832,6 +2852,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RouteMsg:
 		m = m.FoldRoute(v.Posture, v.Candidates, v.Dark)
 		m.LastFold = "route"
+		return m, nil
+	case ObligationsMsg:
+		m = m.FoldObligations(v.Report, v.Dark || v.Error != "")
+		m.ObligationsError = v.Error
+		m.LastFold = "obligations"
 		return m, nil
 	case GatesMsg:
 		m = m.FoldGates(v.Gates, v.Dark)

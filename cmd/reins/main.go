@@ -288,6 +288,17 @@ func fetchRouteOnce(url string) tea.Msg { // U5: the honest ROUTE projection (po
 func routeTick(url string) tea.Cmd { // routing evidence tracks the gate-event feed
 	return tea.Tick(8*time.Second, func(time.Time) tea.Msg { return fetchRouteOnce(url) })
 }
+func fetchObligationsOnce(url string) tea.Msg {
+	rep, dark, err := api.FetchObligations(url)
+	msg := model.ObligationsMsg{Report: rep, Dark: dark}
+	if err != nil {
+		msg.Error = err.Error()
+	}
+	return msg
+}
+func obligationsTick(url string) tea.Cmd {
+	return tea.Tick(10*time.Second, func(time.Time) tea.Msg { return fetchObligationsOnce(url) })
+}
 func turnBlocksTick(role, ts, turnID string) tea.Cmd { // the FOCUSED turn's detail blocks (honest-empty until capture-output)
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return fetchTurnBlocksOnce(role, ts, turnID) })
 }
@@ -351,6 +362,7 @@ func (r root) Init() tea.Cmd {
 		func() tea.Msg { return fetchMetaOnce(r.url) },
 		func() tea.Msg { return fetchCommandsOnce(r.url) },
 		func() tea.Msg { return fetchRouteOnce(r.url) },
+		func() tea.Msg { return fetchObligationsOnce(r.url) },
 		func() tea.Msg {
 			role, ts, id, ok := r.m.FocusedTurnRef()
 			if !ok {
@@ -358,7 +370,7 @@ func (r root) Init() tea.Cmd {
 			}
 			return fetchTurnBlocksOnce(role, ts, id)
 		},
-		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(), confirmProbationTick(), configReloadTick(r.cfgPath, r.cfgStamp),
+		eventsTick(r.url), tasksTick(r.url), dynamicsTick(r.url), epistemicsTick(r.url), sessionsTick(r.url), intakeTick(r.url), capabilitiesTick(r.url), gatesTick(r.url), domainsTick(r.url), tracesTick(r.url), turnsTick(r.m.TurnRole), vaultTick(r.url), observeTick(r.url), metaTick(r.url), commandsTick(r.url), routeTick(r.url), obligationsTick(r.url), turnBlocksTickFocused(r), beatTick(), posturePersistTick(), confirmProbationTick(), configReloadTick(r.cfgPath, r.cfgStamp),
 	)
 }
 
@@ -466,6 +478,8 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, func() tea.Msg { return fetchCommandsOnce(r.url) }
 	case model.RouteMsg:
 		return r, routeTick(r.url) // re-arm the ROUTE projection poll
+	case model.ObligationsMsg:
+		return r, obligationsTick(r.url)
 	case posturePersistMsg:
 		_ = model.WritePosture("", r.m.SnapshotPosture()) // best-effort externalize; re-arm the cadence
 		return r, posturePersistTick()
@@ -545,6 +559,12 @@ func driveLiveModel(url string) model.Model {
 	m = m.FoldGates(gates, gd)
 	m = m.FoldDomains(doms, domd)
 	m = m.FoldTraces(tr, trd)
+	obsDims, obsDark, _ := api.FetchObserve(url)
+	m = m.FoldObserve(obsDims, obsDark)
+	rp, rc, rDark, _ := api.FetchRoute(url)
+	m = m.FoldRoute(rp, rc, rDark)
+	obl, oblDark, _ := api.FetchObligations(url)
+	m = m.FoldObligations(obl, oblDark)
 	return m
 }
 
@@ -622,6 +642,8 @@ func probePageToken(arg string) (int, bool) {
 		return model.PageObserve, true
 	case "route", "routing":
 		return model.PageRoute, true
+	case "obligations", "owes":
+		return model.PageObligations, true
 	case "vault", "obsidian":
 		return model.PageVault, true
 	case "rdlc", "claims", "labrack":
@@ -960,6 +982,12 @@ func main() {
 		m = updateProbeModel(m, model.GatesMsg{Gates: gates, Dark: gd, Error: errorText(gatesErr)})
 		m = updateProbeModel(m, model.DomainsMsg{Domains: doms, Dark: domd, Error: errorText(domErr)})
 		m = updateProbeModel(m, model.TracesMsg{Traces: tr, Dark: trd, Error: errorText(traceErr)})
+		obsDims, obsDark, obsErr := api.FetchObserve(cfg.APIURL)
+		m = updateProbeModel(m, model.ObserveMsg{Dimensions: obsDims, Dark: obsDark, Error: errorText(obsErr)})
+		rp, rc, rDark, rErr := api.FetchRoute(cfg.APIURL)
+		m = updateProbeModel(m, model.RouteMsg{Posture: rp, Candidates: rc, Dark: rDark, Error: errorText(rErr)})
+		obl, oblDark, oblErr := api.FetchObligations(cfg.APIURL)
+		m = updateProbeModel(m, model.ObligationsMsg{Report: obl, Dark: oblDark, Error: errorText(oblErr)})
 		for _, a := range os.Args[2:] {
 			if page, ok := probePageToken(a); ok {
 				m.Page = page
