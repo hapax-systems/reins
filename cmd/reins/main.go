@@ -568,6 +568,38 @@ func driveLiveModel(url string) model.Model {
 	return m
 }
 
+// probeReadModel preserves the probe message folds, including their error text.
+func probeReadModel(url string) model.Model {
+	evs, ed, evErr := api.FetchEvents(url)
+	ts, td, taskErr := api.FetchTasks(url)
+	dg, dd, dynErr := api.FetchDynamics(url)
+	ep, epd, epiErr := api.FetchEpistemics(url)
+	ss, sd, sessErr := api.FetchSessions(url)
+	in, id, intakeErr := api.FetchIntake(url)
+	caps, cd, capsErr := api.FetchCapabilities(url)
+	gates, gd, gatesErr := api.FetchGates(url)
+	doms, domd, domErr := api.FetchDomains(url)
+	tr, trd, traceErr := api.FetchTraces(url)
+	m := model.New("REINS")
+	m = updateProbeModel(m, model.EventsMsg{Events: evs, Dark: ed, Error: errorText(evErr)})
+	m = updateProbeModel(m, model.TasksMsg{Tasks: ts, Dark: td, Error: errorText(taskErr)})
+	m = updateProbeModel(m, model.DynamicsMsg{Graph: dg, Dark: dd, Error: errorText(dynErr)})
+	m = updateProbeModel(m, model.EpistemicsMsg{Epistemics: ep, Dark: epd, Error: errorText(epiErr)})
+	m = updateProbeModel(m, model.SessionsMsg{Sessions: ss, Dark: sd, Error: errorText(sessErr)})
+	m = updateProbeModel(m, model.IntakeMsg{Intake: in, Dark: id, Error: errorText(intakeErr)})
+	m = updateProbeModel(m, model.CapabilitiesMsg{Capabilities: caps, Dark: cd, Error: errorText(capsErr)})
+	m = updateProbeModel(m, model.GatesMsg{Gates: gates, Dark: gd, Error: errorText(gatesErr)})
+	m = updateProbeModel(m, model.DomainsMsg{Domains: doms, Dark: domd, Error: errorText(domErr)})
+	m = updateProbeModel(m, model.TracesMsg{Traces: tr, Dark: trd, Error: errorText(traceErr)})
+	obsDims, obsDark, obsErr := api.FetchObserve(url)
+	m = updateProbeModel(m, model.ObserveMsg{Dimensions: obsDims, Dark: obsDark, Error: errorText(obsErr)})
+	rp, rc, rDark, rErr := api.FetchRoute(url)
+	m = updateProbeModel(m, model.RouteMsg{Posture: rp, Candidates: rc, Dark: rDark, Error: errorText(rErr)})
+	obl, oblDark, oblErr := api.FetchObligations(url)
+	m = updateProbeModel(m, model.ObligationsMsg{Report: obl, Dark: oblDark, Error: errorText(oblErr)})
+	return m
+}
+
 func configPath() string {
 	if p := os.Getenv("REINS_CONFIG"); p != "" {
 		return p
@@ -961,33 +993,7 @@ func main() {
 				return
 			}
 		}
-		evs, ed, evErr := api.FetchEvents(cfg.APIURL)
-		ts, td, taskErr := api.FetchTasks(cfg.APIURL)
-		dg, dd, dynErr := api.FetchDynamics(cfg.APIURL)
-		ep, epd, epiErr := api.FetchEpistemics(cfg.APIURL)
-		ss, sd, sessErr := api.FetchSessions(cfg.APIURL)
-		in, id, intakeErr := api.FetchIntake(cfg.APIURL)
-		caps, cd, capsErr := api.FetchCapabilities(cfg.APIURL)
-		gates, gd, gatesErr := api.FetchGates(cfg.APIURL)
-		doms, domd, domErr := api.FetchDomains(cfg.APIURL)
-		tr, trd, traceErr := api.FetchTraces(cfg.APIURL)
-		m := model.New("REINS")
-		m = updateProbeModel(m, model.EventsMsg{Events: evs, Dark: ed, Error: errorText(evErr)})
-		m = updateProbeModel(m, model.TasksMsg{Tasks: ts, Dark: td, Error: errorText(taskErr)})
-		m = updateProbeModel(m, model.DynamicsMsg{Graph: dg, Dark: dd, Error: errorText(dynErr)})
-		m = updateProbeModel(m, model.EpistemicsMsg{Epistemics: ep, Dark: epd, Error: errorText(epiErr)})
-		m = updateProbeModel(m, model.SessionsMsg{Sessions: ss, Dark: sd, Error: errorText(sessErr)})
-		m = updateProbeModel(m, model.IntakeMsg{Intake: in, Dark: id, Error: errorText(intakeErr)})
-		m = updateProbeModel(m, model.CapabilitiesMsg{Capabilities: caps, Dark: cd, Error: errorText(capsErr)})
-		m = updateProbeModel(m, model.GatesMsg{Gates: gates, Dark: gd, Error: errorText(gatesErr)})
-		m = updateProbeModel(m, model.DomainsMsg{Domains: doms, Dark: domd, Error: errorText(domErr)})
-		m = updateProbeModel(m, model.TracesMsg{Traces: tr, Dark: trd, Error: errorText(traceErr)})
-		obsDims, obsDark, obsErr := api.FetchObserve(cfg.APIURL)
-		m = updateProbeModel(m, model.ObserveMsg{Dimensions: obsDims, Dark: obsDark, Error: errorText(obsErr)})
-		rp, rc, rDark, rErr := api.FetchRoute(cfg.APIURL)
-		m = updateProbeModel(m, model.RouteMsg{Posture: rp, Candidates: rc, Dark: rDark, Error: errorText(rErr)})
-		obl, oblDark, oblErr := api.FetchObligations(cfg.APIURL)
-		m = updateProbeModel(m, model.ObligationsMsg{Report: obl, Dark: oblDark, Error: errorText(oblErr)})
+		m := probeReadModel(cfg.APIURL)
 		for _, a := range os.Args[2:] {
 			if page, ok := probePageToken(a); ok {
 				m.Page = page

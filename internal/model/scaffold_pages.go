@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hapax-systems/reins/internal/api"
 	"github.com/hapax-systems/reins/internal/grammar"
 )
 
@@ -257,7 +258,7 @@ func (m Model) renderObligations(w int) string {
 	b.WriteString(" " + rule + "\n")
 	rep := m.Obligations
 	if m.ObligationsDark || (rep.Dark != nil && *rep.Dark) {
-		b.WriteString(" " + grammar.C("mut", "(obligations dark — the cockpit read endpoint is unreachable or all sources are dark)"))
+		b.WriteString(" " + grammar.C("mut", "(obligations dark — the cockpit read endpoint is unreachable or all sources are dark; "+api.ReadAPINextAction+")"))
 		return strings.TrimRight(b.String(), "\n")
 	}
 	partial := rep.PartialDark != nil && *rep.PartialDark
@@ -316,6 +317,33 @@ func (m Model) renderObligations(w int) string {
 	}
 
 	b.WriteString(" " + rule + "\n")
+
+	b.WriteString(" CAPABILITY FULFILLMENT\n")
+	if rep.CapabilityFulfillment == nil {
+		b.WriteString(" fulfillment UNKNOWN\n")
+	} else if len(rep.CapabilityFulfillment) == 0 {
+		b.WriteString(" no capability routes observed\n")
+	}
+	for _, f := range rep.CapabilityFulfillment {
+		glyph, color := "◌", "yel"
+		if f.FulfillmentState == "occupied_in_memory" {
+			glyph, color = "●", "grn"
+		}
+		route, capability, model := obligationText(f.RouteID), obligationText(f.CapabilityID), obligationText(f.ModelID)
+		if m.AIR {
+			route, capability, model = "▒▒▒", "▒▒▒", "▒▒▒"
+		}
+		// Keep structural states ahead of independently clipped identity/locus fields.
+		for _, line := range []string{
+			fmt.Sprintf(" %s %s", grammar.C(color, glyph), obligationText(f.FulfillmentState)),
+			fmt.Sprintf(" route_state=%s mode=%s", obligationText(f.RouteState), obligationText(f.Mode)),
+			fmt.Sprintf(" route=%s capability=%s model=%s", route, capability, model),
+			" occupied=" + fulfillmentLoci(f.OccupiedLoci, m.AIR),
+			" resident=" + fulfillmentLoci(f.ResidentLoci, m.AIR),
+		} {
+			b.WriteString(clipRunes(line, maxVisible(12, w-2)) + "\n")
+		}
+	}
 	b.WriteString(" " + grammar.C("brt", "LOCUS ANOMALIES & LIGATORY OWES") + "\n")
 	for _, missing := range []struct {
 		name   string
@@ -323,7 +351,6 @@ func (m Model) renderObligations(w int) string {
 	}{
 		{"lanebus", rep.LanebusOwes == nil}, {"grants", rep.GrantOwes == nil},
 		{"custody", rep.CustodyOwes == nil}, {"anomalies", rep.LocusAnomalies == nil},
-		{"fulfillment", rep.CapabilityFulfillment == nil},
 	} {
 		if missing.absent {
 			fmt.Fprintf(&b, " %s UNKNOWN\n", missing.name)
@@ -379,4 +406,17 @@ func obligationListCount[T any](items []T) string {
 		return "UNKNOWN"
 	}
 	return fmt.Sprint(len(items))
+}
+
+func fulfillmentLoci(loci []string, air bool) string {
+	if loci == nil {
+		return "UNKNOWN"
+	}
+	if air {
+		return fmt.Sprintf("▒▒▒ (count=%d)", len(loci))
+	}
+	if len(loci) == 0 {
+		return "(none observed)"
+	}
+	return strings.Join(loci, ",")
 }

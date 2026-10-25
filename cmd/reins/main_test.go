@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,5 +302,44 @@ func TestObligationsExecutableWiring(t *testing.T) {
 	next, cmd := r.Update(msg)
 	if cmd == nil || !next.(root).m.ObligationsDark {
 		t.Fatal("obligations must fold dark and re-arm polling")
+	}
+}
+
+func TestHeadlessReadAssemblies(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		assemble func(string) model.Model
+	}{{"drive", driveLiveModel}, {"probe", probeReadModel}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := `{}`
+				switch r.URL.Path {
+				case "/read/observe":
+					body = `{"dimensions":[{"key":"fixture-signal","status":"live"}]}`
+				case "/route/posture":
+					body = `{"decision":"fixture-decision"}`
+				case "/route/candidates":
+					body = `{"candidates":[{"routing_class":"fixture-class"}]}`
+				case "/read/obligations":
+					body = `{"summary":{"total_owes":7}}`
+				}
+				fmt.Fprint(w, body)
+			}))
+			defer s.Close()
+			m := tc.assemble(s.URL)
+			if m.ObserveDark || len(m.Observe) != 1 || m.Observe[0].Key != "fixture-signal" {
+				t.Fatal("observe fold missing")
+			}
+			if m.RouteDark || m.RoutePosture.Decision != "fixture-decision" || len(m.RouteCandidates) != 1 || m.RouteCandidates[0].RoutingClass != "fixture-class" {
+				t.Fatal("route fold missing")
+			}
+			if m.ObligationsDark || m.Obligations.Summary.TotalOwes == nil || *m.Obligations.Summary.TotalOwes != 7 {
+				t.Fatal("obligations fold missing")
+			}
+			dark := tc.assemble("http://127.0.0.1:0")
+			if !dark.ObserveDark || !dark.RouteDark || !dark.ObligationsDark {
+				t.Fatal("unreachable must remain dark")
+			}
+		})
 	}
 }
