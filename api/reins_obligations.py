@@ -55,28 +55,6 @@ _LOCAL_ROUTE_INDICATORS = frozenset(
     }
 )
 
-_OBLIGATIONS_STRUCTURAL_ALLOW = (
-    "total_owes",
-    "lanebus_owes_count",
-    "grant_owes_count",
-    "custody_owes_count",
-    "locus_anomaly_count",
-    "dark_sources_count",
-    "action_count",
-    "warning_count",
-    "routes_total",
-    "routes_occupied_in_memory",
-    "local_loci_occupied_in_memory",
-    "local_loci_total",
-    "fulfillment_state",
-    "resident_models_count",
-    "topology",
-    "age_s",
-    "creditor",
-    "occupied_loci",
-    "resident_loci",
-)
-
 
 def _sanitize_scalar(val: Any) -> Any:
     if isinstance(val, str):
@@ -96,20 +74,14 @@ def _redact_for_deny(val: Any) -> Any:
         return [REDACTION_TOKEN for _ in val]
     if isinstance(val, dict):
         return {k: _redact_for_deny(v) for k, v in val.items()}
-    return val
+    return None
 
 
 def _classified(
     fields: dict[str, Any], allowlist: list[str], classify: Callable
 ) -> dict[str, Any]:
     sanitized = {k: _sanitize_scalar(v) for k, v in fields.items()}
-    is_default_air = getattr(classify, "__name__", "") == "classify_air"
-    eff_allow = (
-        list(dict.fromkeys([*allowlist, *_OBLIGATIONS_STRUCTURAL_ALLOW]))
-        if (allowlist and is_default_air)
-        else allowlist
-    )
-    raw_air = classify(sanitized, eff_allow)
+    raw_air = classify(sanitized, allowlist)
     air: dict[str, str] = {}
     for k in sanitized:
         dec = raw_air.get(k) if isinstance(raw_air, dict) else "deny"
@@ -519,7 +491,7 @@ def read_obligations_summary(
                 elif freshness not in ("stale", "aging", "dark", "absent", "fresh"):
                     freshness = "absent"
 
-        if freshness in ("stale", "aging") and f_state in (
+        if freshness not in ("fresh", "absent") and f_state in (
             "live",
             "lit",
             "ok",
