@@ -5326,6 +5326,54 @@ func TestTracesSplitPairIsReferenceNotLinked(t *testing.T) {
 	}
 }
 
+func TestReferenceScrollRenderedHeight(t *testing.T) {
+	pages := []int{PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces,
+		PageDomains, PageLifecycles, PageYard, PageReadiness, PageCaps, PageIntake,
+		PageObligations, PageObserve, PageRoute, PageVault, PageRdlc, PagePresence, PageDeck}
+	for _, page := range pages {
+		for _, height := range []int{8, 9, 10, 11} {
+			t.Run(fmt.Sprintf("%s/%d", pageLabel(page), height), func(t *testing.T) {
+				m := New("fixture").FoldDynamics(grammar.Graph{Nodes: []grammar.Node{{ID: "fixture-node", Res: "1"}}}, false)
+				m.Page, m.Width, m.Height = page, 80, height
+				m.ObserveDark, m.RouteDark, m.VaultDark = false, false, false
+				for i := 0; i < 12; i++ {
+					m.Observe = append(m.Observe, grammar.ObserveDimension{Key: fmt.Sprintf("signal-%02d", i), Status: "live"})
+					m.Vault = append(m.Vault, grammar.VaultNote{Title: fmt.Sprintf("note-%02d", i)})
+					m.Deck = append(m.Deck, fmt.Sprintf("readout-%02d", i))
+				}
+				lines := m.referenceLines(80)
+				last := strings.TrimSpace(ansi.Strip(fitWidth(lines[len(lines)-1], 80)))
+				for i := 0; i <= len(lines)*2; i++ {
+					m = step(m, "J")
+				}
+				frame := strings.Split(ansi.Strip(m.View()), "\n")
+				body := strings.Join(frame[4:height-3], "\n")
+				if last == "" || !strings.Contains(body, last) {
+					t.Errorf("last document line unreachable at offset %d: %q; body:\n%s", m.RefScroll, last, body)
+				}
+				if label := m.referenceScrollLabel(); label != fmt.Sprintf("%d-%d/%d", maxVisible(1, len(lines)-(height-7)+1), len(lines), len(lines)) {
+					t.Errorf("bottom range %q does not describe rendered window", label)
+				}
+			})
+		}
+	}
+}
+
+// This pins the changed helper's height accounting, not the deferred Dynamics renderer.
+func TestDynamicsScrollHeightAccounting(t *testing.T) {
+	for _, tc := range []struct{ w, h, pw, ph int }{
+		{160, 8, 98, 1}, {160, 9, 98, 1}, {160, 10, 98, 2}, {160, 11, 98, 3},
+		{160, 12, 98, 4}, {160, 40, 98, 32}, {0, 0, 73, 32}, {30, 8, 73, 1},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", tc.w, tc.h), func(t *testing.T) {
+			w, h := dynamicsAlgebraPrimaryPaneDims(tc.w, tc.h)
+			if w != tc.pw || h != tc.ph {
+				t.Fatalf("pane %dx%d, want %dx%d", w, h, tc.pw, tc.ph)
+			}
+		})
+	}
+}
+
 func TestReferencePageScrollCoverage(t *testing.T) {
 	for _, page := range []int{PageObserve, PageRoute, PageVault, PageRdlc, PagePresence, PageDeck} {
 		t.Run(pageLabel(page), func(t *testing.T) {
