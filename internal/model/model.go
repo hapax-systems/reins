@@ -982,7 +982,7 @@ func (m Model) isReferencePage() bool {
 		m.Page == PageCommands || m.Page == PageWindows || m.Page == PageIntent ||
 		m.Page == PageSurfaces || m.Page == PageDomains || m.Page == PageLifecycles || m.Page == PageYard ||
 		m.Page == PageReadiness || m.Page == PageCaps || m.Page == PageIntake ||
-		m.Page == PageEpistemics
+		m.Page == PageEpistemics || m.Page == PageObligations
 }
 
 // hasRows reports whether the current page has any selectable rows.

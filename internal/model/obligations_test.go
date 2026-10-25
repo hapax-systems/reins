@@ -155,3 +155,36 @@ func TestObligationsPythonSourceLabels(t *testing.T) {
 	out := obligationsView(t, `{"dark":false,"partial_dark":false,"source_status":{"lanebus":"live","grants":"live","claim_custody":"live","seat_succession":"live","capabilities":"live","context_bundle":"live"}}`, false)
 	obligationsWant(t, out, "claim_custody=live", "seat_succession=live", "context_bundle=live")
 }
+
+func thirteenObligations() Model {
+	rep := grammar.ObligationsReport{LanebusOwes: make([]grammar.ObligationRow, 13)}
+	for i := range rep.LanebusOwes {
+		rep.LanebusOwes[i].Subject = fmt.Sprintf("row-%02d", i)
+	}
+	m := New("fixture").FoldObligations(rep, false)
+	m.Page, m.Width, m.Height = PageObligations, 80, 12
+	return m
+}
+func TestObligationsTruncation(t *testing.T) {
+	out := ansi.Strip(thirteenObligations().renderObligations(120))
+	if strings.Count(out, "▸") != 12 || strings.Contains(out, "row-12") {
+		t.Fatal(out)
+	}
+	obligationsWant(t, out, "row-11", "… +1 additional obligation rows")
+}
+func TestObligationsScroll(t *testing.T) {
+	m := thirteenObligations()
+	before := m.View()
+	if strings.Contains(ansi.Strip(before), "row-11") {
+		t.Fatal("fixture must overflow the short viewport")
+	}
+	m = step(m, "j")
+	if m.RefScroll != 1 || m.View() == before {
+		t.Fatal("j must scroll the obligations viewport")
+	}
+	m = step(m, "G")
+	if m.RefScroll == 0 || m.RefScroll != m.referenceScrollMax() {
+		t.Fatal("G must reach the bottom")
+	}
+	obligationsWant(t, ansi.Strip(m.View()), "row-11", "… +1 additional obligation rows")
+}

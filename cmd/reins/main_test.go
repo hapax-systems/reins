@@ -41,6 +41,8 @@ func TestProbePageTokenCoversRegisteredPagesAndAliases(t *testing.T) {
 		page int
 	}{
 		{"events", model.PageEvents},
+		{"obligations", model.PageObligations},
+		{"owes", model.PageObligations},
 		{"tasks", model.PageTasks},
 		{"sessions", model.PageSessions},
 		{"yard", model.PageYard},
@@ -285,5 +287,17 @@ func TestRootUpdateConfigStatErrorLeadsWithPermissions(t *testing.T) {
 	r = rm.(root)
 	if !strings.HasPrefix(r.m.ConfigNotice, "config kept last-good — check the config file's permissions; ") {
 		t.Fatalf("a stat error must lead with the permissions action, got %q", r.m.ConfigNotice)
+	}
+}
+
+func TestObligationsExecutableWiring(t *testing.T) {
+	msg, ok := fetchObligationsOnce("http://127.0.0.1:0").(model.ObligationsMsg)
+	if !ok || !msg.Dark || msg.Error == "" {
+		t.Fatalf("unreachable fetch: %+v", msg)
+	}
+	r := root{m: model.New("fixture")}
+	next, cmd := r.Update(msg)
+	if cmd == nil || !next.(root).m.ObligationsDark {
+		t.Fatal("obligations must fold dark and re-arm polling")
 	}
 }
