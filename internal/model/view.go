@@ -10402,13 +10402,12 @@ func (m Model) referenceLayoutWidths(w int) (leftW, rightW int, split bool) {
 }
 
 func dynamicsAlgebraPrimaryPaneDims(w, h int) (int, int) {
-	if w < 40 || h < 12 {
+	if w <= 0 || h <= 0 {
 		w, h = 120, 40
+	} else if w < 40 {
+		w = 120
 	}
-	bodyH := h - 7
-	if bodyH < 1 {
-		bodyH = 1
-	}
+	bodyH := frameMidH(h)
 	if w < 3 {
 		return w, bodyH
 	}
@@ -10460,8 +10459,10 @@ func (m Model) referenceBody(w, h int) string {
 
 func (m Model) referenceScrollMax() int {
 	w, h := m.Width, m.Height
-	if w < 40 || h < 12 {
+	if w <= 0 || h <= 0 {
 		w, h = 120, 40
+	} else if w < 40 {
+		w = 120
 	}
 	if m.Page == PageDynamics {
 		primaryW, primaryH := dynamicsAlgebraPrimaryPaneDims(w, h)
@@ -10477,10 +10478,7 @@ func (m Model) referenceScrollMax() int {
 			leftW = rightW
 		}
 	}
-	midH := h - 7
-	if midH < 1 {
-		midH = 1
-	}
+	midH := frameMidH(h)
 	if m.sessionSplit() && m.Page == PageCaps {
 		max := len(m.capabilitySplitPaneLines(leftW)) - m.splitContextBodyRows(midH)
 		if max < 0 {
@@ -10528,8 +10526,10 @@ func (m Model) scrollReference(delta int) Model {
 
 func (m Model) referenceScrollLabel() string {
 	w, h := m.Width, m.Height
-	if w < 40 || h < 12 {
+	if w <= 0 || h <= 0 {
 		w, h = 120, 40
+	} else if w < 40 {
+		w = 120
 	}
 	if m.Page == PageDynamics {
 		primaryW, primaryH := dynamicsAlgebraPrimaryPaneDims(w, h)
@@ -10557,10 +10557,7 @@ func (m Model) referenceScrollLabel() string {
 	}
 	max := m.referenceScrollMax()
 	off := clamp(m.RefScroll, 0, max)
-	visible := h - 7
-	if visible < 1 {
-		visible = 1
-	}
+	visible := frameMidH(h)
 	linesForCount := m.referenceLines(leftW)
 	if m.sessionSplit() && m.Page == PageCaps {
 		visible = m.splitContextBodyRows(visible)
