@@ -13,6 +13,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 
 from reins_claim_custody import CustodyProjection
+from reins_obligations import read_obligations_summary
 
 import facet_registry  # the facet-cut SSOT: derives the on-air AIR allowlist + serves /read/facets
 import reins_context  # the tri-audience context-fact-bundle projection engine (convergence major-system #1)
@@ -6496,6 +6497,47 @@ def build_app(
     def claim_custody() -> dict:
         return custody.read(allowlist)
 
+    @app.get("/read/obligations")
+    def read_obligations() -> dict:
+        try:
+            lb = read_lanebus_summary(session_cfg, allowlist)
+            gr = read_grant_consumption(session_cfg, allowlist)
+            cc = custody.read(allowlist)
+            ss = read_seat_succession(session_cfg, allowlist, classify_air)
+            try:
+                caps = read_capability_summary(council_root, allowlist, session_cfg)
+                # Only typed evidence supplies routes. Empty/error evidence is dark;
+                # raw registry JSON must never fill this gap.
+                if not isinstance(caps, dict) or not isinstance(caps.get("routes"), list) or not caps["routes"]:
+                    caps = {"dark": True}
+            except Exception:
+                caps = {"dark": True}
+            try:
+                bundle = _load_context_bundle(council_root)
+                ctx = dict(reins_context.project(bundle, "operator_private")) if bundle else {}
+                if bundle:
+                    for key in ("generated_at", "provenance"):
+                        if key in bundle:
+                            ctx[key] = bundle[key]
+            except Exception:
+                ctx = {}
+            return read_obligations_summary(
+                # A locus id can embed a host:port; it is not a public entity id.
+                allowlist=[key for key in allowlist if key != "id"],
+                classify=classify_air, lanebus=lb, grants=gr, claim_custody=cc,
+                seat_succession=ss, capabilities=caps, context_bundle=ctx,
+            )
+        except Exception:
+            return {
+                "dark": True, "partial_dark": True, "dark_sources_count": 6,
+                "source_status": {name: "dark" for name in (
+                    "lanebus", "grants", "claim_custody", "seat_succession", "capabilities", "context_bundle"
+                )},
+                "error": "obligations_synthesis_failed", "summary": {},
+                "lanebus_owes": [], "grant_owes": [], "custody_owes": [],
+                "locus_anomalies": [], "local_substrate_loci": [], "capability_fulfillment": [],
+            }
+
     @app.get("/read/observe")
     def read_observe() -> dict:
         observe_cfg = dict(session_cfg)
@@ -6667,6 +6709,8 @@ def instance_config() -> dict:
         "lifecycle_registry_paths": lifecycle_registry_paths,
         "domain_pack_paths": domain_pack_paths,
         "capability_surface_pack_paths": capability_surface_pack_paths,
+        "capability_inventory_path": os.environ.get("REINS_CAPABILITY_INVENTORY")
+        or str(toml_cfg.get("capability_inventory_path", "")),
         "hkp_shadow_root": hkp_shadow_root,
         "hkp_index_root": hkp_index_root,
         "hkp_report_root": hkp_report_root,

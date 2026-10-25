@@ -1157,3 +1157,150 @@ def test_vendor_namespace_isolation_and_dark_source_freshness_guards() -> None:
     )
     assert dark_ctx_res["summary"]["routes_occupied_in_memory"] == 0
     assert dark_ctx_res["summary"]["local_loci_occupied_in_memory"] == 0
+
+
+# Endpoint inputs are deterministic fixtures; the real synthesis and AIR classifier run.
+@pytest.fixture
+def endpoint_inputs(tmp_path, monkeypatch):
+    import json
+    from datetime import UTC, datetime
+
+    import reins_read as rr
+
+    root = tmp_path / "root"
+    (root / "config").mkdir(parents=True)
+    raw = root / "config/platform-capability-registry.json"
+    raw.write_text(json.dumps({"routes": [{"route_id": "raw-route-must-not-serve", "route_state": "ok"}]}))
+    cfg = {"capability_receipt_dir": str(tmp_path / "receipts"), "quota_spend_ledger_live": str(tmp_path / "quota.json")}
+    real_reader = rr.read_capability_summary
+    caps = {"routes": [{"route_id": "typed-route", "route_state": "blocked", "mode": "remote", "model_id": "fixture-model"}]}
+    calls = []
+
+    def typed(root_arg, allow, cfg_arg):
+        calls.append((root_arg, allow, cfg_arg))
+        return caps
+
+    monkeypatch.setattr(rr, "read_capability_summary", typed)
+    monkeypatch.setattr(rr, "read_lanebus_summary", lambda *_: {"inboxes": [{"lane": "private-lane", "unacked_count": 2}]})
+    monkeypatch.setattr(rr, "read_grant_consumption", lambda *_: {"grants": [{"state": "expired", "grant_id": "private-grant"}]})
+    monkeypatch.setattr(rr.CustodyProjection, "read", lambda *_: {"rows": [{"state": "blocked", "task_id": "private-task"}]})
+    monkeypatch.setattr(rr, "read_seat_succession", lambda *_: {"rows": [{"pane_state": "absent", "claims": {"present": True}, "session": "private-session"}]})
+    now = datetime.now(UTC).isoformat()
+    fact = {"id": "locus:private-node:8000", "kind": "locus", "state": {"value_state": "live"},
+            "observed_at": now, "air": {"operator_private": "allow"},
+            "payload": {"host": "private-node", "port": "8000", "loaded_models": ["fixture-model"],
+                        "admitted_by": ["typed-route"]}}
+    bundle = {"generated_at": now, "facts": {"loci": [fact]}, "evaluation": {"bundle_state": "live"}}
+    monkeypatch.setattr(rr, "_load_context_bundle", lambda *_: bundle)
+    return rr, root, cfg, raw, real_reader, caps, calls, bundle
+
+
+def _endpoint_body(inputs, allow=None):
+    from fastapi.testclient import TestClient
+
+    rr, root, cfg, *_ = inputs
+    if allow is None:
+        allow = rr.facet_registry.air_allowlist()
+    response = TestClient(rr.build_app(str(root), allow, cfg)).get("/read/obligations")
+    assert response.status_code == 200
+    body = response.json()
+    from test_facet_registry import _collect_payload_attrs
+    attrs = set()
+    _collect_payload_attrs(body, attrs)
+    assert all(not rr.facet_registry.classify("", key).startswith("UNRESOLVED") for key in attrs)
+    return body
+
+
+def test_read_obligations_endpoint_wired_in_app(endpoint_inputs):
+    body = _endpoint_body(endpoint_inputs)
+    assert isinstance(body["dark"], bool)
+    assert "source_status" in body
+    assert "summary" in body
+    assert "lanebus_owes" in body
+    assert "capability_fulfillment" in body
+    assert body["dark"] is False and body["partial_dark"] is False
+    assert body["summary"]["lanebus_owes_count"] == 1
+    assert body["summary"]["routes_total"] == 1
+    assert [r["kind"] for r in body["grant_owes"]] == ["grant.expired"]
+    assert [r["kind"] for r in body["custody_owes"]] == ["claim_custody.blocked", "seat_succession.claimed_without_pane"]
+    assert body["source_status"]["capabilities"] == "live"
+    row = body["capability_fulfillment"][0]
+    assert row["route_id"] == "typed-route"
+    assert row["route_state"] == "blocked"
+    assert row["fulfillment_state"] == "route_blocked_locus_occupied"
+    rr, root, cfg, _, _, _, calls, _ = endpoint_inputs
+    assert calls == [(str(root), rr.facet_registry.air_allowlist(), cfg)]
+
+
+@pytest.mark.parametrize("case", ["invalid-registry", "invalid-json", "empty-typed", "error", "malformed-typed", "dark-with-routes"])
+def test_obligations_typed_boundary_never_serves_raw(endpoint_inputs, monkeypatch, case):
+    rr, _, _, raw, real_reader, caps, _, _ = endpoint_inputs
+    if case.startswith("invalid"):
+        if case == "invalid-json":
+            raw.write_text('{"routes": [{"route_id": "raw-malformed-must-not-serve"}],')
+        monkeypatch.setattr(rr, "read_capability_summary", real_reader)
+    elif case == "empty-typed":
+        caps["routes"] = []
+    elif case == "dark-with-routes":
+        caps["dark"] = True
+    elif case == "malformed-typed":
+        monkeypatch.setattr(rr, "read_capability_summary", lambda *_: None)
+    else:
+        def fail(*_):
+            raise ValueError("private-reader-diagnostic")
+        monkeypatch.setattr(rr, "read_capability_summary", fail)
+    body = _endpoint_body(endpoint_inputs)
+    assert body["dark"] is False and body["partial_dark"] is True
+    assert body["source_status"]["capabilities"] == "dark"
+    assert body["capability_fulfillment"] == []
+    assert body["summary"]["routes_total"] == 0
+    assert body["summary"]["lanebus_owes_count"] == 1
+    assert "raw-route-must-not-serve" not in str(body)
+    assert "raw-malformed-must-not-serve" not in str(body)
+    assert "private-reader-diagnostic" not in str(body)
+
+
+@pytest.mark.parametrize("failed", ["context", "upstream", "synthesis"])
+def test_obligations_endpoint_sanitizes_errors(endpoint_inputs, monkeypatch, failed):
+    rr = endpoint_inputs[0]
+    def fail(*_args, **_kwargs):
+        raise ValueError("private-upstream-diagnostic")
+    name = {"context": "_load_context_bundle", "upstream": "read_lanebus_summary", "synthesis": "read_obligations_summary"}[failed]
+    monkeypatch.setattr(rr, name, fail, raising=False)
+    body = _endpoint_body(endpoint_inputs)
+    assert "private-upstream-diagnostic" not in str(body)
+    if failed == "context":
+        assert body["dark"] is False and body["partial_dark"] is True
+        assert body["source_status"]["context_bundle"] == "dark"
+        assert body["capability_fulfillment"][0]["fulfillment_state"] == "blocked"
+    else:
+        assert body["dark"] is True
+        assert body["error"] == "obligations_synthesis_failed"
+        assert body["summary"] == {} and body["capability_fulfillment"] == []
+
+
+@pytest.mark.parametrize("allow", [None, [], ["kind", "state", "subject", "id"]])
+def test_obligations_endpoint_keeps_private_values_sealed(endpoint_inputs, allow):
+    body = _endpoint_body(endpoint_inputs, allow)
+    for sentinel in ["private-node", "private-lane", "private-grant", "private-task", "private-session", "8000"]:
+        assert sentinel not in str(body)
+    locus = body["local_substrate_loci"][0]
+    assert locus["id"] == REDACTION_TOKEN and locus["host"] == REDACTION_TOKEN
+    assert locus["air"]["id"] == "deny"
+    assert body["lanebus_owes"][0]["subject"] == REDACTION_TOKEN
+    if allow == []:
+        assert body["summary"]["routes_total"] is None
+        assert locus["resident_models_count"] is None
+
+
+@pytest.mark.parametrize("case", ["denied", "stale"])
+def test_obligations_context_seals_before_deriving(endpoint_inputs, case):
+    bundle = endpoint_inputs[-1]
+    if case == "denied":
+        bundle["facts"]["loci"][0]["air"]["operator_private"] = "deny"
+    else:
+        bundle["generated_at"] = "2000-01-01T00:00:00Z"
+    body = _endpoint_body(endpoint_inputs)
+    assert bool(body["local_substrate_loci"]) == (case == "stale")
+    assert body["capability_fulfillment"][0]["fulfillment_state"] == "blocked"
+    assert body["summary"]["local_loci_occupied_in_memory"] == 0

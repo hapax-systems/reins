@@ -63,6 +63,10 @@ EDGES: set[str] = {
 }
 # BODIES — free-text payload; default-DENY on air (never a facet).
 BODIES: set[str] = {
+    # Obligations' opaque values can contain private labels/locators. Register
+    # their shape without making them part of the default on-air skeleton.
+    "creditor", "debtor", "host", "port", "loaded_models", "admitted_by",
+    "topology", "occupied_loci", "resident_loci",
     "summary", "detail", "prompt", "takeaway", "caveat", "emphasis", "context", "thesis",
     "missing", "action", "next_evidence", "blocked_reasons", "hardening_notes", "must_include",
     "answer_shape", "blockers", "docs", "aliases", "tags", "remedy",
@@ -73,6 +77,9 @@ BODIES: set[str] = {
 }
 # ENVELOPES — structural wrappers / nesting / mirrors; not binnable row attributes.
 ENVELOPES: set[str] = {
+    "lanebus_owes", "grant_owes", "custody_owes", "locus_anomalies",
+    "local_substrate_loci", "capability_fulfillment", "source_status",
+    "lanebus", "claim_custody", "seat_succession", "context_bundle",
     "air", "schema_version", "generated_at", "package_hash", "sources", "rows", "relations",
     "routes", "tools", "validation", "lenses", "claims", "observations", "totals",
     "inboxes", "unread",   # lanebus: the per-inbox list and its unread-set list
@@ -98,6 +105,12 @@ ENVELOPES: set[str] = {
 
 # ── BY-NAME DEFAULT ASSIGNMENT (the unambiguous bulk) ────────────────────────
 FACET_BY_NAME: dict[str, str] = {
+    "partial_dark": "posture", "fulfillment_state": "posture",
+    "total_owes": "measure", "lanebus_owes_count": "measure", "grant_owes_count": "measure",
+    "custody_owes_count": "measure", "locus_anomaly_count": "measure", "dark_sources_count": "measure",
+    "action_count": "measure", "warning_count": "measure", "routes_total": "measure",
+    "routes_occupied_in_memory": "measure", "local_loci_occupied_in_memory": "measure",
+    "local_loci_total": "measure", "resident_models_count": "measure",
     # Claim custody is a projection, never a lifecycle authority.
     "started": "posture", "return_state": "posture", "guard": "posture",
     "claim_state": "posture", "events_truncated": "posture",
