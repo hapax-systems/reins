@@ -2135,3 +2135,247 @@ def test_obligations_inventory_config_precedence(tmp_path, monkeypatch):
     assert instance_config()["capability_inventory_path"] == "env-inventory.json"
     monkeypatch.setenv("REINS_CAPABILITY_INVENTORY", "")
     assert instance_config()["capability_inventory_path"] == "toml-inventory.json"
+
+
+# O5: consumer-only observations; fixtures never contact an endpoint or host.
+def _o5_sessions(tmp_path, monkeypatch, probes, age=0):
+    now = 1_800_000_000
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"host_probes": probes, "lanes": {
+        "worker-a": {"role": "worker-a", "alive": True, "platform": "fixture"},
+        "worker-b": {"role": "worker-b", "alive": True, "platform": "fixture"},
+    }}))
+    os.utime(path, (now - age, now - age))
+    monkeypatch.setattr(reins_read, "_now", lambda: now)
+    monkeypatch.setenv("REINS_COORDINATOR_STATE", str(path))
+    app = build_app(str(tmp_path), ["role"], {})
+    return reins_read._session_snapshot()[1], TestClient(app)
+
+
+@pytest.mark.parametrize("probes,expected", [
+    ({"a": {"ok": False}, "b": {"ok": False}}, "dark"),
+    ({"a": {"ok": True}, "b": {"ok": False}}, "degraded"),
+    ({"a": {"ok": True}, "b": {}}, "degraded"),
+    ({"a": {"ok": "true"}}, "dark"),
+    ({"a": {"ok": 1}}, "dark"),
+    ({"a": None}, "dark"), ({}, "dark"), ([], "dark"),
+    ({"a": {"ok": True}, "b": {"ok": True}}, "live"),
+])
+def test_o5_probe_and_session_outcomes(tmp_path, monkeypatch, probes, expected):
+    producer, client = _o5_sessions(tmp_path, monkeypatch, probes)
+    assert producer["host_probes"] == probes
+    assert producer["state"] == expected
+    body = client.get("/read/sessions").json()
+    assert body["producer"]["state"] == producer["state"]
+    assert "host_probes" not in body["producer"]
+    if isinstance(probes, dict):
+        assert [r["host"] for r in body["producer"]["sources"]] == list(probes)
+        assert all(r["air"]["host"] == "deny" for r in body["producer"]["sources"])
+        assert [r["state"] for r in body["producer"]["sources"]] == [
+            "live" if isinstance(p, dict) and p.get("ok") is True else "dark" if isinstance(p, dict) and p.get("ok") is False else "unknown" for p in probes.values()]
+    assert body["dark"] is (expected == "dark")
+    assert body.get("partial", False) is (expected != "live")
+    assert len(body["sessions"]) == 2
+    for row in body["sessions"]:
+        assert row["alive"] is (True if expected == "live" else None)
+        if expected != "live":
+            assert row["state"] == "unknown"
+    detail = client.get("/read/session/worker-a").json()["detail"]
+    assert detail["health"]["alive"] is (True if expected == "live" else None)
+
+
+@pytest.mark.parametrize("age", [301, -1])
+@pytest.mark.parametrize("other", [True, False])
+@pytest.mark.parametrize("first", [True, False])
+def test_o5_probes_do_not_refresh_old_or_future_snapshot(tmp_path, monkeypatch, age, other, first):
+    producer, client = _o5_sessions(tmp_path, monkeypatch, {"a": {"ok": first}, "b": {"ok": other}}, age)
+    assert producer["state"] == "stale"
+    body = client.get("/read/sessions").json()
+    assert body["partial"] is True and body["sessions"][0]["alive"] is None
+    assert all(r["state"] == "unknown" for r in body["producer"]["sources"])
+    detail = client.get("/read/session/worker-a").json()["detail"]
+    assert detail["health"]["alive"] is None
+    assert body["sessions"][0]["state"] == "unknown"
+
+
+def _o5_bundle(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    now = 1_800_000_000
+    stamp = datetime.fromtimestamp(now - 10, UTC).isoformat()
+    fact = {"fact_id": "gpu:fixture", "fact_type": "resource_vram",
+            "state": {"value_state": "lit"}, "freshness_state": "fresh",
+            "provenance": {"source": "fixture-observation", "producer": "fixture",
+                           "observed_at": stamp}, "air": {"operator_private": "allow"}}
+    bundle = {"evaluation": {"bundle_state": "lit"}, "facts": {"gpu": [fact]}}
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(bundle))
+    monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    for key in ("REINS_COORDINATOR_STATE", "REINS_DISPATCH_LEDGER_PATH"):
+        monkeypatch.setenv(key, str(tmp_path / key))
+    for key in ("governance", "cost"):
+        monkeypatch.setattr(reins_read, f"_observe_{key}",
+                            lambda cfg, key=key: reins_read._observe_dark(key, "isolated fixture"))
+    monkeypatch.setattr(reins_read, "_now", lambda: now)
+    return bundle, fact, path, {"council_root": str(tmp_path)}
+
+
+def test_o5_bundle_restores_isolation(tmp_path, monkeypatch):
+    for _ in range(2):
+        _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+        for key in ("REINS_COORDINATOR_STATE", "REINS_DISPATCH_LEDGER_PATH"):
+            assert os.environ.get(key) == str(tmp_path / key)
+        for key in ("governance", "cost"):
+            assert getattr(reins_read, f"_observe_{key}")(cfg)["summary"] == "source dark: isolated fixture"
+        monkeypatch.undo()
+
+
+@pytest.mark.parametrize("kind,expected_count", [("resource_vram", None), ("loaded_model", 1)])
+def test_o5_gpu_context_has_fresh_provenance_not_invented_zero(tmp_path, monkeypatch, kind, expected_count):
+    bundle, fact, path, cfg = _o5_bundle(tmp_path, monkeypatch)
+    fact["fact_type"] = kind
+    path.write_text(json.dumps(bundle))
+    dim = reins_read._observe_gpu_from_context(cfg)
+    assert dim["status"] == "live" and dim["count"] == expected_count
+    assert dim["source"] == "context-bundle" and dim["freshness"] == "fresh"
+    assert dim["age_s"] == 10
+    assert fact["provenance"]["observed_at"] in dim["observed_at"]
+
+
+@pytest.mark.parametrize("change", [
+    "absent", "malformed", "empty", "held-bundle", "partial-bundle", "unknown-bundle",
+    "dark", "hold", "refused", "partial", "stale", "missing-state",
+    "stale-label", "missing-freshness", "old", "future", "bad-time", "naive-time",
+    "missing-provenance", "missing-source", "missing-producer", "denied", "redacted",
+    "mixed-dark", "non-gpu", "bad-facts", "bad-fact", "bad-bucket",
+])
+def test_o5_gpu_context_failure_narrows(tmp_path, monkeypatch, change):
+    from datetime import UTC, datetime
+
+    bundle, fact, path, cfg = _o5_bundle(tmp_path, monkeypatch)
+    if change == "empty":
+        bundle["facts"] = {}
+    elif change in {"held-bundle", "partial-bundle", "unknown-bundle"}:
+        bundle["evaluation"]["bundle_state"] = change.split("-")[0]
+    elif change in {"dark", "hold", "refused", "partial", "stale"}:
+        fact["state"]["value_state"] = change
+    elif change == "missing-state":
+        del fact["state"]
+    elif change == "stale-label":
+        fact["freshness_state"] = "stale"
+    elif change == "missing-freshness":
+        del fact["freshness_state"]
+    elif change in {"old", "future"}:
+        offset = -301 if change == "old" else 1
+        fact["provenance"]["observed_at"] = datetime.fromtimestamp(1_800_000_000 + offset, UTC).isoformat()
+    elif change in {"bad-time", "naive-time"}:
+        fact["provenance"]["observed_at"] = "bad" if change == "bad-time" else "2027-01-15T08:00:00"
+    elif change == "missing-provenance":
+        del fact["provenance"]
+    elif change in {"missing-source", "missing-producer"}:
+        del fact["provenance"][change.removeprefix("missing-")]
+    elif change in {"denied", "redacted"}:
+        fact["air"]["operator_private"] = "deny" if change == "denied" else "redact"
+    elif change == "mixed-dark":
+        bundle["facts"]["gpu"].append({**fact, "state": {"value_state": "dark"}})
+    elif change == "non-gpu":
+        fact["fact_type"] = "usage"
+    elif change == "bad-facts":
+        bundle["facts"] = [fact]
+    elif change == "bad-fact":
+        bundle["facts"]["gpu"].append(None)
+    elif change == "bad-bucket":
+        bundle["facts"]["broken"] = None
+    path.write_text("{" if change == "malformed" else json.dumps(bundle))
+    if change == "absent":
+        path.unlink()
+    dim = reins_read._observe_gpu_from_context(cfg)
+    assert dim["status"] == "dark" and dim["count"] is None
+    assert dim["source"] == "context-bundle"
+    assert dim["freshness"] != "fresh"
+    assert "source dark:" in dim["summary"]
+    assert "next: check the context bundle and refresh its evidence" in dim["summary"]
+
+
+@pytest.mark.parametrize("response,live", [
+    *[({key: word}, False) for key in ("status", "state", "freshness_state")
+      for word in ("held", "hold", "blocked", "refused", "stale", "expired", "revoked", "failed",
+                   "unimagined-status", "dark", "partial", "absent", "unknown", "fresh", "", None, [], {})],
+    ({"dark": True, "status": "ok"}, False),
+    ({"status": "live", "freshness_state": "stale"}, False),
+    ({"status": "ok"}, True), ({"state": "live"}, True),
+    ({"status": "ok", "state": "live"}, True),
+    ({}, False), (None, False), ([], False),
+])
+def test_o5_http_requires_positive_evidence_without_fallback(tmp_path, monkeypatch, response, live):
+    _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+    if isinstance(response, dict):
+        response = {**response, "count": 7}
+    monkeypatch.setattr(reins_read, "_observe_http_json", lambda *a: response)
+    def forbidden(*args):
+        pytest.fail("primary evidence must not call the fallback")
+    monkeypatch.setattr(reins_read, "_observe_gpu_from_context", forbidden, raising=False)
+    dims = {d["key"]: d for d in read_observe_summary(cfg)["dimensions"]}
+    assert {d["status"] for d in dims.values()} == {"live" if live else "dark"}
+    assert {d["count"] for d in dims.values()} == {7 if live else None}
+
+
+@pytest.mark.parametrize("failure", ["transport", "invalid-json", "http-error", "bug"])
+def test_o5_only_transport_unavailable_can_fall_back(tmp_path, monkeypatch, failure):
+    from urllib.error import HTTPError, URLError
+
+    _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+    error = {"transport": URLError("fixture offline"), "invalid-json": ValueError("bad json"),
+             "http-error": HTTPError("http://fixture.invalid", 403, "refused", {}, None),
+             "bug": RuntimeError("fixture bug")}[failure]
+    def failed(*args):
+        raise error
+    monkeypatch.setattr(reins_read, "_observe_http_json", failed)
+    real = getattr(reins_read, "_observe_gpu_from_context", lambda cfg: pytest.fail("fallback missing"))
+    calls = []
+    def counted(cfg):
+        calls.append("gpu")
+        return real(cfg)
+    monkeypatch.setattr(reins_read, "_observe_gpu_from_context", counted, raising=False)
+    dims = {d["key"]: d for d in read_observe_summary(cfg)["dimensions"]}
+    assert calls == (["gpu"] if failure == "transport" else [])
+    assert dims["gpu"]["status"] == ("live" if failure == "transport" else "dark")
+    if failure == "transport":
+        assert dims["gpu"]["source"] == "context-bundle"
+    assert dims["gpu"]["count"] is None
+    assert dims["drift"]["status"] == "dark"  # fallback is GPU-only
+
+
+def test_o5_live_primary_wins_and_broken_fallback_remains_dark(tmp_path, monkeypatch):
+    _, _, path, cfg = _o5_bundle(tmp_path, monkeypatch)
+    def forbidden(*args):
+        pytest.fail("live primary must not call the fallback")
+    monkeypatch.setattr(reins_read, "_observe_gpu_from_context", forbidden, raising=False)
+    monkeypatch.setattr(reins_read, "_observe_http_json", lambda *a: {"status": "ok", "count": 7})
+    dims = {d["key"]: d for d in read_observe_summary(cfg)["dimensions"]}
+    assert dims["gpu"]["status"] == "live" and dims["gpu"]["count"] == 7
+    monkeypatch.undo()
+    _, _, path, cfg = _o5_bundle(tmp_path, monkeypatch)
+    path.write_text("{")
+    def offline(*args):
+        raise OSError("fixture offline")
+    monkeypatch.setattr(reins_read, "_observe_http_json", offline)
+    dims = {d["key"]: d for d in read_observe_summary(cfg)["dimensions"]}
+    assert dims["gpu"]["status"] == "dark" and dims["gpu"]["count"] is None
+    assert dims["gpu"]["source"] == "context-bundle"
+
+
+def test_o5_new_payload_attributes_resolve(tmp_path, monkeypatch):
+    import facet_registry as fr
+    from test_facet_registry import _collect_payload_attrs
+
+    _, client = _o5_sessions(tmp_path, monkeypatch, {"a": {"ok": False}})
+    sessions = client.get("/read/sessions").json()
+    _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+    def offline(*args):
+        raise OSError("fixture offline")
+    monkeypatch.setattr(reins_read, "_observe_http_json", offline)
+    attrs = set()
+    for payload in (sessions, read_observe_summary(cfg)):
+        _collect_payload_attrs(payload, attrs)
+    assert not [a for a in attrs if fr.classify("Read", a).startswith("UNRESOLVED")]
