@@ -774,3 +774,21 @@ func FetchDomains(apiURL string) (grammar.DomainSummary, bool, error) {
 	}
 	return r.Domains, r.Dark, nil
 }
+
+// FetchObligations GETs the ligatory obligations and substrate fulfillment projection (/read/obligations).
+func FetchObligations(apiURL string) (grammar.ObligationsReport, bool, error) {
+	c := newReadHTTPClient()
+	resp, err := c.Get(apiURL + "/read/obligations")
+	if err != nil {
+		return grammar.ObligationsReport{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkOK(resp, "/read/obligations"); err != nil {
+		return grammar.ObligationsReport{}, true, err
+	}
+	var r grammar.ObligationsReport
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return grammar.ObligationsReport{}, true, err
+	}
+	return r, r.Dark != nil && *r.Dark, nil
+}

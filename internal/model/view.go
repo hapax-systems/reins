@@ -1948,7 +1948,7 @@ func (m Model) bodyForPage(w, h int) string {
 		return m.tracesBody(w, h)
 	case PageSessionTurns:
 		return m.turnListBody(w, h)
-	case PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps, PageObserve, PageVault, PageRdlc, PagePresence, PageDeck, PageRoute:
+	case PageDynamics, PageLoops, PageAxes, PageIdentity, PageRelational, PageEpistemics, PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles, PageYard, PageReadiness, PageIntake, PageCaps, PageObserve, PageVault, PageRdlc, PagePresence, PageDeck, PageRoute, PageObligations:
 		return m.referenceBody(w, h)
 	default:
 		return m.eventsBody(w, h)
@@ -2695,6 +2695,8 @@ func (m Model) referenceContent(w int) string {
 		b.WriteString(m.renderObserve(w))
 	case PageRoute:
 		b.WriteString(m.renderRoute(w))
+	case PageObligations:
+		b.WriteString(m.renderObligations(w))
 	case PageVault:
 		b.WriteString(m.renderVault(w))
 	case PageRdlc:
@@ -10365,6 +10367,8 @@ func pageLabel(page int) string {
 		return "PageObserve"
 	case PageRoute:
 		return "PageRoute"
+	case PageObligations:
+		return "PageObligations"
 	case PageVault:
 		return "PageVault"
 	case PageRdlc:
