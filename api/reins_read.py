@@ -1405,6 +1405,14 @@ def _session_snapshot() -> tuple[list[tuple[str, dict]], dict]:
         state = json.load(fh)
     age_s = _now() - mtime
     producer = {"source": path, "age_s": age_s, "state": _producer_verdict(age_s)}
+    if "host_probes" in state:
+        probes = state["host_probes"]
+        producer["host_probes"] = probes
+        flags = [hp.get("ok") if isinstance(hp, dict) else None for hp in probes.values()] if isinstance(probes, dict) else []
+        if not any(flag is True for flag in flags):
+            producer["state"] = "dark"
+        elif not all(flag is True for flag in flags) and producer["state"] == "live":
+            producer["state"] = "degraded"
     lanes = state.get("lanes") or {}
     if not isinstance(lanes, dict):
         return [], producer
@@ -4549,6 +4557,8 @@ def _observe_payload_summary(key: str, payload: Any, count: int | None) -> str:
 
 
 def _observe_from_http(cfg: dict | None, key: str) -> dict:
+    from urllib.error import HTTPError
+
     base = _observe_api_base_url(cfg)
     if not base:
         return _observe_dark(key, "observe api url not configured")
@@ -4556,9 +4566,15 @@ def _observe_from_http(cfg: dict | None, key: str) -> dict:
     try:
         payload = _observe_http_json(url, _observe_timeout_s(cfg))
     except Exception as e:
-        return _observe_dark(key, str(e))
-    if isinstance(payload, dict) and payload.get("dark") is True:
-        return _observe_dark(key, str(payload.get("error") or payload.get("summary") or "api returned dark"))
+        # Transport absence alone admits fallback; refusals and malformed input do not.
+        unavailable = isinstance(e, OSError) and not isinstance(e, HTTPError)
+        return {**_observe_dark(key, str(e)), "input_state": "unavailable" if unavailable else "failed"}
+    nonlive = {"dark", "stale", "refused", "hold", "partial", "absent", "unknown"}
+    if isinstance(payload, dict) and (
+        payload.get("dark") is True
+        or any(str(payload.get(k, "")) in nonlive for k in ("status", "state", "freshness_state"))
+    ):
+        return _observe_dark(key, str(payload.get("error") or payload.get("summary") or "api returned non-live evidence"))
     count = _observe_payload_count(key, payload)
     return _observe_dim(key, "live", _observe_payload_summary(key, payload, count), count)
 
@@ -4674,6 +4690,53 @@ def _observe_cost(cfg: dict | None) -> dict:
     return _observe_dark("cost", f"dispatch ledger missing: {path}")
 
 
+def _observe_gpu_from_context(cfg: dict | None = None) -> dict:
+    """Seal GPU facts before derivation; re-age their 300s window at consumption.
+
+    Incomplete evidence is dark; this reader never probes or produces facts.
+    """
+    from datetime import datetime
+
+    meta = {"source": "context-bundle", "freshness": "unknown"}
+    try:
+        bundle = _load_context_bundle(str((cfg or {}).get("council_root") or ""))
+        if not bundle:
+            raise ValueError("context bundle absent")
+        groups = bundle.get("facts")
+        if not isinstance(groups, dict) or any(not isinstance(fs, list) or any(not isinstance(f, dict) for f in fs) for fs in groups.values()):
+            raise ValueError("malformed context facts")
+        projection = reins_context.project(bundle, "operator_private")
+        if projection["bundle_state"] != "lit":
+            raise ValueError("context bundle not fully lit")
+        facts = [f for f in projection["facts"] if f.get("fact_type") in {"resource_vram", "loaded_model"}]
+        if not facts:
+            raise ValueError("GPU evidence absent or denied")
+        ages, stamps = [], []
+        for fact in facts:
+            if fact.get("_air_redacted") or (fact.get("state") or {}).get("value_state") != "lit":
+                raise ValueError("GPU evidence not fully lit")
+            if fact.get("freshness_state") != "fresh":
+                raise ValueError("GPU freshness not fresh")
+            provenance = fact.get("provenance") or {}
+            if not all(isinstance(provenance.get(k), str) and provenance[k].strip() for k in ("source", "producer")):
+                raise ValueError("GPU provenance absent")
+            stamp = provenance.get("observed_at")
+            observed = datetime.fromisoformat(stamp)
+            if observed.tzinfo is None:
+                raise ValueError("GPU observation lacks timezone")
+            age = _now() - observed.timestamp()
+            if not 0 <= age <= 300:
+                raise ValueError("GPU observation stale or ahead of clock")
+            ages.append(age)
+            stamps.append(stamp)
+        models = sum(f["fact_type"] == "loaded_model" for f in facts)
+        vram = sum(f["fact_type"] == "resource_vram" for f in facts)
+        dim = _observe_dim("gpu", "live", f"context-bundle fresh: vram_loci={vram}; loaded_models={models if models else 'unknown'}", models or None)
+        return {**dim, **meta, "freshness": "fresh", "age_s": max(ages), "observed_at": stamps}
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, _BundleMalformed) as e:
+        return {**_observe_dark("gpu", str(e)), **meta}
+
+
 def read_observe_summary(cfg: dict | None = None) -> dict:
     """Aggregate whole-system observation dimensions without minting authority or AIR policy.
 
@@ -4696,8 +4759,11 @@ def read_observe_summary(cfg: dict | None = None) -> dict:
             dimensions.append(local_dim)
             continue
         api_dim = _observe_from_http(cfg, key)
+        input_state = api_dim.pop("input_state", None)  # private discriminator, never a wire attribute
         if api_dim["status"] == "live":
             dimensions.append(api_dim)
+        elif key == "gpu" and input_state == "unavailable":
+            dimensions.append(_observe_gpu_from_context(cfg))
         elif local_dim is not None:
             dimensions.append(local_dim)
         else:
@@ -6363,7 +6429,14 @@ def build_app(
             )
             for name, lane in raw
         ]
-        payload = {"dark": False, "sessions": sorted(sessions, key=_session_sort_key), "producer": producer}
+        probes = producer.pop("host_probes", None)
+        if isinstance(probes, dict):
+            producer["sources"] = []
+            for host, probe in probes.items():
+                ok = probe.get("ok") if isinstance(probe, dict) and _producer_verdict(producer["age_s"]) == "live" else None
+                fields = {"host": host, "state": "live" if ok is True else "dark" if ok is False else "unknown"}
+                producer["sources"].append({**fields, "air": classify_air(fields, allowlist)})
+        payload = {"dark": producer["state"] == "dark", "sessions": sorted(sessions, key=_session_sort_key), "producer": producer}
         if not producer_live:
             payload["partial"] = True
         return payload
