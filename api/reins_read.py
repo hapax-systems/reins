@@ -4569,10 +4569,12 @@ def _observe_from_http(cfg: dict | None, key: str) -> dict:
         # Transport absence alone admits fallback; refusals and malformed input do not.
         unavailable = isinstance(e, OSError) and not isinstance(e, HTTPError)
         return {**_observe_dark(key, str(e)), "input_state": "unavailable" if unavailable else "failed"}
-    nonlive = {"dark", "stale", "refused", "hold", "partial", "absent", "unknown"}
-    if isinstance(payload, dict) and (
-        payload.get("dark") is True
-        or any(str(payload.get(k, "")) in nonlive for k in ("status", "state", "freshness_state"))
+    # Positive vocabulary: _observe_dim's wire "live"; the observe HTTP contract's "ok".
+    fields = ("status", "state", "freshness_state")
+    if not isinstance(payload, dict) or not any(k in payload for k in fields):
+        return _observe_dark(key, "api liveness unknown; next: require explicit live evidence")
+    if payload.get("dark") is True or any(
+        payload[k] not in ("live", "ok") for k in fields if k in payload
     ):
         return _observe_dark(key, str(payload.get("error") or payload.get("summary") or "api returned non-live evidence"))
     count = _observe_payload_count(key, payload)

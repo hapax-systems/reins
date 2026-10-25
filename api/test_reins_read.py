@@ -2297,19 +2297,27 @@ def test_o5_gpu_context_failure_narrows(tmp_path, monkeypatch, change):
     assert "next: check the context bundle and refresh its evidence" in dim["summary"]
 
 
-@pytest.mark.parametrize("response", [
-    {"dark": True, "count": 7}, {"status": "stale", "count": 7},
-    {"state": "refused", "count": 7}, {"freshness_state": "stale", "count": 7},
-    {"status": "partial", "count": 7}, {"status": "hold", "count": 7},
+@pytest.mark.parametrize("response,live", [
+    *[({key: word}, False) for key in ("status", "state", "freshness_state")
+      for word in ("held", "hold", "blocked", "refused", "stale", "expired", "revoked", "failed",
+                   "unimagined-status", "dark", "partial", "absent", "unknown", "fresh", "", None, [], {})],
+    ({"dark": True, "status": "ok"}, False),
+    ({"status": "live", "freshness_state": "stale"}, False),
+    ({"status": "ok"}, True), ({"state": "live"}, True),
+    ({"status": "ok", "state": "live"}, True),
+    ({}, False), (None, False), ([], False),
 ])
-def test_o5_explicit_http_darkness_never_uses_context(tmp_path, monkeypatch, response):
+def test_o5_http_requires_positive_evidence_without_fallback(tmp_path, monkeypatch, response, live):
     _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+    if isinstance(response, dict):
+        response = {**response, "count": 7}
     monkeypatch.setattr(reins_read, "_observe_http_json", lambda *a: response)
     def forbidden(*args):
-        pytest.fail("explicit producer evidence must not call the fallback")
+        pytest.fail("primary evidence must not call the fallback")
     monkeypatch.setattr(reins_read, "_observe_gpu_from_context", forbidden, raising=False)
     dims = {d["key"]: d for d in read_observe_summary(cfg)["dimensions"]}
-    assert dims["gpu"]["status"] == "dark" and dims["gpu"]["count"] is None
+    assert {d["status"] for d in dims.values()} == {"live" if live else "dark"}
+    assert {d["count"] for d in dims.values()} == {7 if live else None}
 
 
 @pytest.mark.parametrize("failure", ["transport", "invalid-json", "http-error", "bug"])
