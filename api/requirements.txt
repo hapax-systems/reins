@@ -1,7 +1,7 @@
-# READ API runtime deps. reins now imports the SDLC-runtime mechanism from the hapax-spine WHEEL
+# READ API runtime deps. reins imports the SDLC-runtime mechanism from the immutable Git-pinned hapax-spine package
 # (`from hapax.spine.*`), NOT council's live substrate — this process is decoupled from the council
 # checkout. Set HAPAX_SPINE_CONFIG_DIR to the instance config dir for the capability-registry loaders.
 fastapi>=0.110
 uvicorn>=0.29
-hapax-spine>=0.1,<0.2
+hapax-spine @ git+https://github.com/hapax-systems/hapax-spine.git@651fce3c192b1351d87b6d7b37d2724ed0f29695
 pyyaml>=6
