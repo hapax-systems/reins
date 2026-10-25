@@ -333,9 +333,16 @@ func (m Model) renderObligations(w int) string {
 		if m.AIR {
 			route, capability, model = "▒▒▒", "▒▒▒", "▒▒▒"
 		}
-		fmt.Fprintf(&b, " %s %s route=%s capability=%s mode=%s model=%s route_state=%s\n",
-			grammar.C(color, glyph), obligationText(f.FulfillmentState), route, capability, obligationText(f.Mode), model, obligationText(f.RouteState))
-		fmt.Fprintf(&b, " occupied=%s resident=%s\n", fulfillmentLoci(f.OccupiedLoci, m.AIR), fulfillmentLoci(f.ResidentLoci, m.AIR))
+		// Keep structural states ahead of independently clipped identity/locus fields.
+		for _, line := range []string{
+			fmt.Sprintf(" %s %s", grammar.C(color, glyph), obligationText(f.FulfillmentState)),
+			fmt.Sprintf(" route_state=%s mode=%s", obligationText(f.RouteState), obligationText(f.Mode)),
+			fmt.Sprintf(" route=%s capability=%s model=%s", route, capability, model),
+			" occupied=" + fulfillmentLoci(f.OccupiedLoci, m.AIR),
+			" resident=" + fulfillmentLoci(f.ResidentLoci, m.AIR),
+		} {
+			b.WriteString(clipRunes(line, maxVisible(12, w-2)) + "\n")
+		}
 	}
 	b.WriteString(" " + grammar.C("brt", "LOCUS ANOMALIES & LIGATORY OWES") + "\n")
 	for _, missing := range []struct {

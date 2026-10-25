@@ -202,12 +202,12 @@ func TestFulfillmentRows(t *testing.T) {
 			if shown == "" {
 				shown = "UNKNOWN"
 			}
-			obligationsWant(t, out, "route-fixture", "cap-fixture", "model-fixture", "mode=local", "route_state=ready", shown+" route=", "occupied-fixture", "resident-fixture")
+			obligationsWant(t, out, "route-fixture", "cap-fixture", "model-fixture", "mode=local", "route_state=ready", " "+shown+"\n", "occupied-fixture", "resident-fixture")
 			if strings.Contains(out, "●") != (state == "occupied_in_memory") {
 				t.Fatal(out)
 			}
 			on := obligationsView(t, raw, true)
-			obligationsWant(t, on, shown+" route=", "mode=local", "route_state=ready", "occupied=▒▒▒ (count=1)", "resident=▒▒▒ (count=1)")
+			obligationsWant(t, on, " "+shown+"\n", "mode=local", "route_state=ready", "occupied=▒▒▒ (count=1)", "resident=▒▒▒ (count=1)")
 			for _, identity := range []string{"route-fixture", "cap-fixture", "model-fixture", "occupied-fixture", "resident-fixture"} {
 				if strings.Contains(on, identity) {
 					t.Fatalf("AIR exposed %s: %s", identity, on)
@@ -224,4 +224,31 @@ func TestFulfillmentRows(t *testing.T) {
 }
 func TestObligationsDarkNextAction(t *testing.T) {
 	obligationsWant(t, obligationsView(t, `{"dark":true}`, false), "check or start the cockpit READ api at its configured URL")
+}
+
+func TestFulfillmentNarrowWidth(t *testing.T) {
+	for _, width := range []int{60, 80} {
+		for _, state := range []string{"stale_locus", "route_blocked_locus_occupied", "unfulfilled_local_locus", "unfulfilled"} {
+			for _, air := range []bool{false, true} {
+				raw := fmt.Sprintf(`{"capability_fulfillment":[{"route_id":%q,"capability_id":%q,"model_id":%q,"mode":"local","route_state":"blocked","fulfillment_state":%q,"occupied_loci":[%q],"resident_loci":[%q]}]}`, strings.Repeat("route-", 30), strings.Repeat("cap-", 30), strings.Repeat("model-", 30), state, strings.Repeat("occupied-", 30), strings.Repeat("resident-", 30))
+				m := New("fixture").FoldObligations(obligationsJSON(t, raw), false)
+				m.AIR = air
+				out := ansi.Strip(m.renderObligations(width))
+				_, section, ok := strings.Cut(out, "CAPABILITY FULFILLMENT\n")
+				if !ok {
+					t.Fatal("missing fulfillment section")
+				}
+				section, _, _ = strings.Cut(section, "LOCUS ANOMALIES & LIGATORY OWES")
+				for _, line := range strings.Split(section, "\n") {
+					if ansi.StringWidth(line) > width {
+						t.Fatalf("width %d: %d-column fulfillment line %q", width, ansi.StringWidth(line), line)
+					}
+				}
+				obligationsWant(t, section, state, "route_state=blocked", "mode=local", "occupied=", "resident=")
+				if air {
+					obligationsWant(t, section, "occupied=▒▒▒ (count=1)", "resident=▒▒▒ (count=1)")
+				}
+			}
+		}
+	}
 }
