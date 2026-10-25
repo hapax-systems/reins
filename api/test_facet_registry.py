@@ -174,6 +174,7 @@ POPULATED_ROUTES: frozenset[str] = frozenset({
     "/read/intake",
     "/read/lanebus",
     "/read/observe",
+    "/read/obligations",
     "/read/quota-history",
     "/read/seat-succession",
     "/read/session/{role}",
@@ -817,6 +818,11 @@ def test_safety_newly_aired_fields_are_only_safe_structural():
     # VETTED safe newly-aired set across the WHOLE air_allowlist() (each eyeballed: structural/
     # operational, NO PII/free-text). A NEW field that newly-airs trips this test for re-vetting.
     VETTED_NEWLY_AIR = {
+        # O3: operational counts and bounded synthesis posture, not opaque loci/labels.
+        "partial_dark", "fulfillment_state", "total_owes", "lanebus_owes_count",
+        "grant_owes_count", "custody_owes_count", "locus_anomaly_count", "dark_sources_count",
+        "action_count", "warning_count", "routes_total", "routes_occupied_in_memory",
+        "local_loci_occupied_in_memory", "local_loci_total", "resident_models_count",
         # the skeleton repair (were denied, operational metadata):
         "criticality", "freshness", "prior_stage", "predicted_stage", "rel_count",
         "magnitude", "gate", "meta",
@@ -1122,3 +1128,25 @@ def test_vault_never_airs_its_root_or_any_path_bearing_note_field(tmp_path):
     assert note_air == {
         "title": "deny", "rel_path": "deny", "obsidian_uri": "deny", "folder": "deny", "modified": "ok",
     }
+
+
+def test_obligations_registry_shape_and_default_air():
+    envelopes = {"lanebus_owes", "grant_owes", "custody_owes", "locus_anomalies",
+                 "local_substrate_loci", "capability_fulfillment", "source_status",
+                 "lanebus", "claim_custody", "seat_succession", "context_bundle"}
+    measures = {"total_owes", "lanebus_owes_count", "grant_owes_count", "custody_owes_count",
+                "locus_anomaly_count", "dark_sources_count", "action_count", "warning_count",
+                "routes_total", "routes_occupied_in_memory", "local_loci_occupied_in_memory",
+                "local_loci_total", "resident_models_count"}
+    opaque = {"creditor", "debtor", "host", "port", "loaded_models", "admitted_by",
+              "topology", "occupied_loci", "resident_loci"}
+    for key in envelopes:
+        assert fr.classify("", key) == "envelope"
+    for key in measures:
+        assert fr.classify("", key) == "measure"
+        assert key in fr.air_allowlist()
+    for key in opaque:
+        assert fr.classify("", key) == "body"
+        assert key not in fr.air_allowlist()
+    assert fr.classify("", "fulfillment_state") == "posture"
+    assert fr.classify("", "partial_dark") == "posture"

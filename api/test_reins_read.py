@@ -2122,3 +2122,16 @@ def test_wait_census_cli_and_route_scan_the_same_dirs_under_one_config(tmp_path,
     assert cli["universe"] == {k: v for k, v in route["universe"].items()}
     assert cli["universe"]["cc_task_files"]["active"] == 2
 
+
+
+def test_obligations_inventory_config_precedence(tmp_path, monkeypatch):
+    config = tmp_path / "instance.toml"
+    monkeypatch.setenv("REINS_CONFIG", str(config))
+    monkeypatch.delenv("REINS_CAPABILITY_INVENTORY", raising=False)
+    assert instance_config()["capability_inventory_path"] == ""
+    config.write_text('capability_inventory_path = "toml-inventory.json"\n')
+    assert instance_config()["capability_inventory_path"] == "toml-inventory.json"
+    monkeypatch.setenv("REINS_CAPABILITY_INVENTORY", "env-inventory.json")
+    assert instance_config()["capability_inventory_path"] == "env-inventory.json"
+    monkeypatch.setenv("REINS_CAPABILITY_INVENTORY", "")
+    assert instance_config()["capability_inventory_path"] == "toml-inventory.json"
