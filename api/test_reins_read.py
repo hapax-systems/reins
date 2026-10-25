@@ -2186,12 +2186,16 @@ def test_o5_probe_and_session_outcomes(tmp_path, monkeypatch, probes, expected):
 
 @pytest.mark.parametrize("age", [301, -1])
 @pytest.mark.parametrize("other", [True, False])
-def test_o5_good_probes_do_not_refresh_old_or_future_snapshot(tmp_path, monkeypatch, age, other):
-    producer, client = _o5_sessions(tmp_path, monkeypatch, {"a": {"ok": True}, "b": {"ok": other}}, age)
+@pytest.mark.parametrize("first", [True, False])
+def test_o5_probes_do_not_refresh_old_or_future_snapshot(tmp_path, monkeypatch, age, other, first):
+    producer, client = _o5_sessions(tmp_path, monkeypatch, {"a": {"ok": first}, "b": {"ok": other}}, age)
     assert producer["state"] == "stale"
     body = client.get("/read/sessions").json()
     assert body["partial"] is True and body["sessions"][0]["alive"] is None
     assert all(r["state"] == "unknown" for r in body["producer"]["sources"])
+    detail = client.get("/read/session/worker-a").json()["detail"]
+    assert detail["health"]["alive"] is None
+    assert body["sessions"][0]["state"] == "unknown"
 
 
 def _o5_bundle(tmp_path, monkeypatch):
@@ -2207,8 +2211,23 @@ def _o5_bundle(tmp_path, monkeypatch):
     path = tmp_path / "bundle.json"
     path.write_text(json.dumps(bundle))
     monkeypatch.setenv("REINS_CONTEXT_BUNDLE", str(path))
+    for key in ("REINS_COORDINATOR_STATE", "REINS_DISPATCH_LEDGER_PATH"):
+        monkeypatch.setenv(key, str(tmp_path / key))
+    for key in ("governance", "cost"):
+        monkeypatch.setattr(reins_read, f"_observe_{key}",
+                            lambda cfg, key=key: reins_read._observe_dark(key, "isolated fixture"))
     monkeypatch.setattr(reins_read, "_now", lambda: now)
     return bundle, fact, path, {"council_root": str(tmp_path)}
+
+
+def test_o5_bundle_restores_isolation(tmp_path, monkeypatch):
+    for _ in range(2):
+        _, _, _, cfg = _o5_bundle(tmp_path, monkeypatch)
+        for key in ("REINS_COORDINATOR_STATE", "REINS_DISPATCH_LEDGER_PATH"):
+            assert os.environ.get(key) == str(tmp_path / key)
+        for key in ("governance", "cost"):
+            assert getattr(reins_read, f"_observe_{key}")(cfg)["summary"] == "source dark: isolated fixture"
+        monkeypatch.undo()
 
 
 @pytest.mark.parametrize("kind,expected_count", [("resource_vram", None), ("loaded_model", 1)])
@@ -2275,6 +2294,7 @@ def test_o5_gpu_context_failure_narrows(tmp_path, monkeypatch, change):
     assert dim["source"] == "context-bundle"
     assert dim["freshness"] != "fresh"
     assert "source dark:" in dim["summary"]
+    assert "next: check the context bundle and refresh its evidence" in dim["summary"]
 
 
 @pytest.mark.parametrize("response", [

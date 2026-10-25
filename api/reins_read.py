@@ -1409,7 +1409,7 @@ def _session_snapshot() -> tuple[list[tuple[str, dict]], dict]:
         probes = state["host_probes"]
         producer["host_probes"] = probes
         flags = [hp.get("ok") if isinstance(hp, dict) else None for hp in probes.values()] if isinstance(probes, dict) else []
-        if not any(flag is True for flag in flags):
+        if not any(flag is True for flag in flags) and producer["state"] == "live":
             producer["state"] = "dark"
         elif not all(flag is True for flag in flags) and producer["state"] == "live":
             producer["state"] = "degraded"
@@ -4734,7 +4734,7 @@ def _observe_gpu_from_context(cfg: dict | None = None) -> dict:
         dim = _observe_dim("gpu", "live", f"context-bundle fresh: vram_loci={vram}; loaded_models={models if models else 'unknown'}", models or None)
         return {**dim, **meta, "freshness": "fresh", "age_s": max(ages), "observed_at": stamps}
     except (OSError, ValueError, TypeError, AttributeError, KeyError, _BundleMalformed) as e:
-        return {**_observe_dark("gpu", str(e)), **meta}
+        return {**_observe_dark("gpu", f"{e}; next: check the context bundle and refresh its evidence"), **meta}
 
 
 def read_observe_summary(cfg: dict | None = None) -> dict:
