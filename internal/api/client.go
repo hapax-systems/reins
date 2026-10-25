@@ -23,11 +23,21 @@ var newReadHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 3 * time.Second}
 }
 
+// ReadAPINextAction is shared by transport errors and dark read projections.
+const ReadAPINextAction = "check or start the cockpit READ api at its configured URL"
+
+func readUnreachable(err error) error {
+	return fmt.Errorf("reins: READ api unreachable: %w; %s", err, ReadAPINextAction)
+}
+func readStatusError(endpoint, status string) error {
+	return fmt.Errorf("reins: READ api %s returned %s; %s", endpoint, status, ReadAPINextAction)
+}
+
 func checkOK(resp *http.Response, endpoint string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	return fmt.Errorf("reins: READ api %s returned %s", endpoint, resp.Status)
+	return readStatusError(endpoint, resp.Status)
 }
 
 // ServingMeta is the /read/meta identity handshake (U1). A port is only trusted as reins
@@ -135,7 +145,7 @@ func FetchEvents(url string) ([]grammar.Event, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/events?limit=80")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/events"); err != nil {
@@ -157,7 +167,7 @@ func FetchEventsBefore(urlStr, before string) ([]grammar.Event, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(urlStr + "/read/events?limit=80&before=" + url.QueryEscape(before))
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/events"); err != nil {
@@ -184,7 +194,7 @@ func FetchTasks(url string) ([]grammar.Task, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/tasks")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/tasks"); err != nil {
@@ -212,7 +222,7 @@ func FetchFacets(url string) (grammar.FacetRegistry, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/facets")
 	if err != nil {
-		return grammar.FacetRegistry{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.FacetRegistry{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/facets"); err != nil {
@@ -229,7 +239,7 @@ func FetchDynamics(url string) (grammar.Graph, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/dynamics")
 	if err != nil {
-		return grammar.Graph{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.Graph{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/dynamics"); err != nil {
@@ -256,7 +266,7 @@ func FetchEpistemics(apiURL string) (grammar.EpistemicsSummary, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/epistemics?scope=dynamics")
 	if err != nil {
-		return grammar.EpistemicsSummary{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.EpistemicsSummary{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/epistemics"); err != nil {
@@ -283,7 +293,7 @@ func FetchSessions(url string) ([]grammar.Session, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/sessions")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/sessions"); err != nil {
@@ -310,7 +320,7 @@ func FetchTraces(url string) ([]grammar.Trace, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(url + "/read/traces")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/traces"); err != nil {
@@ -337,7 +347,7 @@ func FetchSessionDetail(apiURL, role string) (grammar.SessionDetail, bool, error
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/session/" + url.PathEscape(role))
 	if err != nil {
-		return grammar.SessionDetail{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.SessionDetail{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/session"); err != nil {
@@ -373,7 +383,7 @@ func FetchTurnBlocks(role, ts string) ([]grammar.TurnBlock, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + endpoint)
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, endpoint); err != nil {
@@ -408,7 +418,7 @@ func FetchTurns(role string, before string) ([]grammar.Turn, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(reqURL)
 	if err != nil {
-		return nil, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, endpoint); err != nil {
@@ -438,7 +448,7 @@ func FetchIntake(apiURL string) (grammar.IntakeSummary, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/intake")
 	if err != nil {
-		return grammar.IntakeSummary{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.IntakeSummary{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/intake"); err != nil {
@@ -465,7 +475,7 @@ func FetchCapabilities(apiURL string) (grammar.CapabilitySummary, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/capabilities")
 	if err != nil {
-		return grammar.CapabilitySummary{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.CapabilitySummary{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/capabilities"); err != nil {
@@ -502,7 +512,7 @@ func FetchContext(apiURL string) ([]grammar.ContextAffordance, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/context")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/context"); err != nil {
@@ -599,7 +609,7 @@ func FetchRoute(apiURL string) (grammar.RoutePosture, []grammar.RouteCandidate, 
 	var posture grammar.RoutePosture
 	resp, err := c.Get(apiURL + "/route/posture")
 	if err != nil {
-		return posture, nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return posture, nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/route/posture"); err != nil {
@@ -646,7 +656,7 @@ func FetchCommands(apiURL string) ([]grammar.Command, string, string, bool, erro
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/commands")
 	if err != nil {
-		return nil, "dark", "unknown", true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, "dark", "unknown", true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/commands"); err != nil {
@@ -683,7 +693,7 @@ func FetchObserve(apiURL string) ([]grammar.ObserveDimension, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/observe")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/observe"); err != nil {
@@ -705,7 +715,7 @@ func FetchVault(apiURL string) ([]grammar.VaultNote, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/vault")
 	if err != nil {
-		return nil, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return nil, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/vault"); err != nil {
@@ -732,7 +742,7 @@ func FetchGates(apiURL string) (grammar.GateSummary, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/gates")
 	if err != nil {
-		return grammar.GateSummary{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.GateSummary{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/gates"); err != nil {
@@ -759,7 +769,7 @@ func FetchDomains(apiURL string) (grammar.DomainSummary, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/domains")
 	if err != nil {
-		return grammar.DomainSummary{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.DomainSummary{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/domains"); err != nil {
@@ -780,7 +790,7 @@ func FetchObligations(apiURL string) (grammar.ObligationsReport, bool, error) {
 	c := newReadHTTPClient()
 	resp, err := c.Get(apiURL + "/read/obligations")
 	if err != nil {
-		return grammar.ObligationsReport{}, true, fmt.Errorf("reins: READ api unreachable: %w", err)
+		return grammar.ObligationsReport{}, true, readUnreachable(err)
 	}
 	defer resp.Body.Close()
 	if err := checkOK(resp, "/read/obligations"); err != nil {

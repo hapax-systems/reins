@@ -188,3 +188,40 @@ func TestObligationsScroll(t *testing.T) {
 	}
 	obligationsWant(t, ansi.Strip(m.View()), "row-11", "… +1 additional obligation rows")
 }
+
+func TestFulfillmentRows(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"capability_fulfillment":null}`} {
+		obligationsWant(t, obligationsView(t, raw, false), "fulfillment UNKNOWN")
+	}
+	obligationsWant(t, obligationsView(t, `{"capability_fulfillment":[]}`, false), "no capability routes observed")
+	for _, state := range []string{"occupied_in_memory", "stale_locus", "route_blocked_locus_occupied", "unfulfilled_local_locus", "unfulfilled", ""} {
+		t.Run(state, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"capability_fulfillment":[{"route_id":"route-fixture","capability_id":"cap-fixture","mode":"local","model_id":"model-fixture","route_state":"ready","fulfillment_state":%q,"occupied_loci":["occupied-fixture"],"resident_loci":["resident-fixture"]}]}`, state)
+			out := obligationsView(t, raw, false)
+			shown := state
+			if shown == "" {
+				shown = "UNKNOWN"
+			}
+			obligationsWant(t, out, "route-fixture", "cap-fixture", "model-fixture", "mode=local", "route_state=ready", shown+" route=", "occupied-fixture", "resident-fixture")
+			if strings.Contains(out, "●") != (state == "occupied_in_memory") {
+				t.Fatal(out)
+			}
+			on := obligationsView(t, raw, true)
+			obligationsWant(t, on, shown+" route=", "mode=local", "route_state=ready", "occupied=▒▒▒ (count=1)", "resident=▒▒▒ (count=1)")
+			for _, identity := range []string{"route-fixture", "cap-fixture", "model-fixture", "occupied-fixture", "resident-fixture"} {
+				if strings.Contains(on, identity) {
+					t.Fatalf("AIR exposed %s: %s", identity, on)
+				}
+			}
+		})
+	}
+	for _, air := range []bool{false, true} {
+		for _, fields := range []string{"", `,"occupied_loci":null,"resident_loci":null`} {
+			obligationsWant(t, obligationsView(t, `{"capability_fulfillment":[{"route_id":"withheld"`+fields+`}]}`, air), "occupied=UNKNOWN", "resident=UNKNOWN")
+		}
+	}
+	obligationsWant(t, obligationsView(t, `{"capability_fulfillment":[{"occupied_loci":[],"resident_loci":[]}]}`, false), "occupied=(none observed)", "resident=(none observed)")
+}
+func TestObligationsDarkNextAction(t *testing.T) {
+	obligationsWant(t, obligationsView(t, `{"dark":true}`, false), "check or start the cockpit READ api at its configured URL")
+}

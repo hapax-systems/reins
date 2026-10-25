@@ -5325,3 +5325,43 @@ func TestTracesSplitPairIsReferenceNotLinked(t *testing.T) {
 		t.Fatalf("traces split must be reference, not linked — traces are not lane-derived: %+v", pair)
 	}
 }
+
+func TestReferencePageScrollCoverage(t *testing.T) {
+	for _, page := range []int{PageObserve, PageRoute, PageVault, PageRdlc, PagePresence, PageDeck} {
+		t.Run(pageLabel(page), func(t *testing.T) {
+			m := New("fixture")
+			m.Page, m.Width, m.Height = page, 80, 12
+			m.ObserveDark, m.RouteDark, m.VaultDark = false, false, false
+			for i := 0; i < 12; i++ {
+				m.Observe = append(m.Observe, grammar.ObserveDimension{Key: fmt.Sprintf("signal-%02d", i), Status: "live"})
+				m.Vault = append(m.Vault, grammar.VaultNote{Title: fmt.Sprintf("note-%02d", i)})
+				m.Deck = append(m.Deck, fmt.Sprintf("readout-%02d", i))
+			}
+			before := m.View()
+			if m.referenceScrollMax() < 1 {
+				t.Fatal("fixture must overflow")
+			}
+			m = step(m, "j")
+			if m.RefScroll != 1 || m.View() == before {
+				t.Fatal("j did not scroll")
+			}
+			m = step(m, "k")
+			if m.RefScroll != 0 {
+				t.Fatal("k did not scroll back")
+			}
+			m = step(m, "G")
+			if m.RefScroll != m.referenceScrollMax() {
+				t.Fatal("G did not reach bottom")
+			}
+			content := strings.Split(ansi.Strip(m.referenceContent(80)), "\n")
+			last := strings.TrimSpace(content[len(content)-1])
+			if last == "" || !strings.Contains(ansi.Strip(m.View()), last) {
+				t.Fatalf("last line unreachable: %q", last)
+			}
+			m = step(m, "g")
+			if m.RefScroll != 0 {
+				t.Fatal("g did not reach top")
+			}
+		})
+	}
+}

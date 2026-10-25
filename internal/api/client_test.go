@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -386,5 +388,80 @@ func TestFetchTurnsReturnsErrorOnDark(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no turn replay fixture") {
 		t.Fatalf("FetchTurns error should include dark reason, got %q", err.Error())
+	}
+}
+
+func fetchError[T any](_ T, _ bool, err error) error { return err }
+func TestREADHouseErrors(t *testing.T) {
+	old := newReadHTTPClient
+	defer func() { newReadHTTPClient = old }()
+	u := "http://reins.test"
+	t.Setenv("REINS_API_URL", u)
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"Events", func() error { return fetchError(FetchEvents(u)) }},
+		{"EventsBefore", func() error { return fetchError(FetchEventsBefore(u, "cursor")) }},
+		{"Tasks", func() error { return fetchError(FetchTasks(u)) }},
+		{"Facets", func() error { return fetchError(FetchFacets(u)) }},
+		{"Dynamics", func() error { return fetchError(FetchDynamics(u)) }},
+		{"Epistemics", func() error { return fetchError(FetchEpistemics(u)) }},
+		{"Sessions", func() error { return fetchError(FetchSessions(u)) }},
+		{"Traces", func() error { return fetchError(FetchTraces(u)) }},
+		{"SessionDetail", func() error { return fetchError(FetchSessionDetail(u, "role")) }},
+		{"TurnBlocks", func() error { return fetchError(FetchTurnBlocks("role", "stamp")) }},
+		{"Intake", func() error { return fetchError(FetchIntake(u)) }},
+		{"Capabilities", func() error { return fetchError(FetchCapabilities(u)) }},
+		{"Context", func() error { return fetchError(FetchContext(u)) }},
+		{"Observe", func() error { return fetchError(FetchObserve(u)) }},
+		{"Vault", func() error { return fetchError(FetchVault(u)) }},
+		{"Gates", func() error { return fetchError(FetchGates(u)) }},
+		{"Domains", func() error { return fetchError(FetchDomains(u)) }},
+		{"Obligations", func() error { return fetchError(FetchObligations(u)) }},
+
+		{"Turns", func() error { _, e := FetchTurns("role", ""); return e }},
+		{"Route", func() error { _, _, _, e := FetchRoute(u); return e }},
+		{"Commands", func() error { _, _, _, _, e := FetchCommands(u); return e }},
+	}
+	cause := errors.New("fixture transport failure")
+	seenPath := ""
+	for _, status := range []int{0, 503} {
+		newReadHTTPClient = func() *http.Client {
+			return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				seenPath = req.URL.Path
+				if status == 0 {
+					return nil, cause
+				}
+				rec := httptest.NewRecorder()
+				rec.WriteHeader(status)
+				return rec.Result(), nil
+			})}
+		}
+		for _, tc := range calls {
+			t.Run(tc.name+http.StatusText(status), func(t *testing.T) {
+				err := tc.call()
+				wantPath := seenPath
+				if tc.name == "SessionDetail" {
+					wantPath = "/read/session"
+				}
+				if err == nil || !strings.Contains(err.Error(), "check or start the cockpit READ api at its configured URL") {
+					t.Fatalf("missing next action: %v", err)
+				}
+				if status == 0 {
+					var wrapped *url.Error
+					if !errors.Is(err, cause) || !errors.As(err, &wrapped) {
+						t.Fatalf("lost cause: %v", err)
+					}
+				} else if !strings.Contains(err.Error(), "READ api "+wantPath+" returned 503 Service Unavailable") {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+	for _, status := range []int{200, 204, 299} {
+		if err := checkOK(&http.Response{StatusCode: status}, "fixture"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
