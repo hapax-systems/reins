@@ -2,7 +2,7 @@
 name = "reins-read"
 version = "0.0.1"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "hapax-spine @ git+https://github.com/hapax-systems/hapax-spine.git@651fce3c192b1351d87b6d7b37d2724ed0f29695", "pyyaml>=6"]
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "hapax-spine @ git+https://github.com/hapax-systems/hapax-spine.git@c39b1511484a22316f0dba6522868f73ee0c3307", "pyyaml>=6"]
 
 # THE TEST DEPENDENCY WAS UNDECLARED, so the suite was not reproducible from source.
 #
