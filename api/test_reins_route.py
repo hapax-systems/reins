@@ -241,10 +241,10 @@ def test_non_object_rows_are_not_counted_as_rows(tmp_path):
     path = tmp_path / "gate-events.jsonl"
     old = (datetime.now(UTC) - timedelta(days=17)).isoformat()
     path.write_text('[1,2]\n"nope"\nnull\n' + json.dumps({"ts": old}) + "\n", encoding="utf-8")
-    rows, dark, _err, age_s = reins_route._read_gate_events(str(path))
+    reduced, dark, _err, age_s = reins_route._read_gate_events(str(path))
     assert dark is False
-    assert all(isinstance(r, dict) for r in rows)
-    assert len(rows) == 1
+    assert reduced["events"] == 1
+    assert reduced["counts"] == {}
     assert age_s > 17 * 24 * 3600 - 60
 
 
@@ -256,3 +256,186 @@ def test_dark_source_carries_the_same_shape_as_a_live_one(tmp_path):
     assert gate["events"] == 0
     assert gate["age_s"] is None
     assert gate["stale_after_s"] == reins_route.GATE_EVENTS_STALE_AFTER_S
+
+
+def _full_route_oracle(lines, now):
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    times = []
+    for row in rows:
+        try:
+            dt = datetime.fromisoformat(str(row.get("ts") or "").strip())
+            timestamp = dt.replace(tzinfo=dt.tzinfo or UTC).timestamp()
+        except ValueError:
+            continue
+        if timestamp <= now:
+            times.append(timestamp)
+    age = now - max(times) if times else None
+    observed = sorted({str(row["routing_class"]) for row in rows if row.get("routing_class")})
+    counts, latest = {}, {}
+    for row in rows:
+        name = str(row.get("routing_class", ""))
+        if not name:
+            continue
+        counts[name] = counts.get(name, 0) + 1
+        vector = row.get("requirement_vector")
+        if isinstance(vector, dict) and all(type(vector.get(d)) is int for d in REQVEC_DIMS):
+            latest[name] = {d: vector[d] for d in REQVEC_DIMS}
+    posture = {
+        "dark": False, "decision": NO_DECISION,
+        "keyspace": {"pinned": list(ROUTING_CLASSES_PINNED), "pinned_count": len(ROUTING_CLASSES_PINNED),
+                     "observed": observed, "observed_count": len(observed),
+                     "unknown_observed": [n for n in observed if n not in ROUTING_CLASSES_PINNED]},
+        "reqvec": {"dims": list(REQVEC_DIMS), "min": REQVEC_MIN, "max": REQVEC_MAX,
+                   "range_source": "producer-contract"},
+        "sources": [{"name": "gate_events", "state": "stale" if age is None or age > reins_route.GATE_EVENTS_STALE_AFTER_S else "live",
+                     "events": len(rows), "age_s": None if age is None else round(age, 1),
+                     "stale_after_s": reins_route.GATE_EVENTS_STALE_AFTER_S}, {"name": "edt", "state": "dark"}],
+    }
+    candidates = {"dark": False, "decision": NO_DECISION, "task_reqvec": "absent",
+                  "candidates": [{"routing_class": n, "in_keyspace": n in ROUTING_CLASSES_PINNED,
+                                  "measured_events": counts[n], "dispatch_reqvec": latest.get(n, "absent")}
+                                 for n in sorted(counts)]}
+    return posture, candidates
+
+
+@pytest.mark.parametrize("variant", ["mixed", "empty", "future-only", "invalid-time", "stale"])
+def test_route_stream_equivalence(tmp_path, monkeypatch, variant):
+    now = datetime(2026, 10, 26, tzinfo=UTC).timestamp()
+    good = {"ts": "2026-10-25T23:59:00Z", "routing_class": "source_python",
+            "requirement_vector": {d: 3 for d in REQVEC_DIMS}}
+    rows = [good, {**good, "ts": "2026-10-25T23:59:30", "requirement_vector": {}},
+            {**good, "routing_class": "unknown", "ts": "invalid"},
+            {**good, "routing_class": "source_other", "ts": "2099-01-01T00:00:00Z"},
+            {**good, "routing_class": "empty", "requirement_vector": None},
+            {**good, "routing_class": "extra-keys", "requirement_vector": {
+                **good["requirement_vector"], "unexpected": {"payload": "discard"}}},
+            {**good, "requirement_vector": {**good["requirement_vector"], REQVEC_DIMS[0]: True}},
+            {"routing_class": None}, {"routing_class": False}, {"routing_class": ""}, {},
+            [], "text", None]
+    lines = [json.dumps(r) for r in rows] + ["{corrupt", "", "   "]
+    if variant == "empty":
+        lines = []
+    elif variant == "future-only":
+        lines = [json.dumps({**good, "ts": "2099-01-01T00:00:00Z"})]
+    elif variant == "invalid-time":
+        lines = [json.dumps({**good, "ts": "unparseable"})]
+    elif variant == "stale":
+        lines = [json.dumps({**good, "ts": "2026-01-01T00:00:00Z"})]
+    path = tmp_path / "gate.jsonl"
+    path.write_text("\n".join(lines))
+    expected = _full_route_oracle(lines, now)
+    monkeypatch.setattr(reins_route.time, "time", lambda: now)
+    assert (read_route_posture(str(path)), read_route_candidates(str(path))) == expected
+
+
+@pytest.mark.parametrize("reader", [read_route_posture, read_route_candidates])
+def test_route_stream_releases_decoded_rows(tmp_path, monkeypatch, reader):
+    path = tmp_path / "gate.jsonl"
+    row = {"ts": datetime.now(UTC).isoformat(), "routing_class": "source_python",
+           "requirement_vector": {d: 2 for d in REQVEC_DIMS}, "unused": "x" * 1024}
+    path.write_text((json.dumps(row) + "\n") * 2000)
+    loads = json.loads
+    live = peak = 0
+
+    class Row(dict):
+        def __init__(self, value):
+            nonlocal live, peak
+            super().__init__(value)
+            live += 1
+            peak = max(peak, live)
+
+        def __del__(self):
+            nonlocal live
+            live -= 1
+
+    monkeypatch.setattr(reins_route.json, "loads", lambda line: Row(loads(line)))
+    result = reader(str(path))
+    assert result["dark"] is False
+    if reader is read_route_posture:
+        assert result["sources"][0]["events"] == 2000
+    else:
+        assert result["candidates"][0]["measured_events"] == 2000
+    assert peak <= 2  # a current row and replacement, independent of historical row count
+    assert live == 0
+
+
+@pytest.mark.parametrize("reader", [read_route_posture, read_route_candidates])
+def test_route_stream_unreadable_discards_partial_result(tmp_path, monkeypatch, reader):
+    import io
+
+    path = tmp_path / "gate.jsonl"
+    path.write_text('{}\n')
+
+    class Broken(io.StringIO):
+        def __next__(self):
+            if self.tell():
+                raise OSError("fixture read failed")
+            return super().__next__()
+
+    monkeypatch.setattr(reins_route, "open", lambda *a, **k: Broken('{}\n'), raising=False)
+    result = reader(str(path))
+    assert result["dark"] is True and result["error"] == "fixture read failed"
+    if reader is read_route_posture:
+        assert result["sources"][0]["events"] == 0
+    else:
+        assert result["candidates"] == []
+
+
+def test_route_stream_missing_feed_keeps_diagnostic(tmp_path):
+    path = str(tmp_path / "missing.jsonl")
+    for reader in (read_route_posture, read_route_candidates):
+        result = reader(path)
+        assert result["dark"] is True
+        assert result["error"] == "gate-events feed absent (spine routing substrate not present)"
+
+
+@pytest.mark.parametrize("elapsed, expected_state", [
+    (0, "live"), (2, "stale"), (-reins_route.GATE_EVENTS_STALE_AFTER_S - 1, "stale"),
+])
+def test_route_stream_freshness_observed_after_read(tmp_path, monkeypatch, elapsed, expected_state):
+    import io
+
+    start = datetime(2026, 10, 26, tzinfo=UTC).timestamp()
+    stamp = start - reins_route.GATE_EVENTS_STALE_AFTER_S + 1
+    line = json.dumps({"ts": datetime.fromtimestamp(stamp, UTC).isoformat()}) + "\n"
+    path = tmp_path / "gate.jsonl"
+    path.write_text(line)
+    clock = start
+
+    class SlowRead(io.StringIO):
+        def __exit__(self, *args):
+            nonlocal clock
+            clock = start + elapsed
+            return super().__exit__(*args)
+
+    monkeypatch.setattr(reins_route, "open", lambda *a, **k: SlowRead(line), raising=False)
+    monkeypatch.setattr(reins_route.time, "time", lambda: clock)
+    result = read_route_posture(str(path))
+    assert result["dark"] is False
+    assert result["sources"][0]["events"] == 1
+    expected_age = start + elapsed - stamp if stamp <= start + elapsed else None
+    assert result["sources"][0]["age_s"] == expected_age
+    assert result["sources"][0]["state"] == expected_state
+    # A supplied observation time is independent of wall-clock progress.
+    for explicit in (start, 0.0):
+        reduced, dark, error, age = reins_route._read_gate_events(str(path), now=explicit)
+        assert (reduced["events"], dark, error) == (1, False, "")
+        assert age == (explicit - stamp if stamp <= explicit else None)
+
+
+def test_route_stream_explicit_clock_keeps_older_eligible_row(tmp_path, monkeypatch):
+    now = datetime(2026, 10, 26, tzinfo=UTC).timestamp()
+    path = tmp_path / "gate.jsonl"
+    path.write_text("\n".join(json.dumps({"ts": datetime.fromtimestamp(now + d, UTC).isoformat()})
+                              for d in (-10, 10)))
+    monkeypatch.setattr(reins_route.time, "time", lambda: now + 20)
+    reduced, dark, error, age = reins_route._read_gate_events(str(path), now=now)
+    assert (reduced["events"], dark, error, age) == (2, False, "", 10)
+    assert reins_route._read_gate_events(str(path))[3] == 10  # valid wall-clock twin
