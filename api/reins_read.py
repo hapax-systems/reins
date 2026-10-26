@@ -5524,10 +5524,24 @@ def _page_before(records: list[dict], before: str | None, limit: int) -> list[di
 
 def _raw_tail(council_root: str, limit: int, before: str | None = None) -> list[dict]:
     from hapax.spine.coord_event_log import default_event_log
-    result = default_event_log().replay(fail_open=True)
-    out = [e.to_record() for e in result.events]
-    return _page_before(out, before, limit)
 
+    log = default_event_log()
+    out: list[dict] = []
+    cursor = None
+    while len(out) < limit:
+        # Timestamp order need not match sequence order. Walk bounded windows until
+        # enough older records match; the common latest poll reads only one window.
+        page = [
+            e.to_record()
+            for e in log.read_tail(limit=limit, before_sequence=cursor, fail_open=True).events
+        ]
+        out = _page_before(page, before, limit - len(out)) + out
+        if len(out) == limit or len(page) < limit:
+            break
+        cursor = page[0].get("sequence")
+        if cursor is None:
+            raise ValueError("Cannot page coordination mirror; inspect missing sequence values")
+    return out
 
 class _BundleMalformed(Exception):
     """A producer bundle is PRESENT but unreadable/malformed — distinct from an ABSENT producer, so

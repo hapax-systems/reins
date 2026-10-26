@@ -2379,3 +2379,85 @@ def test_o5_new_payload_attributes_resolve(tmp_path, monkeypatch):
     for payload in (sessions, read_observe_summary(cfg)):
         _collect_payload_attrs(payload, attrs)
     assert not [a for a in attrs if fr.classify("Read", a).startswith("UNRESOLVED")]
+
+
+@pytest.mark.parametrize(
+    "limit,before",
+    [(7, None), (7, ""), (7, "2026-01-01T00:00:50Z"), (7, "2026-01-01T00:00:01Z"), (0, None), (-1, None), (2048, None)],
+)
+@pytest.mark.parametrize("mirror", [False, True])
+def test_raw_tail_bounded_pages(tmp_path, monkeypatch, limit, before, mirror):
+    import weakref
+
+    from hapax.spine.coord_event_log import CoordEvent, CoordEventLog, CoordWriter
+
+    log = CoordEventLog(
+        db_path=tmp_path / "ledger.db",
+        jsonl_path=tmp_path / "mirror.jsonl",
+        spool_dir=tmp_path / "spool",
+    )
+    for i in range(1024):
+        # Duplicate and out-of-order timestamps must retain replay's sequence ordering.
+        log.append(
+            CoordEvent(
+                event_id=f"tail-{i}",
+                timestamp=f"2026-01-01T00:{(i % 997) // 60:02}:{(i % 997) % 60:02}Z",
+                event_type="coord.test",
+                actor="fixture",
+                subject="fixture",
+            ),
+            writer=CoordWriter.daemon(),
+        )
+    expected = _page_before([e.to_record() for e in log.replay().events], before, limit)
+    if mirror:
+        log.db_path = tmp_path / "broken.db"
+        log.db_path.write_bytes(b"broken sqlite")
+    monkeypatch.setattr("hapax.spine.coord_event_log.default_event_log", lambda: log)
+    parse, live, counts = CoordEvent.from_record, [], {"parsed": 0, "peak": 0}
+
+    def tracked(record):
+        event = parse(record)
+        live[:] = [ref for ref in live if ref() is not None]
+        live.append(weakref.ref(event))
+        counts["parsed"] += 1
+        counts["peak"] = max(counts["peak"], len(live))
+        return event
+
+    monkeypatch.setattr(CoordEvent, "from_record", tracked)
+    assert reins_read._raw_tail("", limit, before) == expected
+    # The streaming mirror holds N selected events plus two parser temporaries.
+    assert counts["peak"] <= max(0, limit) + (2 if mirror and limit > 0 else 0)
+    if not before and not mirror:
+        assert counts["parsed"] == len(expected)
+
+
+def test_raw_tail_empty_and_uncursorable_mirror(tmp_path, monkeypatch):
+    from hapax.spine.coord_event_log import CoordEvent, CoordEventLog
+
+    log = CoordEventLog(
+        db_path=tmp_path / "ledger.db",
+        jsonl_path=tmp_path / "mirror.jsonl",
+        spool_dir=tmp_path / "spool",
+    )
+    monkeypatch.setattr("hapax.spine.coord_event_log.default_event_log", lambda: log)
+    assert reins_read._raw_tail("", 1) == []
+    log.db_path.write_bytes(b"broken sqlite")
+    record = CoordEvent(
+        event_id="unsequenced",
+        timestamp="2026-01-01T00:00:02Z",
+        event_type="coord.test",
+        actor="fixture",
+        subject="fixture",
+    ).to_record()
+    log.jsonl_path.write_text(json.dumps(record) + "\n")
+    assert reins_read._raw_tail("", 1) == [record]
+    read_tail, calls = log.read_tail, []
+
+    def bounded_attempts(**kwargs):
+        assert len(calls) < 3, "unpageable cursor repeated without refusal"
+        calls.append(kwargs)
+        return read_tail(**kwargs)
+
+    monkeypatch.setattr(log, "read_tail", bounded_attempts)
+    with pytest.raises(ValueError, match="inspect.*sequence"):
+        reins_read._raw_tail("", 1, before="2026-01-01T00:00:01Z")
