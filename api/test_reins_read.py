@@ -2408,7 +2408,8 @@ def test_raw_tail_bounded_pages(tmp_path, monkeypatch, limit, before, mirror):
             ),
             writer=CoordWriter.daemon(),
         )
-    expected = _page_before([e.to_record() for e in log.replay().events], before, limit)
+    records = [e.to_record() for e in log.replay().events]
+    expected = _page_before(records, before, limit)
     if mirror:
         log.db_path = tmp_path / "broken.db"
         log.db_path.write_bytes(b"broken sqlite")
@@ -2424,6 +2425,10 @@ def test_raw_tail_bounded_pages(tmp_path, monkeypatch, limit, before, mirror):
         return event
 
     monkeypatch.setattr(CoordEvent, "from_record", tracked)
+    if mirror and before and _page_before(records[-limit:], before, limit) != expected:
+        with pytest.raises(ValueError, match="Incomplete mirror"):
+            reins_read._raw_tail("", limit, before)
+        return
     assert reins_read._raw_tail("", limit, before) == expected
     # The streaming mirror holds N selected events plus two parser temporaries.
     assert counts["peak"] <= max(0, limit) + (2 if mirror and limit > 0 else 0)
@@ -2461,3 +2466,37 @@ def test_raw_tail_empty_and_uncursorable_mirror(tmp_path, monkeypatch):
     monkeypatch.setattr(log, "read_tail", bounded_attempts)
     with pytest.raises(ValueError, match="inspect.*sequence"):
         reins_read._raw_tail("", 1, before="2026-01-01T00:00:01Z")
+
+
+@pytest.mark.parametrize("gap", ["unsequenced", "malformed", "unavailable"])
+def test_raw_tail_mirror_gap_is_dark(tmp_path, monkeypatch, gap):
+    from hapax.spine.coord_event_log import CoordEvent, CoordEventLog, CoordWriter
+
+    log = CoordEventLog(
+        db_path=tmp_path / "ledger.db", jsonl_path=tmp_path / "mirror.jsonl", spool_dir=tmp_path / "spool",
+    )
+    for i in range(3):
+        log.append(CoordEvent(
+            event_id=f"event-{i}", timestamp=f"2026-01-01T00:00:0{i}Z",
+            event_type="coord.test", actor="fixture", subject="fixture",
+        ), writer=CoordWriter.daemon())
+    monkeypatch.setattr("hapax.spine.coord_event_log.default_event_log", lambda: log)
+    client = TestClient(build_app("", []))
+    params = {"limit": 2, "before": "2026-01-01T00:00:01Z"}
+    good = client.get("/read/events", params=params).json()
+    assert good["dark"] is False and len(good["events"]) == 1
+    lines = log.jsonl_path.read_text().splitlines()
+    old = json.loads(lines[0])
+    del old["sequence"]
+    lines[0] = json.dumps(old) if gap == "unsequenced" else "{"
+    log.jsonl_path.write_text("\n".join(lines) + "\n")
+    log.db_path = tmp_path / "broken.db"
+    log.db_path.write_bytes(b"broken sqlite")
+    if gap == "unavailable":
+        log.jsonl_path.unlink()
+    if gap == "unsequenced":
+        latest = client.get("/read/events", params={"limit": 2}).json()
+        assert latest["dark"] is False and len(latest["events"]) == 2
+    bad = client.get("/read/events", params=params if gap == "unsequenced" else {"limit": 2}).json()
+    assert bad["dark"] is True and bad["events"] == []
+    assert "inspect ledger and mirror sequences" in bad["error"]

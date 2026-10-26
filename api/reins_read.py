@@ -5529,12 +5529,15 @@ def _raw_tail(council_root: str, limit: int, before: str | None = None) -> list[
     out: list[dict] = []
     cursor = None
     while len(out) < limit:
-        # Timestamp order need not match sequence order. Walk bounded windows until
-        # enough older records match; the common latest poll reads only one window.
-        page = [
-            e.to_record()
-            for e in log.read_tail(limit=limit, before_sequence=cursor, fail_open=True).events
-        ]
+        # Timestamps can be out of order; fill the page with bounded windows.
+        result = log.read_tail(limit=limit, before_sequence=cursor, fail_open=True)
+        if result.source != "sqlite" and (
+            cursor is not None
+            or any(not e.startswith("sqlite_replay_failed:") for e in result.errors)
+        ):
+            raise ValueError("Incomplete mirror page; inspect ledger and mirror sequences")
+        page = [e.to_record() for e in result.events]
+        del result
         out = _page_before(page, before, limit - len(out)) + out
         if len(out) == limit or len(page) < limit:
             break
