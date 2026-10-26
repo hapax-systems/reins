@@ -2638,3 +2638,19 @@ def test_projection_invalidation_and_routes(projection_log, monkeypatch, tmp_pat
         if change == "degrade":
             log.db_path.unlink()
         append(200 + phase, 1)
+
+
+@pytest.mark.parametrize("path", ["db_path", "jsonl_path"])
+def test_projection_resolve_loop(projection_log, monkeypatch, path):
+    log, append, full = projection_log
+    append(0, 1)
+    expected = full()
+    assert reins_read._projection("", include_replay_metadata=True) == expected
+    resolve = Path.resolve
+    def loop(self, *a, **kw):
+        if self == getattr(log, path):
+            raise RuntimeError("Symlink loop")  # Python 3.12 resolve failure.
+        return resolve(self, *a, **kw)
+    monkeypatch.setattr(Path, "resolve", loop)
+    assert reins_read._projection("", include_replay_metadata=True) == expected
+    assert reins_read._projection_cache is None

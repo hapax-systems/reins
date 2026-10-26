@@ -5510,8 +5510,9 @@ def _projection(council_root: str, *, include_replay_metadata: bool = False) -> 
     with _projection_lock:
         cached, _projection_cache = _projection_cache, None
         log = default_event_log()
-        identity = (str(log.db_path.resolve()), str(log.jsonl_path.resolve()))
+        identity = None
         try:
+            identity = (str(log.db_path.resolve()), str(log.jsonl_path.resolve()))
             stat = log.db_path.stat()
             identity += (stat.st_dev, stat.st_ino)
             # Check the cursor's event, not just MAX(sequence): resets may reuse numbers.
@@ -5521,7 +5522,7 @@ def _projection(council_root: str, *, include_replay_metadata: bool = False) -> 
                     cached = None
             else:
                 cached = None
-        except (OSError, CoordEventLogError):
+        except (OSError, RuntimeError, CoordEventLogError):
             cached = None  # Full replay owns the canonical degraded/error behavior.
         cursor, anchor, projection, hist = cached[1:] if cached else (0, None, CoordProjection(), {})
         replay = log.replay(since_sequence=cursor, fail_open=True)
@@ -5534,7 +5535,7 @@ def _projection(council_root: str, *, include_replay_metadata: bool = False) -> 
         if replay.events:
             anchor = replay.events[-1].to_record()
             cursor = replay.events[-1].sequence
-        if cursor and replay.source == "sqlite" and not replay.degraded and not replay.errors:
+        if identity and cursor and replay.source == "sqlite" and not replay.degraded and not replay.errors:
             _projection_cache = (identity, cursor, anchor, projection, hist)
         record = projection.to_record()
         if include_replay_metadata:
