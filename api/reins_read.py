@@ -1,7 +1,9 @@
 """Thin READ service: folds the live coord ledger (via the council spine) into scored,
 air-classified events. Engine code; the council root + ledger come from config (instance)."""
 from __future__ import annotations
+import asyncio
 import hashlib
+import heapq
 import json
 import math
 import os
@@ -12,6 +14,7 @@ from threading import Lock
 from typing import Any
 from urllib.parse import quote
 from fastapi import FastAPI
+from starlette.responses import JSONResponse
 
 from reins_claim_custody import CustodyProjection
 from reins_obligations import read_obligations_summary
@@ -4139,7 +4142,10 @@ def read_vault_summary(cfg: dict | None = None, allowlist: list[str] | None = No
     if not root.is_dir() or not os.access(root, os.R_OK):
         return summary(True, [])
 
-    notes: list[tuple[float, dict]] = []
+    # Keep only the existing response's newest 500 paths. Negative traversal index
+    # preserves the old stable-sort order for equal mtimes without comparing paths.
+    notes: list[tuple[float, int, Path]] = []
+    ordinal = 0
     try:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [
@@ -4153,14 +4159,19 @@ def read_vault_summary(cfg: dict | None = None, allowlist: list[str] | None = No
                 path = base / filename
                 try:
                     mtime = path.stat().st_mtime
-                    notes.append((mtime, _vault_note(path, root)))
+                    candidate = (mtime, -ordinal, path)
+                    ordinal += 1
+                    if len(notes) < 500:
+                        heapq.heappush(notes, candidate)
+                    elif candidate[:2] > notes[0][:2]:
+                        heapq.heapreplace(notes, candidate)
                 except OSError:
                     continue
     except OSError:
         return summary(True, [])
 
-    notes.sort(key=lambda row: row[0], reverse=True)
-    return summary(False, [{**row, "air": classify_air(row, allow)} for _, row in notes[:500]])
+    selected = [_vault_note(path, root) for _, _, path in sorted(notes, reverse=True)]
+    return summary(False, [{**row, "air": classify_air(row, allow)} for row in selected])
 
 
 # ── lanebus unread projection (Reins convergence slice 1) ─────────────────────────────────────
@@ -6390,12 +6401,71 @@ def read_workview_tasks(
     }
 
 
+class _ReadAdmission:
+    """No waiting queue: keep permits through worker AND response completion.
+
+    Shielding the admitted ASGI task matters: cancelling a client await does not
+    stop its synchronous worker. Releasing then would admit unbounded orphan work.
+    The bounded task set owns detached work until it finishes; it caches no output.
+    """
+
+    _heavy = frozenset({
+        "/read/tasks", "/read/wait-census", "/read/vault", "/read/obligations",
+        "/route/posture", "/route/candidates",
+    })
+
+    def __init__(self, app):
+        self.app = app
+        self.lock = Lock()
+        self.active = 0
+        self.heavy_active: set[str] = set()
+        self.running: set[asyncio.Task] = set()
+
+    def _finished(self, task):
+        with self.lock:
+            self.running.discard(task)
+        if not task.cancelled():
+            task.exception()  # retrieve detached failures; the attached await still raises
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] != "http" or scope["method"] != "GET"
+                or not scope["path"].startswith(("/read/", "/route/"))):
+            return await self.app(scope, receive, send)
+        path = scope["path"]
+        with self.lock:
+            busy = self.active >= 4 or path in self.heavy_active
+            if not busy:
+                self.active += 1
+                if path in self._heavy:
+                    self.heavy_active.add(path)
+        if busy:
+            return await JSONResponse(
+                {"detail": "Read capacity is busy; retry after in-flight reads complete."},
+                status_code=503, headers={"Retry-After": "1"},
+            )(scope, receive, send)
+
+        async def admitted():
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                with self.lock:
+                    self.active -= 1
+                    self.heavy_active.discard(path)
+
+        task = asyncio.create_task(admitted())
+        with self.lock:
+            self.running.add(task)
+        task.add_done_callback(self._finished)
+        await asyncio.shield(task)
+
+
 def build_app(
     council_root: str, allowlist: list[str], session_cfg: dict | None = None
 ) -> FastAPI:
     session_cfg = session_cfg or {}
     quota_history = QuotaPhaseHistory.from_config(session_cfg)
     app = FastAPI(lifespan=quota_history.lifespan)
+    app.add_middleware(_ReadAdmission)
 
     @app.get("/read/quota-history")
     def read_quota_history() -> dict:

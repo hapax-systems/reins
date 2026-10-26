@@ -118,8 +118,8 @@ def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
 
 def _read_gate_events(
     path: str, now: float | None = None
-) -> tuple[list[dict], bool, str, float | None]:
-    """Return (rows, dark, error, age_s). Missing/unreadable feed => dark (honest, not empty-as-fine).
+) -> tuple[dict, bool, str, float | None]:
+    """Return (reduction, dark, error, age_s), retaining output classes, not history.
 
     A present-but-STALE feed is NOT dark — its rows exist and are real — but the caller must not
     report it live. Reins must not make stale rows look live; that rule is why `age_s` is returned
@@ -127,9 +127,12 @@ def _read_gate_events(
     and "a producer that stopped".
     """
     if not os.path.exists(path):
-        return [], True, "gate-events feed absent (spine routing substrate not present)", None
+        return {}, True, "gate-events feed absent (spine routing substrate not present)", None
+    # One observation clock for the streaming fold, including future-row refusal.
+    observed_at = now if now is not None else time.time()
     try:
-        rows = []
+        reduced = {"events": 0, "observed": set(), "counts": {}, "latest": {}}
+        age_s = None
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -141,15 +144,30 @@ def _read_gate_events(
                     continue  # skip a corrupt line, never crash
                 # A JSONL feed's rows are objects. An array/string/null parses fine but carries no
                 # `ts` and is not a row; keeping it would dilute the age computation with junk.
-                if isinstance(row, dict):
-                    rows.append(row)
-        return rows, False, "", _newest_row_age_s(rows, now if now is not None else time.time())
+                if not isinstance(row, dict):
+                    continue
+                reduced["events"] += 1
+                age = _newest_row_age_s([row], observed_at)
+                if age is not None and (age_s is None or age < age_s):
+                    age_s = age
+                # Preserve the two consumers' existing distinction: posture only
+                # observes truthy raw classes; candidates count nonempty string forms.
+                rc = str(row.get("routing_class", ""))
+                if row.get("routing_class"):
+                    reduced["observed"].add(rc)
+                if rc:
+                    counts = reduced["counts"]
+                    counts[rc] = counts.get(rc, 0) + 1
+                    vector = _measured_reqvec_or_absent(row.get("requirement_vector"))
+                    if vector != "absent":
+                        reduced["latest"][rc] = vector
+        return reduced, False, "", age_s
     except OSError as e:
-        return [], True, str(e), None
+        return {}, True, str(e), None
 
 
 def read_route_posture(path: str | None = None) -> dict:
-    rows, dark, err, age_s = _read_gate_events(path or gate_events_path())
+    reduced, dark, err, age_s = _read_gate_events(path or gate_events_path())
     if dark:
         return {
             "dark": True,
@@ -170,8 +188,7 @@ def read_route_posture(path: str | None = None) -> dict:
     # Stale is its own state. "live" here previously meant only "the file exists".
     stale = age_s is None or age_s > GATE_EVENTS_STALE_AFTER_S
     gate_state = "stale" if stale else "live"
-    observed = sorted({str(r.get("routing_class", "")) for r in rows if r.get("routing_class")})
-    observed = [c for c in observed if c]
+    observed = sorted(reduced["observed"])
     unknown = [c for c in observed if c not in ROUTING_CLASSES_PINNED]
     return {
         "dark": False,
@@ -190,7 +207,7 @@ def read_route_posture(path: str | None = None) -> dict:
             {
                 "name": "gate_events",
                 "state": gate_state,
-                "events": len(rows),
+                "events": reduced["events"],
                 # age is reported even when fresh: a consumer that cannot see the age cannot
                 # independently judge the state, and must then trust ours.
                 "age_s": None if age_s is None else round(age_s, 1),
@@ -220,7 +237,7 @@ def read_route_candidates(path: str | None = None) -> dict:
     """Measured DEMAND evidence per routing_class — the latest measured requirement_vector per observed
     class (raw measured, no computed score). task_reqvec ABSENT (no producer). Candidate RANKING is a
     spine decision (DARK)."""
-    rows, dark, err, _age_s = _read_gate_events(path or gate_events_path())
+    reduced, dark, err, _age_s = _read_gate_events(path or gate_events_path())
     if dark:
         return {"dark": True, "error": err, "decision": NO_DECISION, "candidates": [],
                 "task_reqvec": "absent"}
@@ -228,16 +245,8 @@ def read_route_candidates(path: str | None = None) -> dict:
     # latest COMPLETE measured reqvec per class (raw evidence; NO mean/aggregate/score — never mint a
     # scalar). Only a COMPLETE 8-dim vector overwrites `latest`: a later empty/partial vector must NOT
     # clobber an earlier real measurement into a fabricated ABSENT (last-COMPLETE-wins, not last-dict-wins).
-    latest: dict[str, dict] = {}
-    counts: dict[str, int] = {}
-    for r in rows:
-        rc = str(r.get("routing_class", ""))
-        rv = r.get("requirement_vector")
-        if not rc:
-            continue
-        counts[rc] = counts.get(rc, 0) + 1
-        if isinstance(rv, dict) and _measured_reqvec_or_absent(rv) != "absent":
-            latest[rc] = rv  # last COMPLETE write wins — most-recent fully-measured vector
+    latest = reduced["latest"]
+    counts = reduced["counts"]
 
     candidates = []
     for rc in sorted(counts):

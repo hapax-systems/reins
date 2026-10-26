@@ -2806,3 +2806,242 @@ def test_projection_resolve_loop(projection_log, monkeypatch, path):
     monkeypatch.setattr(Path, "resolve", loop)
     assert reins_read._projection("", include_replay_metadata=True) == expected
     assert reins_read._projection_cache is None
+
+
+@pytest.fixture
+def admission_app(tmp_path, monkeypatch):
+    import reins_serve
+
+    monkeypatch.setenv("REINS_COMMAND_LEDGER", str(tmp_path / "commands.jsonl"))
+    return reins_serve.build_serve_app(str(tmp_path), [], {"vault_root": str(tmp_path)})
+
+
+def test_read_admission_global_workers_and_composed_routes(admission_app):
+    import asyncio
+    from threading import Event, Lock
+
+    import httpx
+
+    release = Event()
+    lock = Lock()
+    active = 0
+    peak = 0
+
+    def blocked():
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            assert release.wait(5)
+            return {"complete": list(range(1000))}
+        finally:
+            with lock:
+                active -= 1
+
+    # Real composed app, including both route GETs added after build_app.
+    paths = ["/read/tasks", "/read/vault", "/read/obligations", "/route/posture",
+             "/route/candidates"]
+    for route in admission_app.routes:
+        if getattr(route, "path", None) in paths:
+            route.dependant.call = blocked
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=admission_app),
+                                     base_url="http://test") as client:
+            jobs = [asyncio.create_task(client.get(p)) for p in paths[:4]]
+            try:
+                async with asyncio.timeout(2):
+                    while active < 4:
+                        await asyncio.sleep(.001)
+                # A fifth DISTINCT heavy route isolates the global guard.
+                response = await asyncio.wait_for(client.get(paths[4]), .5)
+                assert response.status_code == 503
+                assert "retry" in response.json()["detail"].lower()
+                assert response.headers["retry-after"] == "1"
+                assert active == peak == 4
+            finally:
+                release.set()
+                await asyncio.gather(*jobs)
+            assert active == 0
+            for path in paths:
+                response = await client.get(path)
+                assert response.status_code == 200
+                assert response.json() == {"complete": list(range(1000))}
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("path", ["/read/tasks", "/read/vault", "/read/obligations",
+                                 "/read/wait-census", "/route/posture", "/route/candidates"])
+@pytest.mark.parametrize("ending", ["success", "exception", "cancel", "disconnect"])
+def test_read_admission_lifetime(admission_app, path, ending):
+    import asyncio
+    from threading import Event
+
+    entered, release, finished = Event(), Event(), Event()
+    active = 0
+    calls = 0
+
+    def blocked():
+        nonlocal active, calls
+        active += 1
+        calls += 1
+        entered.set()
+        try:
+            assert release.wait(5)
+            if ending == "exception":
+                raise ValueError("fixture failure")
+            return {"complete": True}
+        finally:
+            active -= 1
+            finished.set()
+
+    next(r for r in admission_app.routes if getattr(r, "path", None) == path).dependant.call = blocked
+
+    async def run():
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "method": "GET",
+                 "path": path, "raw_path": path.encode(), "query_string": b"", "headers": [],
+                 "scheme": "http", "server": ("test", 80), "client": ("test", 1),
+                 "root_path": "", "http_version": "1.1"}
+        sent = []
+        done = asyncio.Event()
+
+        async def receive():
+            if ending == "disconnect":
+                return {"type": "http.disconnect"}
+            await asyncio.Event().wait()
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.body" and not message.get("more_body"):
+                done.set()
+
+        job = asyncio.create_task(admission_app(scope, receive, send))
+        try:
+            async with asyncio.timeout(2):
+                while not entered.is_set():
+                    await asyncio.sleep(.001)
+            if ending == "cancel":
+                job.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await job
+            # Less than four total: isolates the per-route guard, including after cancellation.
+            refused = []
+
+            async def record(message):
+                refused.append(message)
+
+            await asyncio.wait_for(admission_app(scope, receive, record), .5)
+            assert refused[0]["status"] == 503
+            assert active == calls == 1
+        finally:
+            release.set()
+            await asyncio.gather(job, return_exceptions=True)
+            await asyncio.wait_for(done.wait(), 2)
+        assert finished.is_set() and active == 0
+        # Let the whole app unwind; a dropped final release refuses this valid twin.
+        await asyncio.sleep(.01)
+        ending_before = ending
+        response = []
+
+        async def record_next(message):
+            response.append(message)
+
+        try:
+            await admission_app(scope, receive, record_next)
+        except ValueError:
+            assert ending_before == "exception"
+        assert response[0]["status"] == (500 if ending == "exception" else 200)
+        assert calls == 2 and active == 0
+        if ending != "exception":
+            assert json.loads(response[-1]["body"]) == {"complete": True}
+    asyncio.run(run())
+
+
+def test_read_admission_holds_through_response_send(admission_app):
+    import asyncio
+
+    import httpx
+
+    @admission_app.get("/read/fixture-send")
+    def result():
+        return {"complete": True}
+
+    async def run():
+        entered = 0
+        release = asyncio.Event()
+
+        async def slow_app(scope, receive, send):
+            async def slow_send(message):
+                nonlocal entered
+                if message["type"] == "http.response.body":
+                    entered += 1
+                    await release.wait()
+                await send(message)
+            await admission_app(scope, receive, slow_send)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=slow_app),
+                                     base_url="http://test") as client:
+            jobs = [asyncio.create_task(client.get("/read/fixture-send")) for _ in range(4)]
+            try:
+                async with asyncio.timeout(2):
+                    while entered < 4:
+                        await asyncio.sleep(.001)
+                # The busy response must not be sent through the artificially blocked send.
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=admission_app),
+                                             base_url="http://test") as probe:
+                    assert (await probe.get("/read/fixture-send")).status_code == 503
+            finally:
+                release.set()
+                responses = await asyncio.gather(*jobs)
+            assert all(r.json() == {"complete": True} for r in responses)
+    asyncio.run(run())
+
+
+def test_vault_selection_matches_full_sort_and_bounds_live_paths(tmp_path, monkeypatch):
+    import weakref
+    from types import SimpleNamespace
+
+    names = [f"note-{i}.md" for i in range(1600)] + ["ignore.txt", "bad.md"]
+    mtimes = {name: (i * 19) % 601 for i, name in enumerate(names)}
+    live = weakref.WeakSet()
+    peak = 0
+    made = []
+
+    class TrackedPath(type(Path())):
+        def __truediv__(self, name):
+            nonlocal peak
+            result = super().__truediv__(name)
+            live.add(result)
+            peak = max(peak, len(live))
+            return result
+
+        def stat(self, **kwargs):
+            if self.name == "bad.md":
+                raise OSError("fixture unreadable")
+            return SimpleNamespace(st_mtime=mtimes[self.name])
+
+    # Root checks stay real; candidate paths use a tracked Path subclass.
+    monkeypatch.setattr(reins_read, "_vault_root", lambda cfg: tmp_path)
+    monkeypatch.setattr(reins_read, "Path", TrackedPath)
+
+    def walk(root):
+        dirs = [".hidden", "ordinary", ".trash"]
+        yield str(root), dirs, names
+        assert dirs == ["ordinary"]
+
+    monkeypatch.setattr(reins_read.os, "walk", walk)
+
+    def note(path, root):
+        made.append(path.name)
+        return {"title": path.name, "modified": mtimes[path.name], "rel_path": path.name}
+
+    monkeypatch.setattr(reins_read, "_vault_note", note)
+    expected = sorted(names[:1600], key=mtimes.__getitem__, reverse=True)[:500]
+    result = read_vault_summary({}, ["title", "modified", "rel_path"])
+    assert [r["title"] for r in result["notes"]] == expected
+    assert result["dark"] is False
+    assert len(made) == 500
+    assert peak <= 503  # selected paths plus the current candidate, not the whole vault
+    assert all(r["air"] == classify_air({k: v for k, v in r.items() if k != "air"},
+                                       ["title", "modified", "rel_path"]) for r in result["notes"])
