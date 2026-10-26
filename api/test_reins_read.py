@@ -2500,3 +2500,157 @@ def test_raw_tail_mirror_gap_is_dark(tmp_path, monkeypatch, gap):
     bad = client.get("/read/events", params=params if gap == "unsequenced" else {"limit": 2}).json()
     assert bad["dark"] is True and bad["events"] == []
     assert "inspect ledger and mirror sequences" in bad["error"]
+
+
+@pytest.fixture
+def projection_log(tmp_path, monkeypatch):
+    from hapax.spine.coord_event_log import CoordEvent, CoordEventLog, CoordWriter
+    from hapax.spine.coord_projection import CoordProjection
+
+    log = CoordEventLog(db_path=tmp_path / "db", jsonl_path=tmp_path / "mirror", spool_dir=tmp_path / "spool")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(reins_read, "_projection_cache", None, raising=False)
+    monkeypatch.setattr("hapax.spine.coord_event_log.default_event_log", lambda: log)
+
+    def append(start, count):
+        for i in range(start, start + count):
+            log.append(CoordEvent(
+                event_id=f"e-{i}", timestamp=f"2026-01-01T00:00:{i % 59:02}Z",
+                event_type="sdlc.stage_transition", actor=f"a-{i}", subject=f"t-{i % 3}",
+                payload={"from_stage": f"S{i}", "to_stage": f"S{i + 1}", "no_go_snapshot": {"ready": False}},
+            ), writer=CoordWriter.daemon())
+
+    def full(root="", *, include_replay_metadata=True):
+        replay = log.replay(fail_open=True)
+        record = CoordProjection.from_replay(replay).to_record()
+        if include_replay_metadata:
+            record["_history"], record["_log_complete"] = reins_read._task_history_from_replay(replay)
+            record["_replay"] = {"source": replay.source, "degraded": replay.degraded, "errors_present": bool(replay.errors)}
+        return record
+
+    return log, append, full
+
+
+def test_projection_incremental_work_and_copies(projection_log, monkeypatch):
+    import tracemalloc
+
+    from hapax.spine.coord_event_log import CoordEvent
+    from hapax.spine.coord_projection import CoordProjection
+
+    _, append, full = projection_log
+    parse, fold = CoordEvent.from_record, CoordProjection.fold_event
+    counts = [0, 0]
+    def parsed(record):
+        counts[0] += 1
+        return parse(record)
+    def folded(self, event):
+        counts[1] += 1
+        return fold(self, event)
+    monkeypatch.setattr(CoordEvent, "from_record", parsed)
+    monkeypatch.setattr(CoordProjection, "fold_event", folded)
+    start = 0
+    for name, added in [("cold", 256), ("warm", 0), ("delta", 1), ("suffix", 2048)]:
+        append(start, added)
+        start += added
+        expected = full()
+        counts[:] = [0, 0]
+        tracemalloc.start()
+        try:
+            actual = reins_read._projection("", include_replay_metadata=True)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        print(json.dumps({"case": name, "events": start, "decoded": counts[0], "folded": counts[1], "peak_bytes": peak}))
+        assert actual == expected
+        assert counts == [added + (name != "cold"), added]
+        actual["tasks"]["t-0"]["no_go"]["ready"] = True
+        actual["_history"]["t-0"]["last_actor"] = "corrupted copy"
+        assert reins_read._projection("", include_replay_metadata=True) == expected
+
+
+def test_projection_single_flight(projection_log, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    log, append, full = projection_log
+    append(0, 12)
+    expected, replay = full(), log.replay
+    entered, competing, release = Event(), Event(), Event()
+    calls = []
+    def slow(**kwargs):
+        calls.append(kwargs.get("since_sequence", 0))
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
+        else:
+            competing.set()
+        return replay(**kwargs)
+    monkeypatch.setattr(log, "replay", slow)
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(reins_read._projection, "", include_replay_metadata=True)
+        try:
+            assert entered.wait(5)
+            second = pool.submit(reins_read._projection, "", include_replay_metadata=True)
+            raced = competing.wait(0.2)
+        finally:
+            release.set()
+        assert first.result() == second.result() == expected
+    assert not raced and calls == [0, 12]
+
+
+@pytest.mark.parametrize("change", ["reset", "binding", "degrade", "suffix-degrade"])
+def test_projection_invalidation_and_routes(projection_log, monkeypatch, tmp_path, change):
+    import sqlite3
+
+    log, append, full = projection_log
+    append(0, 12)
+    assert reins_read._projection("", include_replay_metadata=True) == full()
+    if change == "reset":
+        with sqlite3.connect(log.db_path) as db:
+            db.execute("DELETE FROM coord_events")
+        append(100, 1)
+    elif change == "binding":
+        original = log.db_path
+        log.db_path = tmp_path / "another-db"
+        with sqlite3.connect(original) as src, sqlite3.connect(log.db_path) as db:
+            src.backup(db)
+            db.execute("DELETE FROM coord_events WHERE sequence % 3 = 1")
+    elif change == "degrade":
+        log.db_path.write_bytes(b"broken sqlite")
+    else:
+        def failed(*a, **kw):
+            raise OSError("fixture SQLite failure after cursor check")
+        monkeypatch.setattr(log, "_replay_sqlite", failed)
+        log.jsonl_path.write_text(log.jsonl_path.read_text().replace('"t-0"', '"mirror-only"'))
+    monkeypatch.setattr(reins_read.time, "time", lambda: 1800000000.0)
+    monkeypatch.setattr(reins_read, "_observe_http_json", lambda *a: {})
+    client = TestClient(build_app(str(tmp_path), [], {"vault_root": str(tmp_path)}))
+    for phase in range(2):
+        assert reins_read._projection("", include_replay_metadata=True) == full()
+        for route in ("gates", "observe", "tasks", "wait-census"):
+            actual = client.get(f"/read/{route}")
+            with monkeypatch.context() as oracle:
+                oracle.setattr(reins_read, "_projection", full)
+                expected = client.get(f"/read/{route}")
+            assert actual.status_code == expected.status_code == 200
+            assert actual.json() == expected.json()
+        if change == "degrade":
+            log.db_path.unlink()
+        append(200 + phase, 1)
+
+
+@pytest.mark.parametrize("path", ["db_path", "jsonl_path"])
+def test_projection_resolve_loop(projection_log, monkeypatch, path):
+    log, append, full = projection_log
+    append(0, 1)
+    expected = full()
+    assert reins_read._projection("", include_replay_metadata=True) == expected
+    resolve = Path.resolve
+    def loop(self, *a, **kw):
+        if self == getattr(log, path):
+            raise RuntimeError("Symlink loop")  # Python 3.12 resolve failure.
+        return resolve(self, *a, **kw)
+    monkeypatch.setattr(Path, "resolve", loop)
+    assert reins_read._projection("", include_replay_metadata=True) == expected
+    assert reins_read._projection_cache is None
