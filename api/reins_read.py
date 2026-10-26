@@ -8,6 +8,7 @@ import os
 import re
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import quote
 from fastapi import FastAPI
@@ -218,8 +219,8 @@ def _task_history(council_root: str) -> tuple[dict, bool]:
     return _task_history_from_replay(result)
 
 
-def _task_history_from_replay(result: Any) -> tuple[dict, bool]:
-    hist: dict = {}
+def _task_history_from_replay(result: Any, hist: dict | None = None) -> tuple[dict, bool]:
+    hist = {} if hist is None else hist
     log_complete = not bool(getattr(result, "degraded", False))
     for e in result.events:
         r = e.to_record()
@@ -5495,21 +5496,55 @@ def read_traces(council_root: str, limit: int = 40, allowlist: list[str] | None 
         return {"dark": True, "error": str(e), "traces": []}
 
 
+_projection_lock = Lock()
+_projection_cache: tuple | None = None
+
+
 def _projection(council_root: str, *, include_replay_metadata: bool = False) -> dict:
-    from hapax.spine.coord_event_log import default_event_log
+    """Amortized fold; cold seeds and missed suffixes remain proportional to log size."""
+    from hapax.spine.coord_event_log import CoordEventLogError, default_event_log
     from hapax.spine.coord_projection import CoordProjection
 
-    replay = default_event_log().replay(fail_open=True)
-    record = CoordProjection.from_replay(replay).to_record()
-    if include_replay_metadata:
-        source = getattr(replay, "source", "unknown")
-        record["_replay"] = {
-            "source": source if source in {"sqlite", "jsonl_mirror"} else "unknown",
-            "degraded": bool(getattr(replay, "degraded", True)),
-            "errors_present": bool(getattr(replay, "errors", ())),
-        }
-        record["_history"], record["_log_complete"] = _task_history_from_replay(replay)
-    return record
+    global _projection_cache
+    # One binding and one flight per process, including degraded full folds.
+    with _projection_lock:
+        cached, _projection_cache = _projection_cache, None
+        log = default_event_log()
+        identity = (str(log.db_path.resolve()), str(log.jsonl_path.resolve()))
+        try:
+            stat = log.db_path.stat()
+            identity += (stat.st_dev, stat.st_ino)
+            # Check the cursor's event, not just MAX(sequence): resets may reuse numbers.
+            if cached and cached[0] == identity:
+                tail = log.read_tail(limit=1, before_sequence=cached[1] + 1)
+                if not tail.events or tail.events[-1].to_record() != cached[2]:
+                    cached = None
+            else:
+                cached = None
+        except (OSError, CoordEventLogError):
+            cached = None  # Full replay owns the canonical degraded/error behavior.
+        cursor, anchor, projection, hist = cached[1:] if cached else (0, None, CoordProjection(), {})
+        replay = log.replay(since_sequence=cursor, fail_open=True)
+        if cached and (replay.source != "sqlite" or replay.degraded or replay.errors):
+            cursor, anchor, projection, hist = 0, None, CoordProjection(), {}
+            replay = log.replay(fail_open=True)
+        for event in replay.events:
+            projection.fold_event(event)
+        hist, complete = _task_history_from_replay(replay, hist)
+        if replay.events:
+            anchor = replay.events[-1].to_record()
+            cursor = replay.events[-1].sequence
+        if cursor and replay.source == "sqlite" and not replay.degraded and not replay.errors:
+            _projection_cache = (identity, cursor, anchor, projection, hist)
+        record = projection.to_record()
+        if include_replay_metadata:
+            record["_replay"] = {
+                "source": replay.source if replay.source in {"sqlite", "jsonl_mirror"} else "unknown",
+                "degraded": replay.degraded, "errors_present": bool(replay.errors),
+            }
+            record["_history"] = {tid: dict(h) for tid, h in hist.items()}
+            record["_log_complete"] = complete
+        return record
 
 
 def _page_before(records: list[dict], before: str | None, limit: int) -> list[dict]:
