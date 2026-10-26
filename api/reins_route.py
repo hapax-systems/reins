@@ -82,8 +82,8 @@ def _stale_after_s(raw: str | None) -> float:
 GATE_EVENTS_STALE_AFTER_S = _stale_after_s(os.environ.get("REINS_GATE_EVENTS_TTL_S"))
 
 
-def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
-    """Age of the most recent row by its own `ts`, or None if no row carries a parseable one.
+def _newest_row_timestamp(rows: list[dict], now: float) -> float | None:
+    """Newest non-future row timestamp, or None if no row carries a parseable one.
 
     None is NOT "fresh" — the caller treats an unreadable age as stale. An age we cannot compute is
     an age we cannot vouch for, and the honest direction is starved (see the module's honest-dark
@@ -113,7 +113,7 @@ def _newest_row_age_s(rows: list[dict], now: float) -> float | None:
             continue
         if newest is None or ts > newest:
             newest = ts
-    return None if newest is None else max(0.0, now - newest)
+    return newest
 
 
 def _read_gate_events(
@@ -128,11 +128,9 @@ def _read_gate_events(
     """
     if not os.path.exists(path):
         return {}, True, "gate-events feed absent (spine routing substrate not present)", None
-    # One observation clock for the streaming fold, including future-row refusal.
-    observed_at = now if now is not None else time.time()
     try:
         reduced = {"events": 0, "observed": set(), "counts": {}, "latest": {}}
-        age_s = None
+        newest = None
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -147,9 +145,11 @@ def _read_gate_events(
                 if not isinstance(row, dict):
                     continue
                 reduced["events"] += 1
-                age = _newest_row_age_s([row], observed_at)
-                if age is not None and (age_s is None or age < age_s):
-                    age_s = age
+                # Refuse future stamps when observed, without retaining timestamp
+                # history. Freshness age uses the completion clock below, not this cutoff.
+                stamp = _newest_row_timestamp([row], now if now is not None else time.time())
+                if stamp is not None and (newest is None or stamp > newest):
+                    newest = stamp
                 # Preserve the two consumers' existing distinction: posture only
                 # observes truthy raw classes; candidates count nonempty string forms.
                 rc = str(row.get("routing_class", ""))
@@ -161,6 +161,8 @@ def _read_gate_events(
                     vector = _measured_reqvec_or_absent(row.get("requirement_vector"))
                     if vector != "absent":
                         reduced["latest"][rc] = vector
+        observed_at = now if now is not None else time.time()
+        age_s = None if newest is None or newest > observed_at else observed_at - newest
         return reduced, False, "", age_s
     except OSError as e:
         return {}, True, str(e), None

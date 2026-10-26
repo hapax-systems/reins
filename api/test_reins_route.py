@@ -314,6 +314,8 @@ def test_route_stream_equivalence(tmp_path, monkeypatch, variant):
             {**good, "routing_class": "unknown", "ts": "invalid"},
             {**good, "routing_class": "source_other", "ts": "2099-01-01T00:00:00Z"},
             {**good, "routing_class": "empty", "requirement_vector": None},
+            {**good, "routing_class": "extra-keys", "requirement_vector": {
+                **good["requirement_vector"], "unexpected": {"payload": "discard"}}},
             {**good, "requirement_vector": {**good["requirement_vector"], REQVEC_DIMS[0]: True}},
             {"routing_class": None}, {"routing_class": False}, {"routing_class": ""}, {},
             [], "text", None]
@@ -392,3 +394,48 @@ def test_route_stream_missing_feed_keeps_diagnostic(tmp_path):
         result = reader(path)
         assert result["dark"] is True
         assert result["error"] == "gate-events feed absent (spine routing substrate not present)"
+
+
+@pytest.mark.parametrize("elapsed, expected_state", [
+    (0, "live"), (2, "stale"), (-reins_route.GATE_EVENTS_STALE_AFTER_S - 1, "stale"),
+])
+def test_route_stream_freshness_observed_after_read(tmp_path, monkeypatch, elapsed, expected_state):
+    import io
+
+    start = datetime(2026, 10, 26, tzinfo=UTC).timestamp()
+    stamp = start - reins_route.GATE_EVENTS_STALE_AFTER_S + 1
+    line = json.dumps({"ts": datetime.fromtimestamp(stamp, UTC).isoformat()}) + "\n"
+    path = tmp_path / "gate.jsonl"
+    path.write_text(line)
+    clock = start
+
+    class SlowRead(io.StringIO):
+        def __exit__(self, *args):
+            nonlocal clock
+            clock = start + elapsed
+            return super().__exit__(*args)
+
+    monkeypatch.setattr(reins_route, "open", lambda *a, **k: SlowRead(line), raising=False)
+    monkeypatch.setattr(reins_route.time, "time", lambda: clock)
+    result = read_route_posture(str(path))
+    assert result["dark"] is False
+    assert result["sources"][0]["events"] == 1
+    expected_age = start + elapsed - stamp if stamp <= start + elapsed else None
+    assert result["sources"][0]["age_s"] == expected_age
+    assert result["sources"][0]["state"] == expected_state
+    # A supplied observation time is independent of wall-clock progress.
+    for explicit in (start, 0.0):
+        reduced, dark, error, age = reins_route._read_gate_events(str(path), now=explicit)
+        assert (reduced["events"], dark, error) == (1, False, "")
+        assert age == (explicit - stamp if stamp <= explicit else None)
+
+
+def test_route_stream_explicit_clock_keeps_older_eligible_row(tmp_path, monkeypatch):
+    now = datetime(2026, 10, 26, tzinfo=UTC).timestamp()
+    path = tmp_path / "gate.jsonl"
+    path.write_text("\n".join(json.dumps({"ts": datetime.fromtimestamp(now + d, UTC).isoformat()})
+                              for d in (-10, 10)))
+    monkeypatch.setattr(reins_route.time, "time", lambda: now + 20)
+    reduced, dark, error, age = reins_route._read_gate_events(str(path), now=now)
+    assert (reduced["events"], dark, error, age) == (2, False, "", 10)
+    assert reins_route._read_gate_events(str(path))[3] == 10  # valid wall-clock twin

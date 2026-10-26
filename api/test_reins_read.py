@@ -3045,3 +3045,56 @@ def test_vault_selection_matches_full_sort_and_bounds_live_paths(tmp_path, monke
     assert peak <= 503  # selected paths plus the current candidate, not the whole vault
     assert all(r["air"] == classify_air({k: v for k, v in r.items() if k != "air"},
                                        ["title", "modified", "rel_path"]) for r in result["notes"])
+
+
+def test_read_admission_nonheavy_and_passthrough_under_saturation(admission_app):
+    import asyncio
+    from threading import Event
+
+    import httpx
+
+    release = Event()
+    active = calls = 0
+
+    @admission_app.get("/read/fixture-light")
+    def light():
+        nonlocal active, calls
+        active += 1
+        calls += 1
+        try:
+            assert release.wait(5)
+            return {"complete": True}
+        finally:
+            active -= 1
+
+    passed = []
+
+    @admission_app.get("/fixture-outside")
+    @admission_app.post("/read/fixture-light")
+    def passthrough():
+        passed.append(True)
+        return {"passthrough": True}
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=admission_app),
+                                     base_url="http://test") as client:
+            jobs = [asyncio.create_task(client.get("/read/fixture-light")) for _ in range(4)]
+            try:
+                async with asyncio.timeout(2):
+                    while active < 4:
+                        await asyncio.sleep(.001)
+                assert calls == 4  # a non-heavy route can use all four global permits
+                assert (await asyncio.wait_for(client.get("/read/fixture-light"), .5)).status_code == 503
+                assert active == calls == 4
+                for method, path in [("GET", "/fixture-outside"), ("POST", "/read/fixture-light")]:
+                    response = await asyncio.wait_for(client.request(method, path), .5)
+                    assert response.status_code == 200 and response.json() == {"passthrough": True}
+                assert len(passed) == 2
+            finally:
+                release.set()
+                responses = await asyncio.gather(*jobs)
+            assert all(r.status_code == 200 and r.json() == {"complete": True} for r in responses)
+            assert active == 0
+            assert (await client.get("/read/fixture-light")).status_code == 200
+            assert calls == 5
+    asyncio.run(run())
