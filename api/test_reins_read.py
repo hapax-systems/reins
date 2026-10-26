@@ -885,6 +885,158 @@ def test_read_intake_summary_uses_bounded_metadata_only(tmp_path):
     assert summary["sources"][0]["air"]["count"] == "ok"
 
 
+@pytest.fixture
+def receipt_parity_inputs(tmp_path, monkeypatch):
+    """Complete synthetic registry; real installed reader and receipt validators."""
+    import socket
+    import subprocess
+    from datetime import UTC, datetime, timedelta
+
+    from hapax.spine import platform_capability_registry as registry
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("receipt parity test attempted network or a subprocess")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    for key in ("REINS_CAPABILITY_SURFACE_PACKS", "REINS_CAPABILITY_INVENTORY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HAPAX_SPINE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HAPAX_QUOTA_SPEND_LEDGER_LIVE", str(tmp_path / "quota.json"))
+    monkeypatch.setenv("HAPAX_CAPABILITY_SURFACE_DELTA_FILE", "none")
+    now = datetime.now(UTC) - timedelta(seconds=1)
+    observed = now.isoformat()
+    expiry = (now + timedelta(hours=1)).isoformat()
+    ids = sorted(registry.REQUIRED_ROUTE_IDS)
+    score = {"score": 0, "confidence": 0, "observed_at": None, "stale_after": "1h"}
+    evidence = {"blocked_reasons": ["fixture_held"]}
+    freshness = {"evidence": {s: evidence for s in registry.FRESHNESS_SURFACES}}
+    for surface in registry.FRESHNESS_SURFACES:
+        freshness[surface + "_checked_at"] = None
+        freshness[surface + "_stale_after"] = "1h"
+    routes = []
+    for route_id in ids:
+        platform, mode, profile = route_id.split(".")
+        routes.append({
+            "route_id": route_id, "platform": platform, "mode": mode, "profile": profile,
+            "launcher": "fixture-launcher", "sanctioned_wrapper": "fixture-wrapper",
+            "summary": "synthetic held route", "notes": "no execution authority",
+            "route_state": "blocked", "blocked_reasons": ["fixture_held"],
+            "model_or_engine": "fixture-model",
+            "execution_descriptor": {"model_id": "unknown", "effort": "none"},
+            "approval_posture": "plan_mode_read_only", "capability_tier": "read_only_support",
+            "worker_tier": "read_only_sidecar", "auth_surface": "unknown",
+            "capacity_pool": "local_compute",
+            "mutability": {k: False for k in ("vault_docs", "source", "runtime", "public", "provider_spend")},
+            "authority_ceiling": "read_only",
+            "tool_access": {"filesystem": "read_only", "shell": "read_only", "browser": False},
+            "privacy_posture": "unknown",
+            "quality_envelope": {"eligible_quality_floors": ["deterministic_ok"]},
+            "capability_scores": {k: score for k in registry.CapabilityScores.model_fields},
+            "context_limits": {"max_context_class": "unknown"},
+            "telemetry": {"quota_source": "none", "cost_source": "none", "resource_source": "none"},
+            "freshness": freshness,
+        })
+    shape = {
+        "descriptor_schema": 1, "demand_eligible": False, "route_ids": [],
+        "shape_id": registry.AGENTIC_TRUST_EVIDENCE_SURFACE_ID,
+        "shape_class": "research", "carrier_family": "fixture", "summary": "synthetic observation",
+        "harness_shape": "fixture", "authority_ceiling": "read_only", "shape_state": "evidence_only",
+        "resource_semantics": ["no-resource-authority"], "spend_semantics": ["no-spend-authority"],
+        "observability": ["fixture"], "failure_classes": ["missing"],
+        "measurement_plan_refs": ["test:measure"], "remediation_refs": ["test:repair"],
+        "surface_delta_signal": None,
+        "observation_receipt_class": registry.AGENTIC_TRUST_EVIDENCE_RECEIPT_CLASS,
+        "observed_at": None, "stale_after": "1h", "freshness_state": "missing",
+        "blocked_reasons": ["fixture_held"],
+    }
+    raw = {
+        "registry_schema": 1, "registry_id": "synthetic-receipt-parity",
+        "schema_ref": "schemas/platform-capability-registry.schema.json", "declared_at": observed,
+        "capacity_invariant": registry.CAPACITY_INVARIANT, "generated_from": ["test:fixture"],
+        "required_route_ids": ids, "routes": routes, "omitted_capability_shapes": [shape],
+    }
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "platform-capability-registry.json").write_text(json.dumps(raw))
+    # Fail at setup if the synthetic registry itself is invalid, even on the old pin.
+    assert len(registry.PlatformCapabilityRegistry.model_validate(raw).routes) == len(ids)
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    monkeypatch.setenv("HAPAX_PLATFORM_CAPABILITY_RECEIPT_DIR", str(receipts))
+    surface = {
+        "status": "blocked", "source": "synthetic", "observed_at": observed,
+        "stale_after": "1h", "evidence_refs": ["test:held"], "reason_codes": ["fixture_held"],
+    }
+    receipt = {
+        "receipt_schema": 1, "receipt_id": "synthetic-parity", "platform": "agy",
+        "routes": ["agy.review.direct"], "observed_at": observed, "stale_after": "1h",
+        "cli": {"binary": "fixture-cli", "available": False},
+        "wrapper": {"path": "fixture-wrapper", "exists": False, "executable": False},
+        "capability": surface, "resource": surface, "quota": surface,
+        "provider_docs": {"refs": ["test:docs"], "fetched_at": observed, "stale_after": "1h"},
+    }
+    metadata = {
+        "entitlement_metadata": {
+            "provider": "synthetic", "product": "included", "auth_origin": "owner-export",
+            "tenant_ref": "tenant:" + "a" * 64, "cohort": "fixture", "pool_id": "included",
+            "policy_digest": "b" * 64, "observed_at": observed, "fresh_until": expiry,
+            "supported_knobs": {"model": ["synthetic"]}, "included_only": True,
+            "payg_fallback_allowed": False, "evidence_refs": ["test:policy"],
+        },
+        "delta_resolution": {
+            "delta_id": "fixture-delta", "surface_id": "fixture-surface", "route_id": "agy.review.direct",
+            "descriptor_signature": "c" * 64, "configuration_digest": "d" * 64,
+            "disposition": "admitted", "admission_refs": ["test:admission"],
+            "observed_at": observed, "fresh_until": expiry, "revoked": False,
+        },
+    }
+    cfg = {
+        "capability_receipt_dir": str(receipts), "quota_spend_ledger_live": str(tmp_path / "quota.json"),
+        "capability_inventory_path": str(tmp_path / "inventory.json"),
+        "capability_surface_pack_paths": [],
+    }
+    return tmp_path, cfg, receipts / "agy.json", receipt, metadata, ids
+
+
+def _receipt_parity_read(inputs, keys, unknown=None):
+    root, cfg, path, receipt, metadata, _ = inputs
+    receipt.update({key: metadata[key] for key in keys})
+    if unknown is not None:
+        (receipt if unknown == "receipt" else receipt[unknown])["unknown_parity_field"] = True
+    path.write_text(json.dumps(receipt))
+    return read_capability_summary(str(root), EXPECTED_DEFAULT_ALLOW, cfg)
+
+
+@pytest.mark.parametrize("keys", [
+    (), ("entitlement_metadata",), ("delta_resolution",), ("entitlement_metadata", "delta_resolution"),
+])
+def test_receipt_parity_real_capability_read(receipt_parity_inputs, keys):
+    result = _receipt_parity_read(receipt_parity_inputs, keys)
+    source = next(s for s in result["sources"] if s["id"] == "platform_registry")
+    assert source["status"] == "observed", source["detail"]
+    assert source["detail"] == "typed platform capability registry"
+    expected_ids = receipt_parity_inputs[-1]
+    assert source["count"] == result["totals"]["routes"] == len(expected_ids)
+    assert {r["route_id"] for r in result["routes"]} == set(expected_ids)
+    # An admitted-looking resolution is still evidence, not authority to clear this hold.
+    route = next(r for r in result["routes"] if r["route_id"] == "agy.review.direct")
+    assert route["route_state"] == "blocked"
+    assert "fixture_held" in route["blockers"]
+    assert route["authority_ceiling"] == "read_only"
+
+
+@pytest.mark.parametrize("level", ["receipt", "entitlement_metadata", "delta_resolution"])
+def test_receipt_parity_unknown_fields_stay_dark(receipt_parity_inputs, level):
+    result = _receipt_parity_read(receipt_parity_inputs, ("entitlement_metadata", "delta_resolution"), level)
+    source = next(s for s in result["sources"] if s["id"] == "platform_registry")
+    assert source["status"] == "error"
+    assert "unknown_parity_field" in source["detail"] and "Extra inputs are not permitted" in source["detail"]
+    assert source["count"] == result["totals"]["routes"] == 0
+    assert result["routes"] == []
+
+
 @pytest.mark.skip(
     reason="MIGRATION DEBT (hapax-spine extraction): this asserted reins reading a MOCKED council shared/ "
     "substrate (the pre-extraction sys.path.insert coupling). reins now reads the hapax-spine WHEEL, whose "
