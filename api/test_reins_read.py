@@ -916,23 +916,42 @@ def receipt_parity_inputs(tmp_path, monkeypatch):
         freshness[surface + "_checked_at"] = None
         freshness[surface + "_stale_after"] = "1h"
     routes = []
+    gemma_excluded = [
+        "frontier_required", "frontier_review_required", "governance_authority_case",
+        "source_mutation", "runtime_mutation", "provider_spend",
+        "privacy_secret_sensitive", "public_release_without_gate",
+    ]
     for route_id in ids:
         platform, mode, profile = route_id.split(".")
+        is_gemma = route_id == "local_tool.local.gemma3_4b_reviewbench"
         routes.append({
             "route_id": route_id, "platform": platform, "mode": mode, "profile": profile,
             "launcher": "fixture-launcher", "sanctioned_wrapper": "fixture-wrapper",
             "summary": "synthetic held route", "notes": "no execution authority",
             "route_state": "blocked", "blocked_reasons": ["fixture_held"],
-            "model_or_engine": "fixture-model",
-            "execution_descriptor": {"model_id": "unknown", "effort": "none"},
-            "approval_posture": "plan_mode_read_only", "capability_tier": "read_only_support",
-            "worker_tier": "read_only_sidecar", "auth_surface": "unknown",
+            "model_or_engine": "gemma3:4b" if is_gemma else "fixture-model",
+            "execution_descriptor": {"model_id": "gemma3:4b" if is_gemma else "unknown", "effort": "none"},
+            "approval_posture": "default_deny_enable_latch" if is_gemma else "plan_mode_read_only", "capability_tier": "read_only_support",
+            "worker_tier": "read_only_sidecar", "auth_surface": "local" if is_gemma else "unknown",
             "capacity_pool": "local_compute",
             "mutability": {k: False for k in ("vault_docs", "source", "runtime", "public", "provider_spend")},
-            "authority_ceiling": "read_only",
-            "tool_access": {"filesystem": "read_only", "shell": "read_only", "browser": False},
+            "authority_ceiling": "support_only" if is_gemma else "read_only",
+            "tool_access": {
+                "filesystem": "read_only",
+                "shell": "none" if is_gemma else "read_only",
+                "browser": False,
+                "mcp": [],
+            },
             "privacy_posture": "unknown",
-            "quality_envelope": {"eligible_quality_floors": ["deterministic_ok"]},
+            "quality_envelope": (
+                {
+                    "eligible_quality_floors": ["deterministic_ok"],
+                    "allowed_task_classes": ["reviewbench_phase5_op2_bin"],
+                    "excluded_task_classes": gemma_excluded,
+                }
+                if is_gemma
+                else {"eligible_quality_floors": ["deterministic_ok"]}
+            ),
             "capability_scores": {k: score for k in registry.CapabilityScores.model_fields},
             "context_limits": {"max_context_class": "unknown"},
             "telemetry": {"quota_source": "none", "cost_source": "none", "resource_source": "none"},
@@ -1033,6 +1052,108 @@ def test_receipt_parity_unknown_fields_stay_dark(receipt_parity_inputs, level):
     source = next(s for s in result["sources"] if s["id"] == "platform_registry")
     assert source["status"] == "error"
     assert "unknown_parity_field" in source["detail"] and "Extra inputs are not permitted" in source["detail"]
+    assert source["count"] == result["totals"]["routes"] == 0
+    assert result["routes"] == []
+
+
+def _gemma_reviewbench_route_read(
+    inputs,
+    *,
+    profile="gemma3_4b_reviewbench",
+    model_id="gemma3:4b",
+    platform="local_tool",
+    auth_surface="local",
+    authority_ceiling="support_only",
+    capacity_pool="local_compute",
+    shell_access="none",
+):
+    root, cfg, _, receipt, _, _ = inputs
+    reg_path = root / "config" / "platform-capability-registry.json"
+    raw = json.loads(reg_path.read_text())
+    raw["routes"] = [r for r in raw["routes"] if r["route_id"] != "local_tool.local.gemma3_4b_reviewbench"]
+    if "local_tool.local.gemma3_4b_reviewbench" not in raw["required_route_ids"]:
+        raw["required_route_ids"].append("local_tool.local.gemma3_4b_reviewbench")
+    base_route = raw["routes"][0]
+    gemma_route = {
+        **base_route,
+        "route_id": "local_tool.local.gemma3_4b_reviewbench",
+        "platform": platform,
+        "mode": "local",
+        "profile": profile,
+        "auth_surface": auth_surface,
+        "model_or_engine": model_id,
+        "execution_descriptor": {"model_id": model_id, "effort": "none"},
+        "approval_posture": "default_deny_enable_latch",
+        "route_state": "blocked",
+        "blocked_reasons": ["fixture_held"],
+        "authority_ceiling": authority_ceiling,
+        "capacity_pool": capacity_pool,
+        "mutability": dict.fromkeys(("vault_docs", "runtime", "public", "source", "provider_spend"), False),
+        "tool_access": {"filesystem": "read_only", "shell": shell_access, "browser": False, "mcp": []},
+        "quality_envelope": {
+            "eligible_quality_floors": ["deterministic_ok"],
+            "allowed_task_classes": ["reviewbench_phase5_op2_bin"],
+            "excluded_task_classes": [
+                "frontier_required",
+                "frontier_review_required",
+                "governance_authority_case",
+                "source_mutation",
+                "runtime_mutation",
+                "provider_spend",
+                "privacy_secret_sensitive",
+                "public_release_without_gate",
+            ],
+        },
+    }
+    raw["routes"].append(gemma_route)
+    reg_path.write_text(json.dumps(raw))
+    local_receipt = {
+        **receipt,
+        "receipt_id": "synthetic-local-tool-parity",
+        "platform": "local_tool",
+        "routes": ["local_tool.local.gemma3_4b_reviewbench"],
+    }
+    (root / "receipts" / "local_tool.json").write_text(json.dumps(local_receipt))
+    return read_capability_summary(str(root), EXPECTED_DEFAULT_ALLOW, cfg)
+
+
+def test_gemma_reviewbench_route_catalog_real_capability_read(receipt_parity_inputs):
+    from hapax.spine import platform_capability_registry as registry
+    from hapax.spine import quota_spend_ledger as ledger
+
+    result = _gemma_reviewbench_route_read(receipt_parity_inputs)
+    source = next(s for s in result["sources"] if s["id"] == "platform_registry")
+    assert source["status"] == "observed", source["detail"]
+    assert source["detail"] == "typed platform capability registry"
+    expected_ids = set(receipt_parity_inputs[-1]) | {"local_tool.local.gemma3_4b_reviewbench"}
+    assert source["count"] == result["totals"]["routes"] == len(expected_ids) == 17
+    assert {r["route_id"] for r in result["routes"]} == expected_ids
+    route = next(r for r in result["routes"] if r["route_id"] == "local_tool.local.gemma3_4b_reviewbench")
+    assert route["route_state"] == "blocked"
+    assert "fixture_held" in route["blockers"]
+    assert route["authority_ceiling"] == "support_only"
+    assert ledger.ModelId.GEMMA3_4B.value == "gemma3:4b"
+    assert {m.value for m in ledger.ModelId} == {m.value for m in registry.ModelId}
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("profile", "invented_reviewbench_profile"),
+        ("model_id", "gemma3:99b-invented"),
+        ("platform", "invented_local_tool"),
+        ("auth_surface", "invented_local_auth"),
+        ("authority_ceiling", "read_only"),
+        ("capacity_pool", "subscription_quota"),
+        ("shell_access", "read_only"),
+    ],
+)
+def test_gemma_reviewbench_route_catalog_unknown_enums_and_posture_stay_dark(
+    receipt_parity_inputs, field, bad_value
+):
+    result = _gemma_reviewbench_route_read(receipt_parity_inputs, **{field: bad_value})
+    source = next(s for s in result["sources"] if s["id"] == "platform_registry")
+    assert source["status"] == "error"
     assert source["count"] == result["totals"]["routes"] == 0
     assert result["routes"] == []
 
