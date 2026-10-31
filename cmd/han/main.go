@@ -70,6 +70,11 @@ func run(args []string, stdout, stderr io.Writer, lookPath func(string) (string,
 	return runCmd(path, args[1:])
 }
 
+// Exit codes: 0 = the bound program's own success; the bound program's non-zero code
+// passes through unchanged; 1 = the bound program failed to LAUNCH (no such program,
+// not executable); 2 = no or unknown subcommand (usage on stderr); 127 = a bound
+// program is not on PATH at all.
+//
 // execAndWait runs the bound program with this process's stdio attached and
 // returns its exit code.
 func execAndWait(path string, args []string) int {

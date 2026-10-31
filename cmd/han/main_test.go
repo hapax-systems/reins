@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -116,5 +118,43 @@ func TestExitCodePassthrough(t *testing.T) {
 	code := run([]string{"docket"}, &out, &errw, foundLookPath, rec.run)
 	if code != 42 {
 		t.Errorf("exit %d, want the bound program's 42", code)
+	}
+}
+
+// --- the real subprocess path (no fakes): execAndWait itself ---
+
+func TestExecAndWaitRealChildZeroExit(t *testing.T) {
+	code := execAndWait("/bin/sh", []string{"-c", "exit 0"})
+	if code != 0 {
+		t.Errorf("exit %d, want 0", code)
+	}
+}
+
+func TestExecAndWaitRealChildNonZeroPassthrough(t *testing.T) {
+	code := execAndWait("/bin/sh", []string{"-c", "exit 3"})
+	if code != 3 {
+		t.Errorf("exit %d, want 3 (the child's own code, via exec.ExitError)", code)
+	}
+}
+
+func TestExecAndWaitLaunchFailureIsDocumented1WithPrefix(t *testing.T) {
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	code := execAndWait("/nonexistent/han-bound-program", nil)
+	w.Close()
+	os.Stderr = old
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if code != 1 {
+		t.Errorf("exit %d, want the documented 1 for a launch failure", code)
+	}
+	if !strings.HasPrefix(string(captured), "han: ") {
+		t.Errorf("stderr %q missing the han: prefix", captured)
 	}
 }
