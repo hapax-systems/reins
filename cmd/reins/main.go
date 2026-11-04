@@ -734,6 +734,10 @@ func updateProbeModel(m model.Model, msg tea.Msg) model.Model {
 var version = "dev"
 
 func main() {
+	if hasArg("--scope") && hasArg("--probe") {
+		fmt.Fprintln(os.Stderr, "reins: --scope does not support --probe; use --drive with --live")
+		os.Exit(2)
+	}
 	if hasArg("--version") {
 		fmt.Println("reins " + version)
 		return

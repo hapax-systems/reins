@@ -63,18 +63,42 @@ func TestScopeLiveCLIOnlyReadsTaskAndEventFeeds(t *testing.T) {
 		fmt.Fprint(w, `{"events":[],"tasks":[]}`)
 	}))
 	defer srv.Close()
-	cmd := exec.Command(filepath.Join(bin, "han"), "scope", "--drive", "tab", "--live", "size:170x46")
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"REINS_API_URL="+srv.URL, "REINS_CONFIG="+filepath.Join(bin, "absent.toml"))
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "SCOPE") || strings.Contains(string(out), "DEMO") || strings.Contains(string(out), "DARK") {
-		t.Fatalf("live Scope CLI: %v\n%s", err, out)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	sort.Strings(requests)
-	if !reflect.DeepEqual(requests, []string{"GET /read/events?limit=80", "GET /read/tasks"}) {
-		t.Fatalf("live Scope fetched beyond its lenses: %v", requests)
+	for _, tt := range []struct {
+		name, program string
+		args          []string
+		wantRequests  []string // nil means rejection before any fetch
+	}{
+		{"live", "han", []string{"scope", "--drive", "tab", "--live", "size:170x46"}, []string{"GET /read/events?limit=80", "GET /read/tasks"}},
+		{"probe", "han", []string{"scope", "--probe"}, nil},
+		{"probe_subcommand", "han", []string{"scope", "--probe", "facets"}, nil},
+		{"probe_reordered", "han", []string{"scope", "--air", "--probe"}, nil},
+		{"direct_probe", "reins", []string{"--probe", "--scope"}, nil},
+		{"direct_reordered", "reins", []string{"--scope", "--probe"}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mu.Lock()
+			requests = nil
+			mu.Unlock()
+			cmd := exec.Command(filepath.Join(bin, tt.program), tt.args...)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"REINS_API_URL="+srv.URL, "REINS_CONFIG="+filepath.Join(bin, "absent.toml"))
+			out, err := cmd.CombinedOutput()
+			if tt.wantRequests == nil {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 2 || !strings.Contains(string(out), "--scope does not support --probe") {
+					t.Errorf("Scope probe must reject clearly with exit 2: %v\n%s", err, out)
+				}
+			} else if err != nil || !strings.Contains(string(out), "SCOPE") || strings.Contains(string(out), "DEMO") || strings.Contains(string(out), "DARK") {
+				t.Errorf("live Scope CLI: %v\n%s", err, out)
+			}
+			mu.Lock()
+			got := append([]string(nil), requests...)
+			mu.Unlock()
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, tt.wantRequests) {
+				t.Errorf("Scope requests = %v, want %v", got, tt.wantRequests)
+			}
+		})
 	}
 }
 
