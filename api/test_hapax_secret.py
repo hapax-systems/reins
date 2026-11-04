@@ -5,8 +5,13 @@ from __future__ import annotations
 import base64
 import errno
 import json
+import os
+import subprocess
+import sys
+import time
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -14,6 +19,27 @@ import pytest
 import hapax_secret
 import reins_command
 import reins_serve
+
+
+@pytest.fixture(autouse=True)
+def presence_processes(monkeypatch):
+    """No test in this file can reach a live notification command by accident."""
+    spawned, commands = [], []
+
+    def spawn(argv, **kwargs):
+        spawned.append((argv, kwargs))
+        return SimpleNamespace(wait=lambda: pytest.fail("foreground waited for trigger"))
+
+    def run(argv, **kwargs):
+        commands.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    proxy = SimpleNamespace(
+        Popen=spawn, run=run, DEVNULL=subprocess.DEVNULL,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    monkeypatch.setattr(hapax_secret, "subprocess", proxy, raising=False)
+    return spawned, commands, proxy
 
 
 @pytest.fixture(autouse=True)
@@ -464,3 +490,239 @@ def test_ssh_argv_tty_for_delete():
     argv = hapax_secret.ssh_argv(tty=True, rest=["--delete", "glmcp"])
     assert "-t" in argv
     assert "--" in argv
+
+
+@pytest.fixture
+def secret_router():
+    app = reins_serve.build_serve_app("", [])
+    command = next(r.endpoint for r in app.routes if getattr(r, "path", "") == "/command/{verb}")
+
+    def post(_url, body):
+        return bytes(command("secret", reins_command.CommandRequest(**json.loads(body))).body)
+
+    return post
+
+
+def _put(post, value="synthetic-private-canary", name="provider/key"):
+    out, err = StringIO(), StringIO()
+    rc = hapax_secret.run_put_dialogue(
+        prompt=lambda _: name, get_secret=lambda _: value, post=post, stdout=out, stderr=err,
+    )
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _delete(post, name="provider/key", answer="yes"):
+    out, err = StringIO(), StringIO()
+    rc = hapax_secret.run_delete(
+        name, confirm=lambda _: answer, post=post, stdout=out, stderr=err,
+    )
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_presence_put_after_commit_no_payload(
+    secret_router, _isolated_store_and_ledger, presence_processes, monkeypatch,
+):
+    spawned, commands, proxy = presence_processes
+    spawn = proxy.Popen
+
+    def after_commit(argv, **kwargs):
+        assert _isolated_store_and_ledger.get("provider-key") == b"synthetic-private-canary"
+        return spawn(argv, **kwargs)
+
+    proxy.Popen = after_commit
+    assert _put(secret_router) == (0, "stored provider-key (file via reins)\n", "")
+    assert len(spawned) == 1
+    argv, options = spawned[0]
+    assert argv[:3] == [sys.executable, "-I", "-c"]
+    assert argv[4:] == [str(Path(hapax_secret.__file__).resolve().parent)]
+    assert options["start_new_session"] is True
+    assert options["close_fds"] is True
+    assert options["stdin"] == options["stdout"] == options["stderr"] == subprocess.DEVNULL
+    hapax_secret._presence_worker()
+    assert [a for a, _ in commands] == [
+        ["systemctl", "--user", "start", "--no-block", "hapax-isam-totality-audit.service"]
+    ]
+
+
+def test_presence_delete_after_commit_exact_name_reason_and_order(
+    secret_router, _isolated_store_and_ledger, presence_processes,
+):
+    spawned, commands, proxy = presence_processes
+    _isolated_store_and_ledger.put("provider-key", b"synthetic-delete-canary")
+    spawn = proxy.Popen
+
+    def after_commit(argv, **kwargs):
+        assert not _isolated_store_and_ledger.has("provider-key")
+        return spawn(argv, **kwargs)
+
+    proxy.Popen = after_commit
+    assert _delete(secret_router) == (0, "deleted provider-key\n", "")
+    assert len(spawned) == 1
+    assert spawned[0][0][4:] == [str(Path(hapax_secret.__file__).resolve().parent), "provider-key"]
+    hapax_secret._presence_worker("provider-key")
+    assert [a for a, _ in commands] == [
+        ["hapax-entitlement", "unregister", "provider-key", "--reason", "explicit_delete"],
+        ["systemctl", "--user", "start", "--no-block", "hapax-isam-totality-audit.service"],
+    ]
+
+
+@pytest.mark.parametrize("deleted", [False, None, "true", 1, {}, []])
+def test_presence_delete_requires_literal_true(deleted, presence_processes):
+    result = {"status": "ok", "payload": {"deleted": deleted}}
+    assert _delete(lambda *_: json.dumps(result).encode())[0] == 1
+    assert presence_processes[0] == []
+
+
+@pytest.mark.parametrize("body", [b'{}', b'[]', b'no-json', b'{"status":"refused"}'])
+@pytest.mark.parametrize("operation", [_put, _delete])
+def test_presence_refused_mutation_never_notifies(body, operation, presence_processes):
+    assert operation(lambda *_: body)[0] == 2
+    assert presence_processes[0] == []
+
+
+def test_presence_aborted_or_missing_delete_never_notifies(secret_router, presence_processes):
+    assert _delete(secret_router, answer="no")[0] == 1
+    assert _delete(secret_router)[0] == 1
+    assert presence_processes[0] == []
+
+
+@pytest.mark.parametrize("value,name", [("", "key"), ("synthetic", "invalid name")])
+def test_presence_invalid_put_never_notifies(value, name, secret_router, presence_processes):
+    assert _put(secret_router, value=value, name=name)[0] != 0
+    assert presence_processes[0] == []
+
+
+@pytest.mark.parametrize("operation", [_put, _delete])
+def test_presence_launch_failure_preserves_mutation(
+    operation, secret_router, _isolated_store_and_ledger, presence_processes,
+):
+    _isolated_store_and_ledger.put("provider-key", b"synthetic-before")
+    attempts = []
+
+    def unavailable(*args, **kwargs):
+        attempts.append((args, kwargs))
+        raise OSError("synthetic-exception-must-not-be-printed")
+
+    presence_processes[2].Popen = unavailable
+    rc, out, err = operation(secret_router)
+    assert rc == 0 and err == ""
+    assert "synthetic-exception" not in out
+    assert len(attempts) == 1
+    assert _isolated_store_and_ledger.has("provider-key") is (operation is _put)
+
+
+@pytest.mark.parametrize("failure", ["missing", "timeout", "nonzero"])
+def test_presence_worker_failure_is_bounded_and_never_retried(failure, presence_processes):
+    commands = []
+
+    def fail(argv, **kwargs):
+        commands.append((argv, kwargs))
+        if failure == "missing":
+            raise FileNotFoundError("synthetic")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return SimpleNamespace(returncode=3)
+
+    presence_processes[2].run = fail
+    hapax_secret._presence_worker("provider-key")
+    assert [a[0] for a, _ in commands] == ["hapax-entitlement", "systemctl"]
+    for _, options in commands:
+        assert 0 < options["timeout"] <= 5
+        assert options["check"] is False
+        assert options["stdin"] == options["stdout"] == options["stderr"] == subprocess.DEVNULL
+
+
+def test_presence_handoff_cannot_serialize_value_or_inherit_credentials(
+    secret_router, presence_processes, monkeypatch,
+):
+    spawned = presence_processes[0]
+    monkeypatch.setenv("SYNTHETIC_CREDENTIAL", "synthetic-env-canary")
+    monkeypatch.setenv("PYTHONPATH", "synthetic-pythonpath-canary")
+    for value in ("synthetic-a", "synthetic-value-of-a-different-length"):
+        assert _put(secret_router, value=value)[0] == 0
+    assert len(spawned) == 2
+    assert spawned[0] == spawned[1]  # Includes argv, environment, stdio and process flags.
+    env = spawned[0][1]["env"]
+    allowed = {
+        "HOME", "PATH", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "PERSONAL_VAULT_PATH",
+        "HAPAX_CC_TASKS_ROOT",
+    }
+    assert env == {k: v for k, v in os.environ.items() if k in allowed}
+    assert "synthetic" not in str(spawned[0][0])
+    assert "SYNTHETIC_CREDENTIAL" not in env and "PYTHONPATH" not in env
+
+
+def test_presence_read_and_forward_paths_never_notify(
+    secret_router, _isolated_store_and_ledger, presence_processes, monkeypatch, capsys,
+):
+    _isolated_store_and_ledger.put("provider-key", b"synthetic-read-canary")
+    for args in (["provider-key"], ["--where", "provider-key"], ["--list"]):
+        assert hapax_secret.main(args) == 0
+    monkeypatch.setenv("HAPAX_SECRETS_FORCE_REMOTE", "1")
+
+    def forwarded(*_):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvp", forwarded)
+    with pytest.raises(SystemExit):
+        hapax_secret.main([])
+    assert presence_processes[0] == []
+
+
+@pytest.mark.parametrize("delete", [False, True])
+def test_presence_real_detached_worker_with_declared_stub_commands(
+    delete, tmp_path, monkeypatch, presence_processes, secret_router, _isolated_store_and_ledger,
+):
+    """Real exec/worker/argv: only synthetic PATH commands, never live services or ledgers."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    script = f"#!{sys.executable}\n" + '''import json, os, pathlib, sys, time
+home = pathlib.Path(os.environ["HOME"])
+name = pathlib.Path(sys.argv[0]).name
+if name == "hapax-entitlement":
+    (home / "unregister-entered").touch()
+    deadline = time.monotonic() + 4
+    while not (home / "release").exists() and time.monotonic() < deadline:
+        time.sleep(.01)
+with (home / "calls").open("a") as f:
+    f.write(json.dumps([name, *sys.argv[1:]]) + "\\n")
+'''
+    for command in ("hapax-entitlement", "systemctl"):
+        p = bindir / command
+        p.write_text(script)
+        p.chmod(0o700)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    children = []
+
+    def spawn(argv, **kwargs):
+        child = subprocess.Popen(argv, **kwargs)
+        children.append(child)
+        return child
+
+    presence_processes[2].Popen = spawn
+    _isolated_store_and_ledger.put("provider-key", b"synthetic-before")
+    start = time.monotonic()
+    assert (_delete if delete else _put)(secret_router)[0] == 0
+    assert time.monotonic() - start < 1
+    assert len(children) == 1
+    child = children[0]
+    try:
+        if delete:
+            deadline = time.monotonic() + 3
+            while not (tmp_path / "unregister-entered").exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert (tmp_path / "unregister-entered").exists()
+            assert os.getsid(child.pid) == child.pid
+            assert not (tmp_path / "calls").exists()  # No start before unregister finishes.
+            (tmp_path / "release").touch()
+        assert child.wait(timeout=10) == 0
+        calls = [json.loads(line) for line in (tmp_path / "calls").read_text().splitlines()]
+        expected = [["systemctl", "--user", "start", "--no-block", "hapax-isam-totality-audit.service"]]
+        if delete:
+            expected.insert(0, ["hapax-entitlement", "unregister", "provider-key", "--reason", "explicit_delete"])
+        assert calls == expected
+    finally:
+        (tmp_path / "release").touch()
+        child.wait(timeout=12)
