@@ -344,6 +344,10 @@ func (r root) Init() tea.Cmd {
 		// This is the structural guarantee that a demo frame can never fabricate-live (audit repair).
 		return beatTick()
 	}
+	if r.m.Scope {
+		return tea.Batch(func() tea.Msg { return fetchOnce(r.url) },
+			func() tea.Msg { return fetchTasksOnce(r.url) }, beatTick())
+	}
 	return tea.Batch(
 		func() tea.Msg { return fetchOnce(r.url) },
 		func() tea.Msg { return fetchTasksOnce(r.url) },
@@ -434,6 +438,21 @@ func configReloadTick(path, last string) tea.Cmd {
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	nm, cmd := r.m.Update(msg)
 	r.m = nm.(model.Model)
+	if r.m.Scope {
+		r.m.PendingCommand = nil
+		if !r.demo {
+			switch msg.(type) {
+			case model.EventsMsg:
+				return r, eventsTick(r.url)
+			case model.TasksMsg:
+				return r, tasksTick(r.url)
+			}
+		}
+		if _, ok := msg.(model.BeatMsg); ok {
+			return r, beatTick()
+		}
+		return r, cmd
+	}
 	// apply seam: Exec staged a WIRED governed verb — issue the witnessed POST (the model holds no API
 	// url). The intent-window bucket lives here (the effect layer), keeping Exec pure/deterministic.
 	if pc := r.m.PendingCommand; pc != nil {
@@ -1079,6 +1098,10 @@ func main() {
 			m = smoke.SeedModel(w, h)
 		}
 		m.Width, m.Height, m.AIR = w, h, air
+		if hasArg("--scope") {
+			m.Demo = !live
+			m = m.EnableScope()
+		}
 		frames := smoke.Drive(m, steps)
 		if allFrames {
 			for i, f := range frames {
@@ -1106,6 +1129,9 @@ func main() {
 		seed := smoke.SeedModel(160, 44)
 		seed.Demo = true
 		seed.Page = model.PageCoordinator
+		if hasArg("--scope") {
+			seed = seed.EnableScope()
+		}
 		if _, err := tea.NewProgram(root{m: seed, demo: true}, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 			os.Stderr.WriteString(err.Error() + "\n")
 			os.Exit(1)
@@ -1122,6 +1148,9 @@ func main() {
 		if snap, ok, err := model.ReadPosture(""); err == nil && ok {
 			launch = launch.RestorePosture(snap)
 		}
+	}
+	if hasArg("--scope") {
+		launch = launch.EnableScope()
 	}
 	r := root{m: launch, url: cfg.APIURL, cfgPath: configPath(), cfgStamp: observeConfigStamp(configPath()), palette: cfg.Palette}
 	finalModel, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()

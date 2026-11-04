@@ -5,14 +5,61 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/model"
 )
+
+func TestScopeRootOnlyReadsTaskAndEventFeeds(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		fmt.Fprint(w, `{"events":[],"tasks":[]}`)
+	}))
+	defer srv.Close()
+	r := root{m: model.New("R").EnableScope(), url: srv.URL}
+	batch := r.Init()().(tea.BatchMsg)
+	for _, cmd := range batch {
+		cmd() // includes the existing beat, no external producer or writer
+	}
+	sort.Strings(paths)
+	if !reflect.DeepEqual(paths, []string{"/read/events", "/read/tasks"}) {
+		t.Fatalf("Scope fetched beyond its lenses: %v", paths)
+	}
+	posture := filepath.Join(t.TempDir(), "posture.json")
+	t.Setenv("REINS_POSTURE_PATH", posture)
+	r.m.PendingCommand = &model.CommandRequest{Verb: "resume", Target: "task-fixture"}
+	next, cmd := r.Update(posturePersistMsg{})
+	if cmd != nil || next.(root).dispatchSeq != 0 || next.(root).m.PendingCommand != nil {
+		t.Fatal("Scope dispatched an effect")
+	}
+	if _, err := os.Stat(posture); !os.IsNotExist(err) {
+		t.Fatal("Scope persisted posture")
+	}
+}
+
+func TestScopeCLIHeadlessFixtures(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "reins")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	for _, size := range []string{"size:170x46", "size:60x24"} {
+		cmd := exec.Command(bin, "--drive", "j; tab; t; j; e", size, "--scope", "--air")
+		cmd.Env = append(os.Environ(), "REINS_CONFIG="+filepath.Join(t.TempDir(), "absent.toml"))
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "SCOPE · AIR") || !strings.Contains(string(out), "DEMO fixture not live") || !strings.Contains(string(out), "no join") {
+			t.Fatalf("Scope CLI %s: %v\n%s", size, err, out)
+		}
+	}
+}
 
 func TestTickCmdProducesEventsMsg(t *testing.T) {
 	// against an unreachable url, the tick must still yield an EventsMsg (dark=true), never panic.

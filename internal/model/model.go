@@ -470,6 +470,11 @@ func (m Model) yankTurnField(key string) (field, val string, ok bool) {
 }
 
 type Model struct {
+	Scope               bool // read-only two-frame composition, separate from Docket
+	scopeFrames         [2]scopeFrame
+	scopeFocus          int
+	scopeReadAt         [2]time.Time // task/event local read receipts; never persisted
+	scopeNow            time.Time
 	Title               string
 	Page                int
 	Events              []grammar.Event
@@ -1805,6 +1810,10 @@ func (m Model) fireReactionsForNewEvents(evs []grammar.Event, seen map[string]st
 
 // Fold: the pure projection for the :events page. No hidden state; re-folding restores the view.
 func (m Model) Fold(evs []grammar.Event, dark bool) Model {
+	m.scopeNow = time.Now()
+	if !dark {
+		m.scopeReadAt[1] = m.scopeNow
+	}
 	// follow the tail: if the cursor was on (or past) the newest row, keep it pinned to newest as the
 	// stream grows — so the :events cursor defaults to (and tracks) the latest event, matching the
 	// newest-at-bottom window. If the operator scrolled up, hold their position (clamped into range).
@@ -1815,6 +1824,11 @@ func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 	}
 	m.Events = evs
 	m.EventsDark = dark
+	if m.Scope {
+		for i := range m.scopeFrames {
+			m.scopeFrames[i].eventCursor = clamp(m.scopeFrames[i].eventCursor, 0, max(0, len(evs)-1))
+		}
+	}
 	if follow || m.EFocus >= len(m.Events) {
 		m.EFocus = len(m.Events) - 1
 	}
@@ -1827,8 +1841,17 @@ func (m Model) Fold(evs []grammar.Event, dark bool) Model {
 
 // FoldTasks: the pure projection for the :tasks registry page.
 func (m Model) FoldTasks(ts []grammar.Task, dark bool) Model {
+	m.scopeNow = time.Now()
+	if !dark {
+		m.scopeReadAt[0] = m.scopeNow
+	}
 	m.Tasks = ts
 	m.TasksDark = dark
+	if m.Scope {
+		for i := range m.scopeFrames {
+			m.scopeFrames[i].taskCursor = clamp(m.scopeFrames[i].taskCursor, 0, max(0, len(ts)-1))
+		}
+	}
 	m.Focus = clamp(m.Focus, 0, m.focusMax())
 	m.Sel.Members = nil
 	if _, ok := m.FocusedTask(); !ok {
@@ -2135,6 +2158,10 @@ func matchVerbs(input string) []verbDef {
 // Today the verbs are local read-effects (page / AIR / quit); write-verbs will later route through
 // the unified-API COMMAND surface, but the grammar (every command is ONE pure fold) is fixed here.
 func (m Model) Exec(line string) Model {
+	if m.Scope {
+		m.Status = "Scope is read-only; use han docket for commands"
+		return m
+	}
 	m.Input = ""
 	m.Mode = ModeNormal
 	line = m.resolveTemplate(line) // expand {{sel}}/{{ring.N}} refs (AIR-safe) before parsing
@@ -2890,14 +2917,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case BeatMsg:
+		if m.Scope {
+			m.scopeNow = time.Now()
+		}
 		m.Beat++
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.Width, m.Height = v.Width, v.Height // the zones lay out against this
 		return m, nil
 	case tea.MouseMsg:
+		if m.Scope {
+			return m, nil
+		}
 		return m.updateMouse(v)
 	case tea.KeyMsg:
+		if m.Scope {
+			return m.updateScope(v)
+		}
 		if v.Type == tea.KeyRunes && len(v.Runes) > 1 && !v.Paste {
 			var cmd tea.Cmd
 			for _, r := range v.Runes {
