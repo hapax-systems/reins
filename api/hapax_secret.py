@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -50,6 +51,60 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MAX_SECRET_BYTES = 65536
 _DEFAULT_COMMAND_URL = "http://127.0.0.1:8799/command/secret"
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _notify_presence(name: str | None = None) -> None:
+    """Best-effort exec handoff. Only a deleted name crosses; a put carries nothing.
+
+    The isolated child gets no dialogue streams, arbitrary environment, or value
+    payload. It outlives this CLI and orders withdrawal before observation.
+    Activation requires the presence producer and lifecycle verb to be deployed.
+    """
+    try:
+        env = {
+            key: os.environ[key]
+            for key in (
+                "HOME", "PATH", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+                "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+                "PERSONAL_VAULT_PATH", "HAPAX_CC_TASKS_ROOT",
+            )
+            if key in os.environ
+        }
+        argv = [
+            sys.executable, "-I", "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from hapax_secret import _presence_worker; "
+            "_presence_worker(sys.argv[2] if len(sys.argv) == 3 else None)",
+            str(Path(__file__).resolve().parent),
+        ]
+        if name is not None:
+            argv.append(name)
+        subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True, env=env,
+        )
+    except (OSError, ValueError):
+        # The mutation already succeeded. Never print an exception or retry it.
+        pass
+
+
+def _presence_worker(name: str | None = None) -> None:
+    """One bounded attempt per seam; L4 owns the withdrawal ledger, A3 the fold."""
+    commands = []
+    if name is not None:
+        commands.append(["hapax-entitlement", "unregister", name, "--reason", "explicit_delete"])
+    commands.append([
+        "systemctl", "--user", "start", "--no-block", "hapax-isam-totality-audit.service",
+    ])
+    for argv in commands:
+        try:
+            subprocess.run(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=5, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # A failed withdrawal cannot become evidence; the observer fails closed.
+            pass
 
 
 def name_of(raw: str) -> str:
@@ -262,6 +317,7 @@ def run_put_dialogue(
     except (ValueError, RuntimeError) as exc:
         print(f"hapax-secret: {exc}", file=stderr)
         return 2
+    _notify_presence()
     backend = ""
     payload = result.get("payload")
     if isinstance(payload, dict):
@@ -294,7 +350,8 @@ def run_delete(
         print(f"hapax-secret: {exc}", file=stderr)
         return 2
     payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-    if payload.get("deleted"):
+    if payload.get("deleted") is True:
+        _notify_presence(name)
         print(f"deleted {name}", file=stdout)
         return 0
     print(
