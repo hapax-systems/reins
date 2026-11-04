@@ -1,6 +1,7 @@
 package model
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +199,25 @@ func TestScopeReadFoldClampsBothLocalCursors(t *testing.T) {
 	for i := range 2 {
 		if m.scopeFrames[i].taskCursor != 0 || m.scopeFrames[i].eventCursor != 0 {
 			t.Fatal("fold left an out-of-range local selection")
+		}
+	}
+}
+
+func TestScopeQuitAndMouseIgnore(t *testing.T) {
+	m := scopeFixture()
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'q'}}, {Type: tea.KeyCtrlC}} {
+		next, cmd := m.Update(key)
+		if !reflect.DeepEqual(next, m) || cmd == nil {
+			t.Fatal("Scope quit changed state or lost quit command")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatal("Scope quit did not reach the terminal")
+		}
+	}
+	for _, button := range []tea.MouseButton{tea.MouseButtonLeft, tea.MouseButtonWheelUp, tea.MouseButtonWheelDown} {
+		next, cmd := m.Update(tea.MouseMsg{X: 10, Y: 5, Button: button, Action: tea.MouseActionPress})
+		if cmd != nil || !reflect.DeepEqual(next, m) {
+			t.Fatalf("Scope mouse changed state: %v", button)
 		}
 	}
 }

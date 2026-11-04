@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,6 +44,37 @@ func TestScopeRootOnlyReadsTaskAndEventFeeds(t *testing.T) {
 	}
 	if _, err := os.Stat(posture); !os.IsNotExist(err) {
 		t.Fatal("Scope persisted posture")
+	}
+}
+
+func TestScopeLiveCLIOnlyReadsTaskAndEventFeeds(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"han", "reins"} {
+		if out, err := exec.Command("go", "build", "-p", "1", "-o", filepath.Join(bin, name), "../"+name).CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", name, err, out)
+		}
+	}
+	var mu sync.Mutex
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		mu.Unlock()
+		fmt.Fprint(w, `{"events":[],"tasks":[]}`)
+	}))
+	defer srv.Close()
+	cmd := exec.Command(filepath.Join(bin, "han"), "scope", "--drive", "tab", "--live", "size:170x46")
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"REINS_API_URL="+srv.URL, "REINS_CONFIG="+filepath.Join(bin, "absent.toml"))
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "SCOPE") || strings.Contains(string(out), "DEMO") || strings.Contains(string(out), "DARK") {
+		t.Fatalf("live Scope CLI: %v\n%s", err, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	sort.Strings(requests)
+	if !reflect.DeepEqual(requests, []string{"GET /read/events?limit=80", "GET /read/tasks"}) {
+		t.Fatalf("live Scope fetched beyond its lenses: %v", requests)
 	}
 }
 

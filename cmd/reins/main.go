@@ -554,6 +554,12 @@ func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (r root) View() string { return r.m.View() }
 
+func driveScopeModel(url string) model.Model {
+	m := model.New("REINS").EnableScope()
+	m = updateProbeModel(m, fetchOnce(url))
+	return updateProbeModel(m, fetchTasksOnce(url))
+}
+
 // driveLiveModel folds the real read surfaces into a model (the same fetch set as --probe) so the
 // navigation driver can be exercised against live data. Dark/unreachable surfaces just render dark.
 func driveLiveModel(url string) model.Model {
@@ -1092,7 +1098,9 @@ func main() {
 			}
 		}
 		var m model.Model
-		if live {
+		if live && hasArg("--scope") {
+			m = driveScopeModel(cfg.APIURL)
+		} else if live {
 			m = driveLiveModel(cfg.APIURL)
 		} else {
 			m = smoke.SeedModel(w, h)
