@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,9 +43,25 @@ func TestDispatchTable(t *testing.T) {
 		if rec.path != path {
 			t.Errorf("han %s: dispatched to %q, want %q", role, rec.path, path)
 		}
-		if len(rec.args) != 1 || rec.args[0] != "--demo" {
-			t.Errorf("han %s: forwarded args %v, want [--demo]", role, rec.args)
+		args := []string{"--demo"}
+		if role == "scope" {
+			args = append(args, "--scope")
 		}
+		if !reflect.DeepEqual(rec.args, args) {
+			t.Errorf("han %s: forwarded args %v, want %v", role, rec.args, args)
+		}
+	}
+}
+
+func TestScopePreservesHeadlessArgumentOrderAndInput(t *testing.T) {
+	args := []string{"scope", "--drive", "j; tab; e", "size:60x24"}
+	before := append([]string(nil), args...)
+	rec := &recorder{}
+	if code := run(args, io.Discard, io.Discard, foundLookPath, rec.run); code != 0 {
+		t.Fatal(code)
+	}
+	if !reflect.DeepEqual(rec.args, []string{"--drive", "j; tab; e", "size:60x24", "--scope"}) || !reflect.DeepEqual(args, before) {
+		t.Fatalf("headless dispatch changed args: %v / %v", rec.args, args)
 	}
 }
 

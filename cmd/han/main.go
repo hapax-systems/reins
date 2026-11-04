@@ -67,7 +67,11 @@ func run(args []string, stdout, stderr io.Writer, lookPath func(string) (string,
 		fmt.Fprintf(stderr, "han: %s is bound to the %q program, which is not on PATH\n", args[0], program)
 		return 127
 	}
-	return runCmd(path, args[1:])
+	forward := args[1:]
+	if args[0] == "scope" {
+		forward = append(append([]string(nil), forward...), "--scope")
+	}
+	return runCmd(path, forward)
 }
 
 // Exit codes: 0 = the bound program's own success; the bound program's non-zero code

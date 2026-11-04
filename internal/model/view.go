@@ -53,6 +53,9 @@ func (m Model) View() string {
 	if w <= 0 || h <= 0 { // no WindowSizeMsg yet (e.g. --probe) -> a sane default frame
 		w, h = 120, 40
 	}
+	if m.Scope {
+		return m.scopeView(w, h)
+	}
 	if h < 8 {
 		return m.compactView(w, h)
 	}

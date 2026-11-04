@@ -5,14 +5,117 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hapax-systems/reins/internal/config"
 	"github.com/hapax-systems/reins/internal/grammar"
 	"github.com/hapax-systems/reins/internal/model"
 )
+
+func TestScopeRootOnlyReadsTaskAndEventFeeds(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		fmt.Fprint(w, `{"events":[],"tasks":[]}`)
+	}))
+	defer srv.Close()
+	r := root{m: model.New("R").EnableScope(), url: srv.URL}
+	batch := r.Init()().(tea.BatchMsg)
+	for _, cmd := range batch {
+		cmd() // includes the existing beat, no external producer or writer
+	}
+	sort.Strings(paths)
+	if !reflect.DeepEqual(paths, []string{"/read/events", "/read/tasks"}) {
+		t.Fatalf("Scope fetched beyond its lenses: %v", paths)
+	}
+	posture := filepath.Join(t.TempDir(), "posture.json")
+	t.Setenv("REINS_POSTURE_PATH", posture)
+	r.m.PendingCommand = &model.CommandRequest{Verb: "resume", Target: "task-fixture"}
+	next, cmd := r.Update(posturePersistMsg{})
+	if cmd != nil || next.(root).dispatchSeq != 0 || next.(root).m.PendingCommand != nil {
+		t.Fatal("Scope dispatched an effect")
+	}
+	if _, err := os.Stat(posture); !os.IsNotExist(err) {
+		t.Fatal("Scope persisted posture")
+	}
+}
+
+func TestScopeLiveCLIOnlyReadsTaskAndEventFeeds(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"han", "reins"} {
+		if out, err := exec.Command("go", "build", "-p", "1", "-o", filepath.Join(bin, name), "../"+name).CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", name, err, out)
+		}
+	}
+	var mu sync.Mutex
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		mu.Unlock()
+		fmt.Fprint(w, `{"events":[],"tasks":[]}`)
+	}))
+	defer srv.Close()
+	for _, tt := range []struct {
+		name, program string
+		args          []string
+		wantRequests  []string // nil means rejection before any fetch
+	}{
+		{"live", "han", []string{"scope", "--drive", "tab", "--live", "size:170x46"}, []string{"GET /read/events?limit=80", "GET /read/tasks"}},
+		{"probe", "han", []string{"scope", "--probe"}, nil},
+		{"probe_subcommand", "han", []string{"scope", "--probe", "facets"}, nil},
+		{"probe_reordered", "han", []string{"scope", "--air", "--probe"}, nil},
+		{"direct_probe", "reins", []string{"--probe", "--scope"}, nil},
+		{"direct_reordered", "reins", []string{"--scope", "--probe"}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mu.Lock()
+			requests = nil
+			mu.Unlock()
+			cmd := exec.Command(filepath.Join(bin, tt.program), tt.args...)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"REINS_API_URL="+srv.URL, "REINS_CONFIG="+filepath.Join(bin, "absent.toml"))
+			out, err := cmd.CombinedOutput()
+			if tt.wantRequests == nil {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 2 || !strings.Contains(string(out), "--scope does not support --probe") {
+					t.Errorf("Scope probe must reject clearly with exit 2: %v\n%s", err, out)
+				}
+			} else if err != nil || !strings.Contains(string(out), "SCOPE") || strings.Contains(string(out), "DEMO") || strings.Contains(string(out), "DARK") {
+				t.Errorf("live Scope CLI: %v\n%s", err, out)
+			}
+			mu.Lock()
+			got := append([]string(nil), requests...)
+			mu.Unlock()
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, tt.wantRequests) {
+				t.Errorf("Scope requests = %v, want %v", got, tt.wantRequests)
+			}
+		})
+	}
+}
+
+func TestScopeCLIHeadlessFixtures(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "reins")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	for _, size := range []string{"size:170x46", "size:60x24"} {
+		cmd := exec.Command(bin, "--drive", "j; tab; t; j; e", size, "--scope", "--air")
+		cmd.Env = append(os.Environ(), "REINS_CONFIG="+filepath.Join(t.TempDir(), "absent.toml"))
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "SCOPE · AIR") || !strings.Contains(string(out), "DEMO fixture not live") || !strings.Contains(string(out), "no join") {
+			t.Fatalf("Scope CLI %s: %v\n%s", size, err, out)
+		}
+	}
+}
 
 func TestTickCmdProducesEventsMsg(t *testing.T) {
 	// against an unreachable url, the tick must still yield an EventsMsg (dark=true), never panic.
