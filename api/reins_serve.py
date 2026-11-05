@@ -203,12 +203,12 @@ def _close_closures():
 def _secret_closures():
     """POST /command/secret — has/get/put/delete on SecretStore (FileStore, not pass).
 
-    Target is the secret name. op in authority_packet: has | get | put.
-    put carries value_b64 (or utf-8 value). Values never go in fold_delta or
-    the ledger effect — only a sha256 digest.
+    Target is the secret name. op in authority_packet: has | get | put | delete.
+    put carries value_b64 (or utf-8 value). fold_delta stays null: receipts and
+    ledger effects carry no value-derived fingerprint, including an offline
+    guess oracle. Only get's response payload carries the requested value.
     """
     import base64
-    import hashlib as _hashlib
 
     from k0.key_capture import default_store
 
@@ -228,7 +228,6 @@ def _secret_closures():
         op = packet.get("op")
         store = default_store()
         name = env.target
-        digest = None
         payload: dict[str, Any] = {"backend_id": store.backend_id, "op": op, "name": name}
 
         if op == "has":
@@ -238,7 +237,6 @@ def _secret_closures():
             payload["present"] = raw is not None
             if raw is not None:
                 payload["value_b64"] = base64.b64encode(raw).decode("ascii")
-                digest = _hashlib.sha256(raw).hexdigest()
         elif op == "put":
             if packet.get("value_b64") is not None:
                 try:
@@ -260,7 +258,6 @@ def _secret_closures():
                     legal_next="retry put with value_b64",
                 )
             store.put(name, raw)
-            digest = _hashlib.sha256(raw).hexdigest()
             payload["present"] = True
         elif op == "delete":
             removed = store.delete(name)
@@ -278,7 +275,7 @@ def _secret_closures():
             status="ok",
             http=200,
             receipt_id=f"secret-{op}-{name}",
-            fold_delta=None if digest is None else f"sha256:{digest}",
+            fold_delta=None,
             applied=op in ("put", "delete"),
             payload=payload,
         )
