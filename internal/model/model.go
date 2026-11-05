@@ -12,6 +12,7 @@ import (
 	"github.com/hapax-systems/reins/internal/dispatch"
 	"github.com/hapax-systems/reins/internal/files"
 	"github.com/hapax-systems/reins/internal/grammar"
+	"github.com/rivo/uniseg"
 )
 
 const (
@@ -2931,14 +2932,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateMouse(v)
 	case tea.KeyMsg:
-		if m.Scope {
-			return m.updateScope(v)
-		}
-		if v.Type == tea.KeyRunes && len(v.Runes) > 1 && !v.Paste {
+		if v.Type == tea.KeyRunes && !v.Paste && uniseg.GraphemeClusterCount(string(v.Runes)) > 1 {
 			var cmd tea.Cmd
-			for _, r := range v.Runes {
+			graphemes := uniseg.NewGraphemes(string(v.Runes))
+			for graphemes.Next() {
 				var nm tea.Model
-				nm, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: v.Alt})
+				nm, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: graphemes.Runes(), Alt: v.Alt})
 				if next, ok := nm.(Model); ok {
 					m = next
 				}
@@ -2947,6 +2946,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+		if m.Scope {
+			return m.updateScope(v)
 		}
 		if m.Mode == ModeCommand {
 			return m.updateCommand(v)
