@@ -91,6 +91,23 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     cmd = _endpoint(app, "/command/{verb}")
     canary = "sk-ledger-canary-never"
 
+    bogus_put = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={
+                "kind": "secret",
+                "op": "put",
+                "value": canary,
+                "store_hmac": "0" * 64,
+            },
+            preflight_receipt={},
+            idempotency_key="idem-put-bogus",
+        ),
+    )
+    assert bogus_put.status_code == 403
+    assert not (store_root / ".key").exists()
+
     unauth_put = cmd(
         "secret",
         reins_command.CommandRequest(
@@ -101,6 +118,7 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         ),
     )
     assert unauth_put.status_code == 403
+    assert not (store_root / ".key").exists()
 
     def signed_request(op_name: str, idem_token: str, **extra):
         target_name = "frontier-key"
@@ -119,6 +137,20 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     assert put_body["payload"]["present"] is True
     assert canary not in put.body.decode()
     assert store.get("frontier-key") == canary.encode()
+
+    unsigned_replay = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={"kind": "secret", "op": "put", "value": canary},
+            preflight_receipt={},
+            idempotency_key="idem-put-1",
+        ),
+    )
+    assert unsigned_replay.status_code == 403
+
+    get_replay = cmd("secret", signed_request("get", "idem-put-1"))
+    assert get_replay.status_code == 403
 
     got = cmd("secret", signed_request("get", "idem-get-1"))
     assert got.status_code == 403

@@ -199,7 +199,11 @@ class FileStore:
     def verify_command(self, *, op: str, target: str, idempotency_key: str, mac: str) -> bool:
         if not isinstance(mac, str) or len(mac) != 64:
             return False
-        expected = self.sign_command(op=op, target=target, idempotency_key=idempotency_key)
+        key_path = self.root / ".key"
+        if not key_path.is_file():
+            return False
+        msg = f"reins-secret-cmd-v1\x00{op}\x00{target}\x00{idempotency_key}".encode("utf-8")
+        expected = hmac.new(key_path.read_bytes(), msg, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, mac)
 
 

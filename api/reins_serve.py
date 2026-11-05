@@ -529,6 +529,41 @@ def _mount_command_router(
         )
         eid = demand["event_id"]
         if demand.get("duplicate"):
+            if verb == "secret":
+                from k0.key_capture import FileStore, default_store
+
+                pkt = req.authority_packet if isinstance(req.authority_packet, dict) else {}
+                dup_op = pkt.get("op")
+                if pkt.get("kind") != "secret" or dup_op not in ("has", "put", "delete"):
+                    return JSONResponse(
+                        {
+                            "status": "secret-refused",
+                            "http": 403,
+                            "event_id": eid,
+                            "reason": "plaintext secret retrieval over HTTP is disabled"
+                            if dup_op == "get"
+                            else "invalid secret command authority packet",
+                            "legal_next": "read secrets directly from FileStore via hapax-secret <name>",
+                        },
+                        status_code=403,
+                    )
+                dup_store = default_store()
+                if isinstance(dup_store, FileStore) and not dup_store.verify_command(
+                    op=str(dup_op),
+                    target=req.target,
+                    idempotency_key=req.idempotency_key,
+                    mac=str(pkt.get("store_hmac", "")),
+                ):
+                    return JSONResponse(
+                        {
+                            "status": "secret-refused",
+                            "http": 403,
+                            "event_id": eid,
+                            "reason": "missing or invalid FileStore proof-of-possession HMAC",
+                            "legal_next": "invoke via hapax-secret as the FileStore owner",
+                        },
+                        status_code=403,
+                    )
             # a duplicate ONLY occurs for a command that already reached terminal SUCCESS (the ledger
             # dedups on success, not on demand). Replay the ORIGINAL success http; do NOT append a new
             # verdict — the original `ok` verdict is the truth, and a fresh 'idempotent-replay' verdict
