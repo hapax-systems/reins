@@ -15,7 +15,7 @@ each invocation observes afresh, so a prior WHERE success does not bind GET.
 
 Put never calls FileStore.put and never ``pass insert``. It POSTs
 ``http://127.0.0.1:8799/command/secret`` (kind=secret, op=put). Values
-never appear on argv. The command ledger records sha256 only.
+never appear on argv. The command ledger records no value-derived fingerprint.
 
 On a host that is not the FileStore machine, the same argv is forwarded
 with ``ssh`` (``-t`` only for put) to the configured ``HAPAX_SECRETS_HOST``
