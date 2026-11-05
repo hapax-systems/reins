@@ -101,6 +101,28 @@ func TestScopeMultiRuneKeys(t *testing.T) {
 	})
 }
 
+func TestScopeGraphemeClustersStayAtomic(t *testing.T) {
+	for _, air := range []bool{false, true} {
+		m := scopeFixture()
+		m.AIR = air
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a\u0301")})
+		if !reflect.DeepEqual(next, m) || cmd != nil {
+			t.Fatalf("combining mark exposed a bare AIR toggle (initial AIR=%v)", air)
+		}
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ja\u0301")})
+		if !reflect.DeepEqual(next, scopeKey(m, "j")) || cmd != nil {
+			t.Fatalf("mixed clusters lost navigation or changed AIR (initial AIR=%v)", air)
+		}
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a\u0301q")})
+		if !reflect.DeepEqual(next, m) || cmd == nil {
+			t.Fatalf("cluster before quit changed AIR or lost quit (initial AIR=%v)", air)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatal("cluster before quit did not return the terminal quit command")
+		}
+	}
+}
+
 func TestScopeDerivedJoinAndNoJoin(t *testing.T) {
 	m := scopeFixture()
 	c := m.scopeConnector()
