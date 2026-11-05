@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import reins_ledger
 import reins_serve
-from k0.key_capture import FileStore
+from k0.key_capture import FileStore, default_store
 
 
 @pytest.fixture
@@ -21,45 +21,59 @@ def scenario(tmp_path, monkeypatch):
         ledger = root / "commands.jsonl"
         key = root / "ledger-key"
         key.write_bytes(b"synthetic-ledger-signing-key-00000")
+        store_dir = root / "store"
+        store_dir.mkdir(mode=0o700)
+        store_key = store_dir / ".key"
+        store_key.write_bytes(b"synthetic-filestore-hmac-key-000")
+        store_key.chmod(0o600)
         monkeypatch.setenv("REINS_COMMAND_LEDGER", str(ledger))
         monkeypatch.setenv("REINS_COMMAND_LEDGER_KEY", str(key))
-        monkeypatch.setenv("REINS_SECRET_STORE", str(root / "store"))
+        monkeypatch.setenv("REINS_SECRET_STORE", str(store_dir))
         return TestClient(reins_serve.build_serve_app("", [])), ledger
 
     return create
 
 
 def request(op, value=None, *, identity=None):
+    idem = identity or "synthetic-" + op
+    store = default_store()
     packet = {"kind": "secret", "op": op}
+    if isinstance(store, FileStore):
+        packet["store_hmac"] = store.sign_command(
+            op=op, target="synthetic-entry", idempotency_key=idem
+        )
     if value is not None:
         packet["value"] = value
     return {
         "target": "synthetic-entry",
         "authority_packet": packet,
         "preflight_receipt": {},
-        "idempotency_key": identity or "synthetic-" + op,
+        "idempotency_key": idem,
     }
 
 
-def send(client, op, value=None, **kwargs):
+def send(client, op, value=None, *, expected_status=200, **kwargs):
     response = client.post("/command/secret", json=request(op, value, **kwargs))
-    assert response.status_code == 200
+    assert response.status_code == expected_status
     return response.json()
 
 
-@pytest.mark.parametrize("operation", ["put", "get", "delete"])
+@pytest.mark.parametrize("operation", ["put", "has", "get", "delete"])
 def test_receipt_and_persisted_effect_have_no_value_digest(scenario, operation):
     client, ledger = scenario(operation)
     value = "synthetic-private-entry"
     result = send(client, "put", value)
-    if operation != "put":
+    if operation == "get":
+        result = send(client, "get", expected_status=403)
+    elif operation != "put":
         result = send(client, operation)
-    assert result["fold_delta"] is None
+        assert result["fold_delta"] is None
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     effects = [row["effect"] for row in rows if row["kind"] == "verdict"]
-    assert effects and all(effect["fold_delta"] is None for effect in effects)
+    assert effects and all(effect.get("fold_delta") is None for effect in effects)
     digest = hashlib.sha256(value.encode()).hexdigest()
     assert digest not in json.dumps(result) + ledger.read_text()
+    assert value not in json.dumps(result) + ledger.read_text()
 
 
 def test_known_guess_has_no_value_or_length_confirmation_signal(scenario):
@@ -67,9 +81,10 @@ def test_known_guess_has_no_value_or_length_confirmation_signal(scenario):
     for index, value in enumerate(("synthetic-short", "synthetic-different-and-longer")):
         client, ledger = scenario(str(index))
         put = send(client, "put", value)
-        send(client, "get")
+        has = send(client, "has")
+        get_refused = send(client, "get", expected_status=403)
         deleted = send(client, "delete")
-        observations.append((put, deleted, ledger.read_bytes()))
+        observations.append((put, has, get_refused, deleted, ledger.read_bytes()))
     # Same public command identity, clock and signing key; changing only the
     # private bytes cannot change receipts or even the signed ledger bytes.
     assert observations[0] == observations[1]
