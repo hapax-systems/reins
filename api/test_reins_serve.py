@@ -102,22 +102,17 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     )
     assert unauth_put.status_code == 403
 
-    put = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={
-                "kind": "secret",
-                "op": "put",
-                "value": canary,
-                "store_hmac": store.sign_command(
-                    op="put", target="frontier-key", idempotency_key="sec-put-1"
-                ),
-            },
+    def signed_request(op_name: str, idem_token: str, **extra):
+        target_name = "frontier-key"
+        mac = store.sign_command(op=op_name, target=target_name, idempotency_key=idem_token)
+        return reins_command.CommandRequest(
+            target=target_name,
+            authority_packet={"kind": "secret", "op": op_name, "store_hmac": mac, **extra},
             preflight_receipt={},
-            idempotency_key="sec-put-1",
-        ),
-    )
+            idempotency_key=idem_token,
+        )
+
+    put = cmd("secret", signed_request("put", "idem-put-1", value=canary))
     assert put.status_code == 200, put.body
     put_body = json.loads(put.body)
     assert put_body["payload"]["backend_id"] == "file"
@@ -125,75 +120,19 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     assert canary not in put.body.decode()
     assert store.get("frontier-key") == canary.encode()
 
-    got = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={
-                "kind": "secret",
-                "op": "get",
-                "store_hmac": store.sign_command(
-                    op="get", target="frontier-key", idempotency_key="sec-get-1"
-                ),
-            },
-            preflight_receipt={},
-            idempotency_key="sec-get-1",
-        ),
-    )
+    got = cmd("secret", signed_request("get", "idem-get-1"))
     assert got.status_code == 403
     assert canary.encode() not in got.body
 
-    has = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={
-                "kind": "secret",
-                "op": "has",
-                "store_hmac": store.sign_command(
-                    op="has", target="frontier-key", idempotency_key="sec-has-1"
-                ),
-            },
-            preflight_receipt={},
-            idempotency_key="sec-has-1",
-        ),
-    )
+    has = cmd("secret", signed_request("has", "idem-has-1"))
     assert json.loads(has.body)["payload"]["present"] is True
-    deleted = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={
-                "kind": "secret",
-                "op": "delete",
-                "store_hmac": store.sign_command(
-                    op="delete", target="frontier-key", idempotency_key="sec-del-1"
-                ),
-            },
-            preflight_receipt={},
-            idempotency_key="sec-del-1",
-        ),
-    )
+    deleted = cmd("secret", signed_request("delete", "idem-del-1"))
     del_body = json.loads(deleted.body)
     assert deleted.status_code == 200, deleted.body
     assert del_body["payload"]["deleted"] is True
     assert del_body["payload"]["present"] is False
     assert canary not in deleted.body.decode()
-    gone = cmd(
-        "secret",
-        reins_command.CommandRequest(
-            target="frontier-key",
-            authority_packet={
-                "kind": "secret",
-                "op": "has",
-                "store_hmac": store.sign_command(
-                    op="has", target="frontier-key", idempotency_key="sec-has-2"
-                ),
-            },
-            preflight_receipt={},
-            idempotency_key="sec-has-2",
-        ),
-    )
+    gone = cmd("secret", signed_request("has", "idem-has-2"))
     assert json.loads(gone.body)["payload"]["present"] is False
     ledger = (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
     assert canary not in ledger
