@@ -203,20 +203,18 @@ def _close_closures():
 def _secret_closures():
     """POST /command/secret — has/get/put/delete on SecretStore (FileStore, not pass).
 
-    Target is the secret name. op in authority_packet: has | get | put | delete.
+    Target is the secret name. op in authority_packet: has | get | put | delete
+    (plaintext get over HTTP is disabled; FileStore commands require HMAC).
     put carries value_b64 (or utf-8 value). fold_delta stays null: receipts and
     ledger effects carry no value-derived fingerprint, including an offline
-    guess oracle. Only get's response payload carries the requested value.
+    guess oracle.
     """
     import base64
 
-    from k0.key_capture import default_store
+    from k0.key_capture import FileStore, default_store
 
     def verify(packet: Any, target: str) -> bool:
-        # Same envelope law as close/arm: a minted-looking packet with kind, plus
-        # the secret op. This surface is loopback-only (reins-read-api binds
-        # 127.0.0.1). A new mint is out of scope — COMMAND never mints.
-        if not (isinstance(packet, dict) and bool(target) and bool(packet.get("kind"))):
+        if not (isinstance(packet, dict) and bool(target) and packet.get("kind") == "secret"):
             return False
         return packet.get("op") in ("has", "get", "put", "delete")
 
@@ -230,13 +228,29 @@ def _secret_closures():
         name = env.target
         payload: dict[str, Any] = {"backend_id": store.backend_id, "op": op, "name": name}
 
+        if op == "get":
+            return reins_command.Response(
+                status="secret-refused",
+                http=403,
+                reason="plaintext secret retrieval over HTTP is disabled",
+                legal_next="read secrets directly from FileStore via hapax-secret <name>",
+            )
+
+        if isinstance(store, FileStore) and not store.verify_command(
+            op=str(op),
+            target=name,
+            idempotency_key=env.idempotency_key,
+            mac=str(packet.get("store_hmac", "")),
+        ):
+            return reins_command.Response(
+                status="secret-refused",
+                http=403,
+                reason="missing or invalid FileStore proof-of-possession HMAC",
+                legal_next="invoke via hapax-secret as the FileStore owner",
+            )
+
         if op == "has":
             payload["present"] = store.has(name)
-        elif op == "get":
-            raw = store.get(name)
-            payload["present"] = raw is not None
-            if raw is not None:
-                payload["value_b64"] = base64.b64encode(raw).decode("ascii")
         elif op == "put":
             if packet.get("value_b64") is not None:
                 try:

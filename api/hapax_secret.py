@@ -187,16 +187,21 @@ def put_via_reins(name: str, value: bytes, *, post: Callable[[str, bytes], bytes
         )
     url = command_url()
     require_loopback_url(url)
+    idem = f"hapax-secret-put-{name}-{uuid.uuid4().hex}"
+    packet: dict[str, str] = {
+        "kind": "secret",
+        "op": "put",
+        "value_b64": base64.b64encode(value).decode("ascii"),
+    }
+    store = default_store()
+    if isinstance(store, FileStore):
+        packet["store_hmac"] = store.sign_command(op="put", target=name, idempotency_key=idem)
     body = json.dumps(
         {
             "target": name,
-            "authority_packet": {
-                "kind": "secret",
-                "op": "put",
-                "value_b64": base64.b64encode(value).decode("ascii"),
-            },
+            "authority_packet": packet,
             "preflight_receipt": {},
-            "idempotency_key": f"hapax-secret-put-{name}-{uuid.uuid4().hex}",
+            "idempotency_key": idem,
         },
         separators=(",", ":"),
     ).encode("ascii")
@@ -224,12 +229,17 @@ def put_via_reins(name: str, value: bytes, *, post: Callable[[str, bytes], bytes
 def delete_via_reins(name: str, *, post: Callable[[str, bytes], bytes] | None = None) -> dict:
     url = command_url()
     require_loopback_url(url)
+    idem = f"hapax-secret-delete-{name}-{uuid.uuid4().hex}"
+    packet: dict[str, str] = {"kind": "secret", "op": "delete"}
+    store = default_store()
+    if isinstance(store, FileStore):
+        packet["store_hmac"] = store.sign_command(op="delete", target=name, idempotency_key=idem)
     body = json.dumps(
         {
             "target": name,
-            "authority_packet": {"kind": "secret", "op": "delete"},
+            "authority_packet": packet,
             "preflight_receipt": {},
-            "idempotency_key": f"hapax-secret-delete-{name}-{uuid.uuid4().hex}",
+            "idempotency_key": idem,
         },
         separators=(",", ":"),
     ).encode("ascii")

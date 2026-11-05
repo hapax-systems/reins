@@ -81,18 +81,39 @@ def test_unregistered_verb_refuses_typed_501():
 
 
 def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypatch):
-    import base64
     import json
+    from k0.key_capture import FileStore
 
-    monkeypatch.setenv("REINS_SECRET_STORE", str(tmp_path / "secrets"))
+    store_root = tmp_path / "secrets"
+    monkeypatch.setenv("REINS_SECRET_STORE", str(store_root))
+    store = FileStore(root=store_root)
     app = build_serve_app("", [])
     cmd = _endpoint(app, "/command/{verb}")
     canary = "sk-ledger-canary-never"
-    put = cmd(
+
+    unauth_put = cmd(
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
             authority_packet={"kind": "secret", "op": "put", "value": canary},
+            preflight_receipt={},
+            idempotency_key="sec-put-unauth",
+        ),
+    )
+    assert unauth_put.status_code == 403
+
+    put = cmd(
+        "secret",
+        reins_command.CommandRequest(
+            target="frontier-key",
+            authority_packet={
+                "kind": "secret",
+                "op": "put",
+                "value": canary,
+                "store_hmac": store.sign_command(
+                    op="put", target="frontier-key", idempotency_key="sec-put-1"
+                ),
+            },
             preflight_receipt={},
             idempotency_key="sec-put-1",
         ),
@@ -102,23 +123,37 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
     assert put_body["payload"]["backend_id"] == "file"
     assert put_body["payload"]["present"] is True
     assert canary not in put.body.decode()
+    assert store.get("frontier-key") == canary.encode()
+
     got = cmd(
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"kind": "secret", "op": "get"},
+            authority_packet={
+                "kind": "secret",
+                "op": "get",
+                "store_hmac": store.sign_command(
+                    op="get", target="frontier-key", idempotency_key="sec-get-1"
+                ),
+            },
             preflight_receipt={},
             idempotency_key="sec-get-1",
         ),
     )
-    assert got.status_code == 200, got.body
-    got_body = json.loads(got.body)
-    assert base64.b64decode(got_body["payload"]["value_b64"]) == canary.encode()
+    assert got.status_code == 403
+    assert canary.encode() not in got.body
+
     has = cmd(
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"kind": "secret", "op": "has"},
+            authority_packet={
+                "kind": "secret",
+                "op": "has",
+                "store_hmac": store.sign_command(
+                    op="has", target="frontier-key", idempotency_key="sec-has-1"
+                ),
+            },
             preflight_receipt={},
             idempotency_key="sec-has-1",
         ),
@@ -128,7 +163,13 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"kind": "secret", "op": "delete"},
+            authority_packet={
+                "kind": "secret",
+                "op": "delete",
+                "store_hmac": store.sign_command(
+                    op="delete", target="frontier-key", idempotency_key="sec-del-1"
+                ),
+            },
             preflight_receipt={},
             idempotency_key="sec-del-1",
         ),
@@ -142,7 +183,13 @@ def test_secret_verb_put_get_has_and_never_ledgers_the_value(tmp_path, monkeypat
         "secret",
         reins_command.CommandRequest(
             target="frontier-key",
-            authority_packet={"kind": "secret", "op": "has"},
+            authority_packet={
+                "kind": "secret",
+                "op": "has",
+                "store_hmac": store.sign_command(
+                    op="has", target="frontier-key", idempotency_key="sec-has-2"
+                ),
+            },
             preflight_receipt={},
             idempotency_key="sec-has-2",
         ),

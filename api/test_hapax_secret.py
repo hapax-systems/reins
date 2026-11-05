@@ -68,7 +68,7 @@ def test_name_of_maps_slash_and_rejects_illegal():
 
 def test_require_loopback_refuses_tailnet():
     with pytest.raises(ValueError, match="loopback"):
-        hapax_secret.require_loopback_url("http://secrets-store.tailf9491.ts.net:8799/command/secret")
+        hapax_secret.require_loopback_url("http://secrets-store.example.ts.net:8799/command/secret")
     hapax_secret.require_loopback_url("http://127.0.0.1:8799/command/secret")
 
 
@@ -482,7 +482,9 @@ def test_delete_posts_reins_and_maps_slash_name():
     assert rc == 0, err.getvalue()
     body = captured["body"]
     assert body["target"] == "glmcp"
-    assert body["authority_packet"] == {"kind": "secret", "op": "delete"}
+    assert body["authority_packet"]["kind"] == "secret"
+    assert body["authority_packet"]["op"] == "delete"
+    assert len(body["authority_packet"]["store_hmac"]) == 64
     assert "deleted glmcp" in out.getvalue()
 
 

@@ -192,6 +192,16 @@ class FileStore:
             return False
         return True
 
+    def sign_command(self, *, op: str, target: str, idempotency_key: str) -> str:
+        msg = f"reins-secret-cmd-v1\x00{op}\x00{target}\x00{idempotency_key}".encode("utf-8")
+        return hmac.new(self._key(), msg, hashlib.sha256).hexdigest()
+
+    def verify_command(self, *, op: str, target: str, idempotency_key: str, mac: str) -> bool:
+        if not isinstance(mac, str) or len(mac) != 64:
+            return False
+        expected = self.sign_command(op=op, target=target, idempotency_key=idempotency_key)
+        return hmac.compare_digest(expected, mac)
+
 
 def default_store() -> SecretStore:
     """The estate path and the shipped path: FileStore, not PassStore."""

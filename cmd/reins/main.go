@@ -747,6 +747,22 @@ func main() {
 		fmt.Println("reins " + version)
 		return
 	}
+	if hasArg("--help") || hasArg("-h") {
+		fmt.Print(strings.Join([]string{
+			"reins " + version + " — cell-grammar governance cockpit",
+			"",
+			"Usage:",
+			"  reins                   Launch live cockpit against configured read/command API",
+			"  reins --demo            Launch offline fixture cockpit (zero live fetch or network)",
+			"  reins --resume          Restore saved cockpit posture after hot-swap",
+			"  reins --probe [args]    Render one headless acceptance frame and exit",
+			"  reins --drive \"steps\"   Run headless navigation steps (--air, --live, --all, size:WxH)",
+			"  reins --version         Print version and exit",
+			"  reins --help, -h        Print this help text and exit",
+			"",
+		}, "\n"))
+		return
+	}
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
