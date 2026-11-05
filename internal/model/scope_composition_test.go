@@ -63,6 +63,44 @@ func TestScopeIndependentCursorsAndLensSwitch(t *testing.T) {
 	}
 }
 
+func TestScopeMultiRuneKeys(t *testing.T) {
+	for _, tt := range []struct {
+		keys       string
+		start, end int
+	}{
+		{"jj", 0, 2},
+		{"kk", 2, 0},
+		{"jk", 2, 1}, // j clamps at the last row, then k must still move up.
+	} {
+		t.Run(tt.keys, func(t *testing.T) {
+			m := scopeFixture()
+			m.scopeFrames[0].taskCursor = tt.start
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.keys)})
+			got := next.(Model)
+			if got.scopeFrames[0].taskCursor != tt.end || cmd != nil || got.scopeFrames[1] != m.scopeFrames[1] {
+				t.Fatalf("multi-rune %q lost input or changed the other frame: %+v", tt.keys, got.scopeFrames)
+			}
+		})
+	}
+	t.Run("tq", func(t *testing.T) {
+		m := scopeKey(scopeFixture(), "tab")
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tq")})
+		if next.(Model).scopeFrames[1].page != PageTasks || cmd == nil {
+			t.Fatal("tq did not switch lens and quit")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatal("tq lost the terminal quit command")
+		}
+	})
+	t.Run("paste", func(t *testing.T) {
+		m := scopeKey(scopeFixture(), "tab")
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tq"), Paste: true})
+		if !reflect.DeepEqual(next, m) || cmd != nil {
+			t.Fatal("pasted runes became Scope commands")
+		}
+	})
+}
+
 func TestScopeDerivedJoinAndNoJoin(t *testing.T) {
 	m := scopeFixture()
 	c := m.scopeConnector()

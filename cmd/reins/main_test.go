@@ -47,6 +47,108 @@ func TestScopeRootOnlyReadsTaskAndEventFeeds(t *testing.T) {
 	}
 }
 
+func TestScopeInitKeepsConfigReloadTick(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.toml")
+	r := root{m: model.New("R").EnableScope(), url: "http://127.0.0.1:0", cfgPath: path, cfgStamp: "absent"}
+	var polls int
+	for _, cmd := range r.Init()().(tea.BatchMsg) {
+		if pm, ok := cmd().(configPollMsg); ok {
+			polls++
+			if pm.changed || pm.stamp != "absent" {
+				t.Fatalf("initial config poll lost its stamp: %+v", pm)
+			}
+		}
+	}
+	if polls != 1 {
+		t.Fatalf("live Scope started %d config polls, want one", polls)
+	}
+}
+
+func TestScopeConfigReloadFollowsChangedURL(t *testing.T) {
+	t.Setenv("REINS_API_URL", "")
+	t.Setenv("REINS_PALETTE", "")
+	defer grammar.SetPalette(grammar.PaletteMode())
+	var mu sync.Mutex
+	var oldRequests, newRequests []string
+	server := func(requests *[]string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			*requests = append(*requests, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+			fmt.Fprint(w, `{"events":[],"tasks":[]}`)
+		}))
+	}
+	oldServer, newServer := server(&oldRequests), server(&newRequests)
+	defer oldServer.Close()
+	defer newServer.Close()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(fmt.Sprintf("api_url = %q\n", oldServer.URL))
+	r := root{m: model.New("R").EnableScope(), url: oldServer.URL, cfgPath: path,
+		cfgStamp: observeConfigStamp(path), palette: "gruvbox"}
+	write(fmt.Sprintf("api_url = %q\n# changed endpoint\n", newServer.URL))
+	pm := pollConfigOnce(path, r.cfgStamp)
+	if !pm.changed || pm.err != nil || pm.cfg == nil {
+		t.Fatalf("config edit was not loaded: %+v", pm)
+	}
+	r.m.PendingCommand = &model.CommandRequest{Verb: "resume", Target: "task-fixture"}
+	next, cmd := r.Update(pm)
+	r = next.(root)
+	if r.url != newServer.URL || r.cfgStamp != pm.stamp || r.m.PendingCommand != nil || r.dispatchSeq != 0 {
+		t.Fatalf("Scope did not apply the new read URL without dispatch: url=%q stamp=%q seq=%d", r.url, r.cfgStamp, r.dispatchSeq)
+	}
+	if cmd == nil {
+		t.Fatal("reload did not re-arm config polling")
+	}
+	var polls int
+	for _, follow := range cmd().(tea.BatchMsg) {
+		if repoll, ok := follow().(configPollMsg); ok {
+			polls++
+			if repoll.changed || repoll.stamp != r.cfgStamp {
+				t.Fatalf("re-armed poll lost the applied stamp: %+v", repoll)
+			}
+			_, rearm := r.Update(repoll)
+			if rearm == nil {
+				t.Fatal("unchanged Scope poll stopped reloads")
+			}
+		}
+	}
+	if polls != 1 {
+		t.Fatalf("reload scheduled %d config polls, want one", polls)
+	}
+	for _, msg := range []tea.Msg{model.EventsMsg{}, model.TasksMsg{}} {
+		next, fetch := r.Update(msg)
+		r = next.(root)
+		if fetch == nil {
+			t.Fatal("Scope feed did not re-arm")
+		}
+		next, _ = r.Update(fetch())
+		r = next.(root)
+	}
+	mu.Lock()
+	readsMoved := len(oldRequests) == 0 && reflect.DeepEqual(newRequests, []string{"GET /read/events", "GET /read/tasks"})
+	mu.Unlock()
+	if !readsMoved {
+		t.Fatalf("reload did not move both reads: old=%v new=%v", oldRequests, newRequests)
+	}
+	write("api_url = [unterminated\n")
+	next, cmd = r.Update(pollConfigOnce(path, r.cfgStamp))
+	r = next.(root)
+	if r.url != newServer.URL || r.m.ConfigNotice == "" || cmd == nil {
+		t.Fatal("malformed Scope reload lost last-good URL, notice or polling")
+	}
+	demo := root{m: model.New("R").EnableScope(), demo: true, url: oldServer.URL}
+	next, cmd = demo.Update(pm)
+	if !reflect.DeepEqual(next, demo) || cmd != nil {
+		t.Fatal("fixture Scope applied a live config poll")
+	}
+}
+
 func TestScopeLiveCLIOnlyReadsTaskAndEventFeeds(t *testing.T) {
 	bin := t.TempDir()
 	for _, name := range []string{"han", "reins"} {

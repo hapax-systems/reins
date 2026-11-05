@@ -2931,9 +2931,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateMouse(v)
 	case tea.KeyMsg:
-		if m.Scope {
-			return m.updateScope(v)
-		}
 		if v.Type == tea.KeyRunes && len(v.Runes) > 1 && !v.Paste {
 			var cmd tea.Cmd
 			for _, r := range v.Runes {
@@ -2947,6 +2944,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+		if m.Scope {
+			return m.updateScope(v)
 		}
 		if m.Mode == ModeCommand {
 			return m.updateCommand(v)
