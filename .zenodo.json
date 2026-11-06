@@ -1,0 +1,36 @@
+{
+  "title": "reins",
+  "description": "Terminal cockpit from Hapax Research Lab for observing and previewing a governed AI-agent delivery lifecycle. Read and command-preview today; write commands mint nothing. BSL 1.1. Demo: reins --demo.",
+  "creators": [
+    {
+      "name": "Hapax Research Lab"
+    }
+  ],
+  "license": "other-closed",
+  "access_right": "open",
+  "upload_type": "software",
+  "keywords": [
+    "governance",
+    "sdlc",
+    "tui",
+    "automation"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://hapaxresearch.com",
+      "relation": "isPartOf",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/hapax-systems/hapax-spine",
+      "relation": "requires",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://github.com/hapax-systems/hapax-constitution",
+      "relation": "isSupplementedBy",
+      "scheme": "url"
+    }
+  ],
+  "notes": "Repository license: Business Source License 1.1 (source-available, non-Open-Source until the Change Date converts the work to Apache-2.0; source inspection is open while competing hosted-service use remains reserved)."
+}

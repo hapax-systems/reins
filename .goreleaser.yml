@@ -36,14 +36,13 @@ release:
   github:
     owner: hapax-systems
     name: reins
-  # reins fronts an n-DLC automation system; the demo needs no estate. Honest, declare-and-navigate framing.
+  # reins provides the read and command-preview terminal cockpit; --demo runs offline on bundled fixtures.
   header: |
     ## reins {{ .Version }}
-    The governed cockpit for the Hapax n-DLC automation system. Try it estate-free:
-    `reins --demo`. Source-available under BSL-1.1 (converts to Apache-2.0 on the change date).
+    Terminal cockpit and read/command-preview front door for the Hapax Research Lab governed agent-delivery system.
+    Run offline on bundled fixture data with `reins --demo`. Source-available under BSL-1.1 (converts to Apache-2.0 on the Change Date).
   footer: |
-    Not axiom/taxonomy-agnostic yet — declare-and-navigate today; the governed-automation-for-any-n-DLC
-    generality is on the roadmap. See the README.
+    Current release scope: read and command-preview navigation lenses; write commands render preview envelopes without mutating state. See `README.md` and `NOTICE.md`.
 
 changelog:
   sort: asc

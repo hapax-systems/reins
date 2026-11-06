@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: If you cite this repository or its artifacts in research, please cite it
+  as below.
+type: software
+title: reins
+abstract: 'Terminal cockpit from Hapax Research Lab for observing and previewing a
+  governed AI-agent delivery lifecycle. Read and command-preview today; write commands
+  mint nothing. BSL 1.1. Demo: reins --demo.'
+authors:
+- name: Hapax Research Lab
+  email: hrl-han@hapaxresearch.com
+  website: https://hapaxresearch.com
+repository-code: https://github.com/hapax-systems/reins
+url: https://github.com/hapax-systems/reins
+license: BUSL-1.1
+keywords:
+- governance
+- sdlc
+- tui
+- automation

@@ -9,14 +9,14 @@ Parameters
 
 Licensor:             Hapax Research LLC
 Licensed Work:        reins — the governed cockpit and read/command API for the
-                      Hapax n-DLC automation system.
+                      Hapax Research Lab governed agent-delivery system.
                       The Licensed Work is (c) 2026 Hapax Research LLC.
 Additional Use Grant: You may make production use of the Licensed Work, provided
                       that such production use does not include offering the
                       Licensed Work (or any modified or derivative version of it)
                       to third parties as a hosted or managed service whose
                       primary value to those third parties is the governed
-                      n-DLC / agent-lifecycle automation that the Licensed Work
+                      agent-lifecycle delivery automation that the Licensed Work
                       provides.
 Change Date:          2030-07-03
 Change License:       Apache License, Version 2.0
