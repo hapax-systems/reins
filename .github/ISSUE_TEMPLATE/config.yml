@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+- name: Read the repository overview
+  url: https://github.com/hapax-systems/reins#readme
+  about: Start with the rendered README and repository body.
+- name: Read the support boundary
+  url: https://github.com/hapax-systems/reins/blob/main/SUPPORT.md
+  about: GitHub Issues are not a staffed support queue.
+- name: Read the security disclosure path
+  url: https://github.com/hapax-systems/reins/security/policy
+  about: Use the repository security policy before sending a disclosure.
+- name: Read Hapax governance
+  url: https://github.com/hapax-systems/hapax-constitution
+  about: Repository governance is centralized in hapax-constitution.

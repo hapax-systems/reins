@@ -1,46 +1,57 @@
-# han — the System I front dispatcher
+# han — Human-Agentic Network Front Command Dispatcher
 
-`han` is a thin front command (no engine of its own) that dispatches the System I
-role words to today's programs (row
-`system-i-han-front-command-dispatcher-slice-1-20261031`):
+`han` is a thin front-command dispatcher for the **Human-Agentic Network (`HAN`)**
+published by **Hapax Research Lab**. It contains no state store or execution
+engine of its own; each subcommand resolves and launches a bound companion
+program on `PATH`:
 
-| role | program today |
-|---|---|
-| `han scope` | `reins --scope` (two read-only task/event frames) |
-| `han docket` | `reins` (work and governance) |
-| `han forum` | `hapx` (conversation) |
-| `han locus` | `stead` (the spatial lab) |
+| Subcommand | Dispatched program | Role |
+|---|---|---|
+| `han scope` | `reins --scope` | Two-frame read-only task and event monitor (`./cmd/reins` in this repository). |
+| `han docket` | `reins` | Full terminal cockpit for work, readiness, and governed command preview (`./cmd/reins` in this repository). |
+| `han forum` | `hapx` | Companion terminal conversation client (resolved on `PATH` when installed separately). |
+| `han locus` | `stead` | Companion spatial-workspace client (resolved on `PATH` when installed separately). |
 
-`han --version` prints the estate dispatcher identity (`hapax-systems/reins`) so a
-collision probe can tell it from a foreign `han`. `han` with no subcommand, or an
-unknown one, prints usage and exits non-zero.
+`han --version` prints the dispatcher identity (`hapax-systems/reins`) so
+callers can distinguish this binary from an unrelated `han` executable on
+`PATH`. Invoking `han` with no subcommand or an unrecognized subcommand prints
+usage to standard error and exits with status `2`; if the target executable is
+absent from `PATH`, `han` exits with status `127`.
 
-Scope starts with tasks in frame 1 and events in frame 2. `Tab` moves focus;
-`t` or `e` chooses the focused frame's lens; `j/k` (or arrows) moves its row
-cursor; `g/G` moves to the ends. Each frame retains its own task and event
-positions. `a` toggles the existing AIR redaction and `q` quits. Scope has no
-command or conversation mode. `han docket` keeps the existing cockpit launch.
+## Scope Frame Behavior
 
-On a compact device or a viewport narrower than 145 columns, the focused frame
-fills the body; the other frame remains reachable with `Tab`. On wider devices
-both frames appear through the existing view algebra. Their connector derives
-from selected rows' AIR-permitted facts: shared facets, or exact task ID/event
-subject equality. It never guesses from partial names. No supported fact means
-`unlinked · no join`. Missing, failed or locally stale reads are dark; the local
-receipt expires after 15 seconds without a successful poll. This measures read
-delivery, not the age of the provider's underlying source. Source freshness cells
-retain their existing meaning.
+`han scope` opens with tasks in frame 1 and events in frame 2:
 
-For an offline fixture (labelled DEMO), use `han scope --demo`, or capture a
-headless navigation witness through the established path:
+- `Tab` switches focus between the two frames.
+- `t` or `e` selects the task or event lens within the focused frame.
+- `j`/`k` (or arrow keys) moves the row cursor; `g`/`G` jumps to the top or bottom row.
+- `a` toggles `AIR` default-deny field redaction; `q` quits.
+- `han scope` exposes read-only observation only (no command-line prompt or write preview).
+
+On viewports narrower than 145 columns, the focused frame occupies the terminal
+body while the second frame remains reachable via `Tab`. On wider viewports,
+both frames render side by side. Frame linkage derives strictly from
+`AIR`-permitted fields on the selected rows (shared facets or exact task
+identifier / event subject equality); partial name matches are never inferred,
+and unmatched selections render `unlinked · no join`.
+
+Missing, failed, or locally stale reads render as `DARK`; the local poll receipt
+expires after 15 seconds without a successful refresh. That timer measures local
+read delivery rather than upstream source age.
+
+## Offline Fixture and Headless Verification
+
+Run `han scope --demo` (once `reins` is on `PATH`) for offline fixture data, or
+capture a headless frame witness directly from source:
 
 ```sh
 bash scripts/reins-shot.sh 'j; tab; e; j' /tmp/scope.png size:170x46 --scope
 bash scripts/reins-shot.sh 'tab; j' /tmp/scope-mobile.png size:60x24 --scope --air
 ```
 
-These exercise local fixture navigation and rendering; they do not demonstrate
-an installed client or actual operator use. Frame choices are not persisted.
+These commands exercise local fixture navigation and terminal rendering; frame
+selections are ephemeral and are not persisted across runs.
 
-Not in this slice: the legacy aliases, any rename, README or product-name changes,
-the collision probe, any spoken or voice use.
+---
+
+*HACA-C v0.3.15, the lab's draft rule for labelling machine-made text, not an external certification. No request to a natural person to approve the final wording, and no such approval, was found in hrl-han's sending, review and coordination records when the text was released. hrl-han releases a text once its checking is complete, under a standing rule that hrl-han's principal, who is not named in this text, adopted before the text was drafted. Review record: https://hapaxresearch.com/review-record/ (open to anyone). This label records how the text was made; it does not certify that the text is true. An unaltered record can contain false claims or miss relevant events.*

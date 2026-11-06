@@ -1,11 +1,11 @@
-// Command han is the System I front dispatcher: a THIN handoff to the four role
-// programs, with no engine of its own. Row:
-// system-i-han-front-command-dispatcher-slice-1-20261031 (System I, ratified by the
-// operator 2026-10-31T06:40:51Z: Scope, Docket, Forum, Locus).
+// Command han is the Human-Agentic Network (HAN) front command dispatcher: a
+// thin handoff to four role-specific terminal programs with no execution engine
+// of its own.
 //
-// The role words bind to today's program names (read at source): scope and docket
-// ride the reins program, forum rides hapx, locus rides stead. No aliases, no
-// renames; those are later slices.
+// Each subcommand resolves a bound executable on PATH: `scope` and `docket`
+// invoke `reins` (with `--scope` appended for `scope`), `forum` invokes the
+// companion conversation client `hapx`, and `locus` invokes the companion
+// spatial-workspace client `stead`.
 package main
 
 import (
