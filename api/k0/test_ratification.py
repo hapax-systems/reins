@@ -94,7 +94,7 @@ def _root(tmp_path: Path) -> Path:
     return root
 
 
-def _stip(body: bytes = b"axiom: single_user\n") -> Stipulation:
+def _stip(body: bytes = b"axiom: authority_before_action\n") -> Stipulation:
     return Stipulation.over("axioms.v1", "the estate's axiom set, v1", body)
 
 
@@ -148,8 +148,8 @@ def test_ratifying_a_different_artifact_than_the_one_proposed_is_refused(tmp_pat
     """
     root = _root(tmp_path)
     key, _, _ = _keypair(tmp_path)
-    asked = _stip(b"axiom: single_user\n")
-    swapped = _stip(b"axiom: single_user, except on tuesdays\n")
+    asked = _stip(b"axiom: authority_before_action\n")
+    swapped = _stip(b"axiom: authority_before_action, except on tuesdays\n")
     assert asked.stipulation_id == swapped.stipulation_id, (
         "fixture premise: the substitution keeps the id and changes the bytes"
     )
