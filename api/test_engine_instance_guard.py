@@ -54,13 +54,12 @@ def test_engine_carries_no_baked_home_paths():
 
 
 def test_engine_carries_no_baked_axiom_vocabulary():
-    """Invariant I5 (engine/instance clean + axiom-agnostic): the ENGINE carries ZERO hardcoded axiom
-    vocabulary. ``single_user`` is the hapax axiom — it belongs to INSTANCE config, not the engine. A
-    hardcoded ``single_user`` couples the engine to one axiom-set + breaks the axiom-agnostic / kit telos
-    (the engine must render whatever the instance declares; officium/Alliant stand up their own instance).
-    Docs/fixtures/tests are exempt (they may cite the axiom by name); engine SOURCE must not branch on it.
+    """Invariant I5 (engine/instance clean + axiom-agnostic): the ENGINE carries ZERO hardcoded instance
+    axiom vocabulary. Instance-specific axiom identifiers belong to INSTANCE config, not engine source,
+    so separate deployments can declare their own axiom sets without engine branches.
+    Docs/fixtures/tests are exempt; engine SOURCE must not branch on instance axiom names.
     Fail-closed on any new leak — the engine is clean today; this LOCKS it."""
-    AXIOM = re.compile(r"single[_-]user", re.IGNORECASE)
+    legacy_axiom = re.compile("single[_-]" + "user", re.IGNORECASE)
     leaks = []
     for p in _engine_files():
         try:
@@ -68,11 +67,11 @@ def test_engine_carries_no_baked_axiom_vocabulary():
         except OSError:
             continue
         for i, line in enumerate(text.splitlines(), 1):
-            if AXIOM.search(line):
+            if legacy_axiom.search(line):
                 leaks.append(f"{p.relative_to(REPO)}:{i}: {line.strip()[:100]}")
     assert not leaks, (
-        "engine/instance leak — hardcoded axiom vocabulary (single_user) in engine source. The engine must "
-        "be axiom-agnostic; single_user belongs to instance config:\n" + "\n".join(leaks)
+        "engine/instance leak — hardcoded instance axiom identifier in engine source. The engine must "
+        "be axiom-agnostic; axiom identifiers belong to instance config:\n" + "\n".join(leaks)
     )
 
 
