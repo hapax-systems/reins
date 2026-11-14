@@ -5,8 +5,9 @@ instance location comes from config/env (config.toml, REINS_* env). A `/home/<us
 source couples the engine to one operator's filesystem and breaks the kit/packaging telos ("ship a kit";
 engine vs instance is a hard invariant per the directional-signals digest B1/B4).
 
-Machine-checkable, fail-closed: this test FAILS on any new leak. Docs, fixtures, and tests are exempt
-(they may cite instance examples); the example config is checked separately for ABSOLUTE (non-~) paths.
+Machine-checkable: the engine guard exempts docs, fixtures, and tests. The separate public-document
+guard covers Markdown everywhere and text under docs/, including witness records; unreadable inputs
+fail the check. The example config is checked separately for ABSOLUTE (non-~) paths.
 
 NOTE (org-architecture scout wf_0ad18193, 2026-07-02): the path-literal guard is NOT the whole story. The
 scout verified reins/api is NOT actually shippable — it sys.path.insert(council_root)s and imports council's
@@ -18,13 +19,42 @@ declares as a real versioned dependency (Phase 1 of the repository-architecture 
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 ENGINE_DIRS = ("internal", "cmd", "api", "scripts", "deck")
 EXEMPT = re.compile(r"(_test\.go|test_[^/]+\.py|\.md)$")
 LEAK = re.compile(r"/home/[a-z_][a-z0-9_-]*")
+
+
+def _public_text_files():
+    excluded = {".git", ".venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache"}
+    extensions = {".md", ".json", ".jsonl", ".toml", ".txt", ".go", ".py", ".sh"}
+
+    def refuse(error):
+        raise error
+
+    for directory, dirs, names in os.walk(REPO, onerror=refuse):
+        dirs[:] = [name for name in dirs if name not in excluded]
+        for name in names:
+            path = Path(directory) / name
+            relative = path.relative_to(REPO)
+            suffix = path.suffix.lower()
+            if suffix == ".md" or (relative.parts[0] == "docs" and suffix in extensions):
+                yield path
+
+
+def test_repo_docs_and_markdown_carry_no_doxxing_home_paths():
+    leaks = []
+    for path in _public_text_files():
+        for line, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if LEAK.search(text):
+                leaks.append(f"{path.relative_to(REPO)}:{line}")
+    assert not leaks, "public document home path(s); use portable placeholders:\n" + "\n".join(leaks)
 
 
 def _engine_files():
@@ -104,3 +134,59 @@ def test_example_config_paths_are_portable():
            for i, ln in enumerate(example.read_text().splitlines(), 1)
            if LEAK.search(ln)]
     assert not bad, "config.example.toml carries absolute home paths (use ~-form):\n" + "\n".join(bad)
+
+
+@pytest.mark.parametrize("relative", [
+    "README.md", "nested/NOTES.md", ".github/HELP.md",
+    *["docs/releases/witness" + ext for ext in
+      (".md", ".json", ".jsonl", ".toml", ".txt", ".go", ".py", ".sh")],
+])
+def test_doxxing_scan_catches_planted_home_paths(tmp_path, monkeypatch, relative):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("safe first line\n" + "/home/" + "synthetic_user/file\n")
+    with pytest.raises(AssertionError) as caught:
+        test_repo_docs_and_markdown_carry_no_doxxing_home_paths()
+    assert relative + ":2" in str(caught.value)
+    assert "synthetic_user" not in str(caught.value)
+
+
+def test_doxxing_scan_spares_placeholders_and_build_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    (tmp_path / "README.md").write_text("Use /home/<user>/files or ~/files.\n")
+    for directory in (".git", ".venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache"):
+        target = tmp_path / "docs" / directory / "generated.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("/home/" + "synthetic_build/path")
+    test_repo_docs_and_markdown_carry_no_doxxing_home_paths()
+
+
+def test_doxxing_scan_unreadable_document_refuses(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    target = tmp_path / "README.md"
+    target.write_text("safe")
+    read = Path.read_text
+    def unreadable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("synthetic unreadable document")
+        return read(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    with pytest.raises(PermissionError, match="synthetic unreadable"):
+        test_repo_docs_and_markdown_carry_no_doxxing_home_paths()
+
+
+def test_doxxing_scan_unreadable_directory_refuses(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    directory = tmp_path / "docs"
+    directory.mkdir()
+    scan = os.scandir
+
+    def unreadable(path):
+        if Path(path) == directory:
+            raise PermissionError("synthetic unreadable directory")
+        return scan(path)
+
+    monkeypatch.setattr(os, "scandir", unreadable)
+    with pytest.raises(PermissionError, match="synthetic unreadable directory"):
+        test_repo_docs_and_markdown_carry_no_doxxing_home_paths()
