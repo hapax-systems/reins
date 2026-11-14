@@ -86,7 +86,7 @@ var PageContracts = map[int]PaneContract{
 		Question:   "my memory / context / life-DLC",
 		State:      "vault titles + links + the open-n-DLC set",
 		Controls:   "navigate the vault (bodies default-deny)",
-		Provenance: "the Obsidian vault + intake + deck + presence + rdlc",
+		Provenance: "the Obsidian vault",
 		BlindSpot:  "vault BODIES (default-deny); dark lifecycles (rdlc/ldlc/presence) until each model M exists",
 	},
 	PageCommands: {

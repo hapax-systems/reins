@@ -48,6 +48,8 @@ const (
 	PageDeck         = 29 // E8.3 DECK — the non-evicting operator-readout history (no-loss, vs the event STREAM)
 	PageRoute        = 30 // U5 E6.2 ROUTE — the capability-routing PROJECTION (spine evidence; reins mints no decision)
 	PageObligations  = 31 // Ligatory obligations (owes), substrate memory occupancy, and route fulfillment
+
+	numPages = iota // Keep last: counts every declared page, including future additions.
 )
 
 const (
