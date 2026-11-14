@@ -1210,14 +1210,20 @@ func execHandover(m model.Model) {
 		root = filepath.Join(home, ".local", "share", "reins")
 	}
 	store := generation.NewStore(root)
-	_ = model.WritePosture("", m.SnapshotPosture()) // externalize BEFORE the exec (restored via --resume)
+	if err := model.WritePosture("", m.SnapshotPosture()); err != nil {
+		fmt.Fprintf(os.Stderr, "reins: swap refused (posture write): %v; next action: repair posture storage and retry :swap\n", err)
+		os.Exit(1)
+	}
 	plan := swap.ResolveExecPlan(store, store.Resolve(), os.Getenv("REINS_POSTURE_PATH"),
 		strconv.FormatInt(time.Now().UnixNano(), 36))
 	if !plan.ShouldExec {
 		fmt.Fprintf(os.Stderr, "reins: swap refused (breakglass) — %s\n", plan.BreakglassReason)
 		os.Exit(1)
 	}
-	_ = store.WriteHandoff(plan.Handoff) // consume-once baton (coupling b: before the exec)
+	if err := store.WriteHandoff(plan.Handoff); err != nil {
+		fmt.Fprintf(os.Stderr, "reins: swap refused (handoff write): %v; next action: repair generation storage and retry :swap\n", err)
+		os.Exit(1)
+	}
 	if err := syscall.Exec(plan.Argv[0], plan.Argv, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "reins: exec-handover into %s failed: %v\n", plan.Argv[0], err)
 		os.Exit(1)
