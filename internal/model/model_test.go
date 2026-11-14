@@ -258,7 +258,7 @@ func TestRegistrySlackRowsArePageSpecific(t *testing.T) {
 		want []string
 	}{
 		{name: "commands", page: PageCommands, want: []string{"read:32", "arg verbs", "mutation surface"}},
-		{name: "windows", page: PageWindows, want: []string{"registered:25", "linked:8", "source-only:15"}},
+		{name: "windows", page: PageWindows, want: []string{"registered:25", "linked:8", "source-only:14"}},
 		{name: "surfaces", page: PageSurfaces, want: []string{"mode:4", "projection:12", "open=[:]"}},
 		{name: "intent", page: PageIntent, want: []string{"resume", "9 targets", "preview only", "{{sel.*}}"}},
 		{name: "help", page: PageHelp, want: []string{"split marks", "contract", "no buried screens"}},
@@ -504,7 +504,6 @@ func TestSplitPairRegistryDeclaresRelationshipOperators(t *testing.T) {
 		PageIntent:     "explicit target",
 		PageHelp:       "operator orientation",
 		PageLegend:     "glyph decoding",
-		PageCommands:   "command grammar",
 		PageWindows:    "window topology",
 		PageSurfaces:   "affordance registry",
 		PageDomains:    "domain lens",
@@ -551,7 +550,7 @@ func TestSplitPairRegistryDeclaresControlTraits(t *testing.T) {
 	if !ok || epistemics.SourceCursor != splitSourceAnchor || epistemics.TargetReactivity != splitTargetIndependent || epistemics.TargetCursor != splitTargetEpistemic || !epistemics.TargetScrollable {
 		t.Fatalf("epistemics split should hold source and expose evidence target cursor, got %+v", epistemics)
 	}
-	for _, page := range []int{PageIntent, PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces, PageDomains, PageLifecycles} {
+	for _, page := range []int{PageIntent, PageHelp, PageLegend, PageWindows, PageSurfaces, PageDomains, PageLifecycles} {
 		pair, ok := splitPairForPage(page)
 		if !ok {
 			t.Fatalf("missing split pair for page %s", pageLabel(page))
@@ -568,7 +567,7 @@ func TestSplitPairRegistryDeclaresPaneProfiles(t *testing.T) {
 		PaneLinkedScrollable:   {PageYard, PageReadiness, PageCaps},
 		PaneLinkedTargetCursor: {PageIntake},
 		PaneAnchoredTarget:     {PageDynamics, PageEpistemics},
-		PaneAnchoredReference:  {PageHelp, PageLegend, PageCommands, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles},
+		PaneAnchoredReference:  {PageHelp, PageLegend, PageWindows, PageIntent, PageSurfaces, PageDomains, PageLifecycles},
 	}
 	for want, pages := range cases {
 		for _, page := range pages {
@@ -1603,6 +1602,7 @@ func TestWideReferenceCatalogsUseCompactContextRail(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New("REINS")
 			m.Width, m.Height, m.Page = 220, 58, tc.page
+			m.commandCatalog = m.Page == PageCommands
 			v := ansi.Strip(m.View())
 			for _, want := range tc.want {
 				if !strings.Contains(v, want) {
@@ -2179,6 +2179,7 @@ func TestReferenceCatalogsSelfAnchorTheirOwnFocus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base
 			m.Page = tc.page
+			m.commandCatalog = m.Page == PageCommands
 			beforeTarget := tc.focus(m)
 			m = step(m, "j")
 			if got := tc.focus(m); got != beforeTarget+1 {
@@ -2961,7 +2962,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 	m := New("REINS")
 	m.Width, m.Height = 260, 80 // tall enough to render the full catalog (32 verbs incl. the trailing govern verbs)
 
-	cmds := m.Exec("commands")
+	cmds := step(m.Exec("commands"), "c")
 	if cmds.Page != PageCommands {
 		t.Fatalf(":commands must open command catalog page, got %d", cmds.Page)
 	}
@@ -2990,6 +2991,7 @@ func TestCommandAndWindowCatalogPagesRender(t *testing.T) {
 		AIR: map[string]string{"role": "ok", "platform": "ok", "state": "ok", "readiness": "ok", "blocker": "ok", "attention": "ok"},
 	}}, false)
 	templateCmds.Width, templateCmds.Height, templateCmds.Page = 220, 96, PageCommands
+	templateCmds.commandCatalog = true
 	templateView := ansi.Strip(templateCmds.View())
 	// Inc-5: PageCommands SELF-ANCHORS (no session source), so the template browser binds to PageCommands,
 	// not PageSessions. A command row is not a selectable data row, so the refs honestly report unavailable.
@@ -3140,6 +3142,10 @@ func TestReferenceCatalogsUseSemanticRowsAtMediumWidth(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New("REINS")
 			m.Width, m.Height, m.Page = 112, 160, tc.page
+			m.commandCatalog = m.Page == PageCommands
+			if m.commandCatalog {
+				m.Width = 180
+			} // medium catalog pane inside the always-split Commands view
 			v := ansi.Strip(m.View())
 			for _, head := range tc.missingHead {
 				if strings.Contains(v, head) {
@@ -5335,14 +5341,19 @@ func TestReferenceScrollRenderedHeight(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", pageLabel(page), height), func(t *testing.T) {
 				m := New("fixture").FoldDynamics(grammar.Graph{Nodes: []grammar.Node{{ID: "fixture-node", Res: "1"}}}, false)
 				m.Page, m.Width, m.Height = page, 80, height
+				m.commandCatalog = page == PageCommands
 				m.ObserveDark, m.RouteDark, m.VaultDark = false, false, false
 				for i := 0; i < 12; i++ {
 					m.Observe = append(m.Observe, grammar.ObserveDimension{Key: fmt.Sprintf("signal-%02d", i), Status: "live"})
 					m.Vault = append(m.Vault, grammar.VaultNote{Title: fmt.Sprintf("note-%02d", i)})
 					m.Deck = append(m.Deck, fmt.Sprintf("readout-%02d", i))
 				}
-				lines := m.referenceLines(80)
-				last := strings.TrimSpace(ansi.Strip(fitWidth(lines[len(lines)-1], 80)))
+				paneWidth := 80
+				if page == PageCommands {
+					paneWidth = 48
+				} // 80-column only-split catalog's primary pane
+				lines := m.referenceLines(paneWidth)
+				last := strings.TrimSpace(ansi.Strip(fitWidth(lines[len(lines)-1], paneWidth)))
 				for i := 0; i <= len(lines)*2; i++ {
 					m = step(m, "J")
 				}

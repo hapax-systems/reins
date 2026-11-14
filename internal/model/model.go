@@ -571,16 +571,21 @@ type Model struct {
 	RelationalFocus     int  // selected consent facet in :relational
 	Width               int  // terminal size (from tea.WindowSizeMsg) — the zones fill this
 	Height              int
-	Beat                int                // low-rate liveness frame; visual only, never authority/readiness
-	Focus               int                // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
-	EFocus              int                // selected row index into m.Events (the :events cursor) — selection is page-aware
-	SFocus              int                // selected row index into m.Sessions (the :sessions cursor)
-	TFocus              int                // selected row index into m.Traces (the :traces cursor)
-	TurnFocus           int                // selected row index into m.TurnLadder (the :session-turns cursor)
-	DetailScroll        int                // reserved detail-pane scroll for expanded turn blocks
-	IFocus              int                // selected row index into visibleIntakeRows (the :intake bucket cursor)
-	CFocus              int                // selected capability/status row index into the grouped :capabilities projection
-	CommandFocus        int                // selected command registry row
+	Beat                int // low-rate liveness frame; visual only, never authority/readiness
+	Focus               int // selected row index into visibleTasks (the :tasks cursor; the rail tracks it)
+	EFocus              int // selected row index into m.Events (the :events cursor) — selection is page-aware
+	SFocus              int // selected row index into m.Sessions (the :sessions cursor)
+	TFocus              int // selected row index into m.Traces (the :traces cursor)
+	TurnFocus           int // selected row index into m.TurnLadder (the :session-turns cursor)
+	DetailScroll        int // reserved detail-pane scroll for expanded turn blocks
+	IFocus              int // selected row index into visibleIntakeRows (the :intake bucket cursor)
+	CFocus              int // selected capability/status row index into the grouped :capabilities projection
+	CommandFocus        int // selected command registry row
+	commandLedgerFocus  int // witnessed row; distinct from the catalog cursor
+	commandRefFocus     commandReference
+	commandRefActive    bool
+	commandCatalog      bool
+	commandCatalogVerb  string
 	WindowFocus         int                // selected window registry row
 	SurfaceFocus        int                // selected surface registry row
 	DomainFocus         int                // selected domain registry row
@@ -772,6 +777,9 @@ func (m Model) FocusedCapabilityRow() (capabilityStatusRow, bool) {
 }
 
 func (m Model) FocusedCommand() (verbDef, bool) {
+	if m.Page == PageCommands && !m.commandCatalog {
+		return verbDef{}, false
+	}
 	if m.CommandFocus < 0 || m.CommandFocus >= len(verbs) {
 		return verbDef{}, false
 	}
@@ -866,6 +874,8 @@ func (m Model) lifecycleRowCount() int {
 // wiring needed.
 func (m Model) composesViaAlgebra() bool {
 	switch m.Page {
+	case PageCommands:
+		return true
 	case PageEvents, PageTasks, PageSessions:
 		// Unconditionally algebra-owned — even when dark. composePage() returns nil for the dark case so
 		// the page renders the dark-hint body (bodyForPage), but the legacy session-frozen split must
@@ -965,6 +975,9 @@ func (m Model) pageRows() int {
 	case PageRelational:
 		return len(m.consentFacets())
 	case PageCommands:
+		if !m.commandCatalog {
+			return len(m.Commands)
+		}
 		return len(verbs)
 	case PageWindows:
 		return len(registeredWindows())
@@ -1032,6 +1045,9 @@ func (m Model) curFocus() int {
 		return m.RelationalFocus
 	}
 	if m.Page == PageCommands {
+		if !m.commandCatalog {
+			return m.commandLedgerFocus
+		}
 		return m.CommandFocus
 	}
 	if m.Page == PageWindows {
@@ -1089,7 +1105,11 @@ func (m Model) focusTo(i int) Model {
 	} else if m.Page == PageRelational {
 		m.RelationalFocus = i
 	} else if m.Page == PageCommands {
-		m.CommandFocus = i
+		if m.commandCatalog {
+			m.CommandFocus = i
+		} else {
+			m.commandLedgerFocus = i
+		}
 	} else if m.Page == PageWindows {
 		m.WindowFocus = i
 	} else if m.Page == PageSurfaces {
@@ -2747,6 +2767,7 @@ type CommandsMsg struct {
 // FoldCommands folds the witnessed command ledger. Honest-dark on an unreachable/error feed (the render
 // discloses it); enforcement defaults to "absent" (the gate observably does not exist yet — never dark).
 func (m Model) FoldCommands(cmds []grammar.Command, enforcement, integrity string, dark bool) Model {
+	m.commandLedgerFocus = m.commandFoldFocus(cmds, dark)
 	m.Commands = cmds
 	if strings.TrimSpace(enforcement) == "" {
 		enforcement = "absent"
@@ -2992,6 +3013,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if nm, cmd, ok := m.updateGlobal(v); ok {
 			return nm, cmd
+		}
+		if m.Page == PageCommands {
+			if nm, handled := m.updateCommands(keyName(v)); handled {
+				return nm, nil
+			}
 		}
 		if m.sessionSplit() {
 			if nm, cmd, ok := m.updateSplitSource(v); ok {
