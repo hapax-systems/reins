@@ -47,7 +47,7 @@ func TestChatPreviewVerbNeverReadsApplied(t *testing.T) {
 func TestCommandsPagePreviewVerbNeverReadsApplied(t *testing.T) {
 	m := chatWith([]grammar.Command{{Verb: "resume", Target: "lane-a", Status: "ok", Witness: "pending"}})
 	m.VerbModes = map[string]string{"resume": "preview"}
-	out := ansi.Strip(m.renderCommandCatalog(120))
+	out := ansi.Strip(m.commandLedgerBody(120, 20))
 	if strings.Contains(out, "✓") || !strings.Contains(out, "previewed (no write)") {
 		t.Fatalf(":commands must not false-green a preview verb, got:\n%s", out)
 	}

@@ -789,7 +789,9 @@ func (m Model) composePage(w, h int) *layout.Spec {
 			layout.Leaf(&layout.Pane{MinW: 76, Render: func(pw, ph int) string { return m.splitSessionsPane(pw, ph) }}),
 			layout.Leaf(&layout.Pane{MinW: 56, Render: func(pw, ph int) string { return m.splitContextPane(pw, ph) }}),
 			ratio, m.verdictConnector(rel))
-	case PageHelp, PageLegend, PageCommands, PageWindows, PageSurfaces, PageDomains, PageLifecycles:
+	case PageCommands:
+		return m.composeCommands(w)
+	case PageHelp, PageLegend, PageWindows, PageSurfaces, PageDomains, PageLifecycles:
 		// Inc 4 — DEMOTE-TO-DOOR. These engine/reference pages have NO real session join, so when the
 		// legacy split would session-anchor them (the anti-pattern), render the honest catalog │ ambient
 		// door instead. Gated on the session-anchored split (off → referenceBody already does catalog│context).
@@ -5281,47 +5283,6 @@ func (m Model) renderCommandCatalog(w int) string {
 	var b strings.Builder
 	rule := grammar.C("border", strings.Repeat("─", maxVisible(10, w-2)))
 	targetFocus := m.targetRowFocusActive()
-	// U3b — the WITNESSED LEDGER: the live demand+verdict datoms from /read/commands, so the
-	// operator sees the frontdoor's real command activity, not just the static verb catalog. The
-	// enforcement cell renders the four-word state (armed|breakglass|absent|dark); `absent` is honest
-	// (the dispatch-gate does not exist until CP-E), never dark-conflated.
-	enf := m.CommandsEnforcement
-	if strings.TrimSpace(enf) == "" {
-		enf = "absent"
-	}
-	integ := m.CommandsIntegrity
-	if strings.TrimSpace(integ) == "" {
-		integ = "unknown"
-	}
-	// honest coloring: ONLY "verified" reads affirmative (pri); unsigned/empty/unknown/broken:* all read
-	// alert (fch), never green — the point of the signed chain is that its verdict cannot be faked green.
-	integTok := "fch"
-	if integ == "verified" {
-		integTok = "pri"
-	}
-	b.WriteString(" " + grammar.C("brt", "WITNESSED LEDGER") +
-		grammar.C("mut", " — enforcement ") + grammar.C("brt", enf) +
-		grammar.C("mut", " · integrity ") + grammar.C(integTok, integ) + "\n")
-	switch {
-	case m.CommandsDark:
-		reason := strings.TrimSpace(m.CommandsError)
-		if reason == "" {
-			reason = "command ledger unreachable"
-		}
-		b.WriteString(" " + grammar.C("mut", "· dark — "+clipRunes(reason, maxVisible(8, w-10))) + "\n")
-	case len(m.Commands) == 0:
-		b.WriteString(" " + grammar.C("mut", "· no commands witnessed yet (demand+verdict rows appear here as they occur)") + "\n")
-	default:
-		shown := m.Commands
-		if len(shown) > 8 { // recent tail — disclose the drop honestly (never silently hide rows)
-			hidden := len(shown) - 8
-			shown = shown[len(shown)-8:]
-			b.WriteString(" " + grammar.C("mut", fmt.Sprintf("↑%d earlier witnessed — showing the recent 8", hidden)) + "\n")
-		}
-		for _, c := range shown {
-			b.WriteString(" " + clipRunes(m.renderWitnessRow(c), maxVisible(8, w-1)) + "\n")
-		}
-	}
 	b.WriteString(" " + rule + "\n")
 	b.WriteString(" " + grammar.C("brt", "COMMANDS") + grammar.C("mut", " — "+m.commandsSummary()) + "\n")
 	b.WriteString(" " + grammar.C("mut", "one catalog backs hotkeys, command line completion, probes, and governed intent previews") + "\n")
@@ -10393,6 +10354,10 @@ func (m Model) referenceLines(w int) []string {
 }
 
 func (m Model) referenceLayoutWidths(w int) (leftW, rightW int, split bool) {
+	if m.Page == PageCommands && w >= 3 && w < 150 {
+		leftW = max(1, int(float64(w-1)*0.62))
+		return leftW, w - 1 - leftW, true
+	}
 	if w < 150 || m.Page == PageDynamics || m.Page == PageEpistemics {
 		return w, 0, false
 	}
@@ -11143,6 +11108,9 @@ func (m Model) referenceLegalRows() []contextRow {
 		return rows
 	}
 	if m.Page == PageCommands {
+		if !m.commandCatalog {
+			return []contextRow{{"[j/k]", "witnessed row", "yel"}, {"[Tab]", "task/session refs", "yel"}, {"[Enter]", "catalog ref only", "yel"}, {"[c]", "browse catalog", "yel"}}
+		}
 		return []contextRow{
 			{"[j/k]", fmt.Sprintf("command %d/%d", m.CommandFocus+1, maxVisible(1, len(verbs))), "yel"},
 			{"[g/G]", "first/last command", "yel"},
@@ -13468,6 +13436,9 @@ func (m Model) viewFloor(w int) string {
 				focus = grammar.C("brt", ref)
 			}
 		case PageCommands:
+			if c, ok := m.focusedWitness(); ok && !m.commandCatalog {
+				focus = grammar.Redact(c.AIR, "verb", c.Verb, m.AIR)
+			}
 			if v, ok := m.FocusedCommand(); ok {
 				focus = grammar.C("brt", clipRunes(v.name, 24))
 			}
@@ -13687,6 +13658,10 @@ func (m Model) floorActions(w int) string {
 			}
 		}
 	case PageCommands:
+		if !m.commandCatalog {
+			parts = append(parts, "[j/k]ledger [Tab]refs [Enter]catalog-ref [c]catalog")
+			break
+		}
 		if m.pageRows() > 0 {
 			selection := fmt.Sprintf("command %d/%d", m.CommandFocus+1, len(verbs))
 			parts = append(parts,
