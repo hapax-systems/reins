@@ -337,6 +337,62 @@ def run_put_dialogue(
     return 0
 
 
+def run_put_from_file(
+    raw_name: str,
+    path: str,
+    *,
+    post: Callable[[str, bytes], bytes] | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """Store a file-shaped credential (a multi-line service-account key) in one act.
+
+    The getpass dialogue reads one line, so a multi-line key would store its first line
+    and spill the rest into the shell. This reads the value from a file the operator
+    names: never from argv text, never echoed or logged. It reports only the name and
+    byte count, and leaves the source file for the operator to delete.
+    """
+    try:
+        name = name_of(raw_name)
+    except ValueError as exc:
+        print(f"hapax-secret: {exc}", file=stderr)
+        return 2
+    source = Path(path)
+    try:
+        if not source.is_file():
+            print(
+                f"hapax-secret: {path} is not a regular file. "
+                "Next action: name the downloaded key file and rerun.",
+                file=stderr,
+            )
+            return 2
+        value = source.read_bytes()
+    except OSError as exc:
+        print(f"hapax-secret: cannot read {path} ({type(exc).__name__})", file=stderr)
+        return 2
+    if not value:
+        print(
+            f"hapax-secret: {path} is empty; empty secret refused. "
+            "Next action: name the downloaded key file and rerun.",
+            file=stderr,
+        )
+        return 1
+    try:
+        result = put_via_reins(name, value, post=post)
+    except (ValueError, RuntimeError) as exc:
+        print(f"hapax-secret: {exc}", file=stderr)
+        return 2
+    _notify_presence()
+    payload = result.get("payload")
+    backend = str(payload.get("backend_id") or "") if isinstance(payload, dict) else ""
+    via = f"{backend} via reins" if backend else "via reins"
+    print(
+        f"stored {name} ({len(value)} bytes, {via}); {path} is left in place: delete it now",
+        file=stdout,
+    )
+    return 0
+
+
 def run_delete(
     raw_name: str,
     *,
@@ -453,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: hapax-secret                 # TTY put: name, secret, confirm (via reins)\n"
             "       hapax-secret <name>          # get\n"
+            "       hapax-secret --from-file <name> <path>  # put a file-shaped key (via reins)\n"
             "       hapax-secret --delete <name> # TTY confirm, then delete via reins\n"
             "       hapax-secret --where <name>  # presence\n"
             "       hapax-secret --list"
@@ -460,6 +517,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     rest = args
+    if rest and rest[0] == "--from-file":
+        if len(rest) != 3:
+            print("usage: hapax-secret --from-file <name> <path>", file=sys.stderr)
+            return 2
+        if not is_store_host():
+            # The path names a file on this host; forwarding it would read another host's path.
+            try:
+                where = f" ({secrets_host()})"
+            except ValueError:
+                where = ""
+            print(
+                f"hapax-secret: --from-file runs only on the FileStore host{where}. "
+                "Next action: download the key on that host and run it there.",
+                file=sys.stderr,
+            )
+            return 2
+        return run_put_from_file(rest[1], rest[2])
     if not is_store_host():
         tty = (not rest) or (rest[0] == "--delete")
         try:
