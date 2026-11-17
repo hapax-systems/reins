@@ -4,7 +4,8 @@ name: AuthorityCase Check
 # semantics: the PR body's AuthorityCase (or legacy cc-task) reference is parsed and
 # validated, and changes to protected governance paths are named. The release arm requires
 # a SUCCESS check named authority-case-check for governance- and public-claim-flagged rows.
-# Only the protected-path list differs: it names Reins' own governance surfaces.
+# The logic lives in .github/scripts/authority-case-check.sh, tested by
+# api/test_authority_case_check.py; only the protected-path list is Reins' own.
 
 on:
   pull_request:
@@ -27,34 +28,7 @@ jobs:
         id: parse
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -euo pipefail
-
-          # grep -m1 and here-strings, never a pipe into head: under pipefail a long PR body
-          # would otherwise end the step with SIGPIPE (council reform-fix-authority-case-check-sigpipe).
-          case_id=$(grep -m1 -oiE 'CASE-[A-Z0-9-]+' <<<"$PR_BODY" || true)
-          case_id=${case_id%%$'\n'*}
-
-          slice_id=$(grep -m1 -oiE 'SLICE-[A-Z0-9-]+' <<<"$PR_BODY" || true)
-          slice_id=${slice_id%%$'\n'*}
-
-          pre_methodology=false
-          if grep -qiE 'pre-methodology|pre_methodology' <<<"$PR_BODY"; then
-            pre_methodology=true
-          fi
-
-          # The match is case-insensitive, so the prefix strip is too (`CC-TASK: x` yields x).
-          cc_task=$(grep -m1 -oiE 'cc-task:[[:space:]]*`?[a-z0-9-]+' <<<"$PR_BODY" | sed -E 's/^cc-task:[[:space:]]*`?//I' || true)
-          cc_task=${cc_task%%$'\n'*}
-
-          {
-            echo "case_id=$case_id"
-            echo "slice_id=$slice_id"
-            echo "pre_methodology=$pre_methodology"
-            echo "cc_task=$cc_task"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "Parsed: case=$case_id slice=$slice_id pre_methodology=$pre_methodology cc_task=$cc_task"
+        run: bash .github/scripts/authority-case-check.sh parse
 
       - name: Validate case reference
         env:
@@ -62,65 +36,9 @@ jobs:
           SLICE_ID: ${{ steps.parse.outputs.slice_id }}
           PRE_METHODOLOGY: ${{ steps.parse.outputs.pre_methodology }}
           CC_TASK: ${{ steps.parse.outputs.cc_task }}
-        run: |
-          set -euo pipefail
-
-          if [ "$PRE_METHODOLOGY" = "true" ]; then
-            echo "PASS — pre-methodology PR (migration compat)."
-            exit 0
-          fi
-
-          if [ -n "$CC_TASK" ] && [ -z "$CASE_ID" ]; then
-            echo "PASS — legacy cc-task reference '$CC_TASK' (migration compat)."
-            exit 0
-          fi
-
-          if [ -z "$CASE_ID" ] && [ -z "$CC_TASK" ]; then
-            echo "::warning::No AuthorityCase or cc-task reference found in PR body. After migration, this will be required."
-            exit 0
-          fi
-
-          echo "PASS — AuthorityCase reference: $CASE_ID / $SLICE_ID"
+        run: bash .github/scripts/authority-case-check.sh validate
 
       - name: Check protected paths
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$PR_BASE_SHA" ]; then
-            echo "No base SHA — skipping path check."
-            exit 0
-          fi
-
-          git fetch --quiet origin "$PR_BASE_SHA" 2>/dev/null || true
-          changed=$(git diff --name-only "$PR_BASE_SHA"...HEAD 2>/dev/null || echo "")
-
-          if [ -z "$changed" ]; then
-            echo "No changed files detected."
-            exit 0
-          fi
-
-          # Reins' governance surfaces: its governance and security policy, its CI gates, its
-          # licence terms, the estate's one credential resolver, and authority and custody.
-          protected_hit=false
-          protected_files=""
-          protect() {
-            protected_hit=true
-            protected_files="${protected_files}  - ${1}"$'\n'
-          }
-          while IFS= read -r file; do
-            case "$file" in
-              GOVERNANCE.md|SECURITY.md|CODEOWNERS|.github/CODEOWNERS|.github/workflows/*|LICENSE|NOTICE.md)
-                protect "$file" ;;
-              api/hapax_secret.py|scripts/hapax-secret|api/reins_authorization.py|api/reins_claim_custody.py)
-                protect "$file" ;;
-            esac
-          done <<< "$changed"
-
-          if [ "$protected_hit" = true ]; then
-            echo "::warning::Protected governance paths changed — requires T2/T3 AuthorityCase evidence:"
-            echo "$protected_files"
-          fi
-
-          echo "Changed files: $(echo "$changed" | wc -l), protected paths touched: $protected_hit"
+        run: bash .github/scripts/authority-case-check.sh paths
