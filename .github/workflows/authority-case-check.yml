@@ -43,7 +43,8 @@ jobs:
             pre_methodology=true
           fi
 
-          cc_task=$(grep -m1 -oiE 'cc-task:[[:space:]]*`?[a-z0-9-]+' <<<"$PR_BODY" | sed 's/cc-task:[[:space:]]*`\{0,1\}//' || true)
+          # The match is case-insensitive, so the prefix strip is too (`CC-TASK: x` yields x).
+          cc_task=$(grep -m1 -oiE 'cc-task:[[:space:]]*`?[a-z0-9-]+' <<<"$PR_BODY" | sed -E 's/^cc-task:[[:space:]]*`?//I' || true)
           cc_task=${cc_task%%$'\n'*}
 
           {
