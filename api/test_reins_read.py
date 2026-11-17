@@ -1126,7 +1126,9 @@ def test_gemma_reviewbench_route_catalog_real_capability_read(receipt_parity_inp
     assert source["status"] == "observed", source["detail"]
     assert source["detail"] == "typed platform capability registry"
     expected_ids = set(receipt_parity_inputs[-1]) | {"local_tool.local.gemma3_4b_reviewbench"}
-    assert source["count"] == result["totals"]["routes"] == len(expected_ids) == 17
+    # 19: spine #37 carries council #5573 (local_tool.local.spark_narrow) and #5605
+    # (glmcp.interactive.lane) into REQUIRED_ROUTE_IDS.
+    assert source["count"] == result["totals"]["routes"] == len(expected_ids) == 19
     assert {r["route_id"] for r in result["routes"]} == expected_ids
     route = next(r for r in result["routes"] if r["route_id"] == "local_tool.local.gemma3_4b_reviewbench")
     assert route["route_state"] == "blocked"
