@@ -3,5 +3,5 @@
 # checkout. Set HAPAX_SPINE_CONFIG_DIR to the instance config dir for the capability-registry loaders.
 fastapi>=0.110
 uvicorn>=0.29
-hapax-spine @ git+https://github.com/hapax-systems/hapax-spine.git@91595710ba2545856d458ff57e69523b56aa7b5c
+hapax-spine @ git+https://github.com/hapax-systems/hapax-spine.git@4b07b8a26c07176c8c39a6431b1c6e66fe5fe7ee
 pyyaml>=6
