@@ -1523,6 +1523,9 @@ def test_checked_in_capability_surface_pack_carries_explicit_ontology():
 
 
 def test_read_gate_summary_preserves_no_go_names_and_lane_blockers(monkeypatch, tmp_path):
+    for env in ("REINS_CC_TASK_GATE_LEDGER", "REINS_AUTHORITY_CASE_LEDGER",
+                "REINS_POLICY_DECIDE_SHADOW_LEDGER", "REINS_BRANCH_RULESET_SNAPSHOT"):
+        monkeypatch.setenv(env, str(tmp_path / env))
     monkeypatch.setattr("reins_read._projection", lambda _root, **kw: {"tasks": {
         "task-a": {
             "task_id": "task-a",

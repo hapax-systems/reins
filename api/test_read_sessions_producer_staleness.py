@@ -38,6 +38,9 @@ def _load(path: Path) -> dict:
 
 
 def _replay(capture: dict, tmp_path: Path, monkeypatch, producer_age_s: float) -> TestClient:
+    for env in ("REINS_CC_TASK_GATE_LEDGER", "REINS_AUTHORITY_CASE_LEDGER",
+                "REINS_POLICY_DECIDE_SHADOW_LEDGER", "REINS_BRANCH_RULESET_SNAPSHOT"):
+        monkeypatch.setenv(env, str(tmp_path / env))
     lanes = {row["role"]: {k: row[k] for k in _LANE_KEYS} for row in capture["sessions"]}
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"lanes": lanes}), encoding="utf-8")

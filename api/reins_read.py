@@ -3190,6 +3190,146 @@ def _gate_stage_counts(items: list[dict]) -> str:
     return " ".join(f"{k}:{counts[k]}" for k in sorted(counts))
 
 
+def _task_gate_counts(records: list[dict]) -> tuple[int, str]:
+    """Extract only exit counts and closed stage labels from the bounded tail."""
+    aliases = (
+        "S0_INTAKE", "S1_RESEARCH", "S2_DESIGN", "S3_REVIEW", "S4_ACCEPTANCE",
+        "S5_IMPLEMENTATION_AUTHORIZATION", "S6_IMPLEMENTATION", "S7_RUNTIME_VERIFICATION",
+        "S8_RELEASE", "S9_POST_MERGE", "S10_CLOSURE", "S11_CLOSED", "S7_RELEASE",
+    )
+    stages = {f"S{i}": f"S{i}" for i in range(12)}
+    stages.update({name: name.split("_", 1)[0] for name in aliases})
+    stages.update({"S3_5": "S3.5", "S3.5": "S3.5", "BLOCKED": "BLOCKED"})
+    by_exit: dict[int, list[dict]] = {0: [], 2: []}
+    for record in records:
+        code = record.get("legacy_exit")
+        if type(code) is not int or code not in by_exit:
+            continue
+        raw_stage = record.get("stage")
+        stage = stages.get(raw_stage, "unknown") if isinstance(raw_stage, str) else "unknown"
+        by_exit[code].append({"stage": stage})
+    allowed, refused = by_exit[0], by_exit[2]
+    return len(allowed) + len(refused), (
+        f"allow={len(allowed)}; refuse={len(refused)}; "
+        f"allow_stages={_gate_stage_counts(allowed)}; refuse_stages={_gate_stage_counts(refused)}"
+    )
+
+
+def _release_gate_counts(records: list[dict]) -> tuple[int, str]:
+    """Read recorded post-arm outcomes, not authorization or a quorum verdict."""
+    armed = blocked = checks = 0
+    for record in records:
+        assessment = record.get("release_auto_arm_assessment")
+        result = record.get("release_auto_arm_result")
+        verified = record.get("verified_checks")
+        head = record.get("verified_checks_head_sha")
+        if (record.get("kind") != "release_auto_arm"
+                or not isinstance(assessment, dict) or not isinstance(result, dict)
+                or not isinstance(verified, list) or not all(isinstance(v, str) for v in verified)
+                or not isinstance(head, str) or not head.strip()):
+            continue
+        outcome = assessment.get("armed")
+        blockers = assessment.get("blockers")
+        if (type(outcome) is not bool or type(result.get("armed")) is not bool
+                or result["armed"] != outcome
+                or type(assessment.get("eligible")) is not bool
+                or type(assessment.get("needs_arming")) is not bool
+                or not isinstance(blockers, list) or not all(isinstance(b, str) for b in blockers)):
+            continue
+        if outcome:
+            armed += 1
+        elif blockers:
+            blocked += 1
+        else:
+            continue  # pending/unclassified is neither armed nor blocked
+        checks += len(verified)
+    return armed + blocked, f"armed={armed}; blocked={blocked}; recorded_checks={checks}; historical observations, not quorum"
+
+
+def _policy_gate_counts(records: list[dict]) -> tuple[int, str]:
+    counts = {"allow": 0, "block": 0}
+    for record in records:
+        verdict = record.get("new_verdict")
+        if record.get("diverged") is True and isinstance(verdict, str) and verdict in counts:
+            counts[verdict] += 1
+    return sum(counts.values()), f"allow={counts['allow']}; block={counts['block']}; recorded divergences only"
+
+
+def _ruleset_gate_counts(snapshot: object) -> tuple[int, str]:
+    """Accept full GitHub ruleset objects (one or a list), not summary metadata.
+
+    Count rule objects, not approvals/check executions or an applicability verdict.
+    Disabled/evaluation rulesets and tag targets cannot evidence active branch rules.
+    """
+    counts = {"merge": 0, "review": 0, "ci": 0}
+    labels = {"merge_queue": "merge", "pull_request": "review", "required_status_checks": "ci"}
+    rulesets = snapshot if isinstance(snapshot, list) else [snapshot]
+    for ruleset in rulesets:
+        if (not isinstance(ruleset, dict) or ruleset.get("target") != "branch"
+                or ruleset.get("enforcement") != "active"):
+            continue
+        rules = ruleset.get("rules")
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            kind = rule.get("type") if isinstance(rule, dict) else None
+            if isinstance(kind, str) and kind in labels:
+                counts[labels[kind]] += 1
+    return sum(counts.values()), (
+        f"merge={counts['merge']}; review={counts['review']}; ci={counts['ci']}; "
+        "active branch rule counts, snapshot only"
+    )
+
+
+def _gate_ledger_rows(cfg: dict, allowlist: list[str]) -> tuple[list[dict], list[dict]]:
+    """Spine-independent local observations; raw records end at the extractors."""
+    cache = Path.home() / ".cache" / "hapax"
+
+    def cfg_path(key: str, env: str, default: Path) -> Path:
+        raw = os.environ.get(env) or str(cfg.get(key, ""))
+        return Path(os.path.expanduser(raw)) if raw else default
+
+    ledgers = (
+        ("cc_task_gate", cfg_path("cc_task_gate_ledger", "REINS_CC_TASK_GATE_LEDGER", cache / "cc-task-gate-decisions.jsonl"), _task_gate_counts),
+        ("release_auto_arm", cfg_path("authority_case_ledger", "REINS_AUTHORITY_CASE_LEDGER", cache / "authority-case-ledger.jsonl"), _release_gate_counts),
+        ("policy_shadow", cfg_path("policy_decide_shadow_ledger", "REINS_POLICY_DECIDE_SHADOW_LEDGER", cache / "policy-decide-shadow.jsonl"), _policy_gate_counts),
+    )
+    sources: list[dict] = []
+    rows: list[dict] = []
+
+    def emit(source_id: str, path: Path | None, count: int = 0, detail: str = "") -> None:
+        if not count:
+            sources.append(_gate_source(source_id, "dark", 0, allowlist,
+                                        detail="ledger absent or unreadable", age_bucket="dark"))
+            return
+        sources.append(_gate_source(source_id, "observed", count, allowlist,
+                                    detail=detail, age_bucket=_path_age_bucket(path)))
+        rows.append(_gate_row(f"ledger.{source_id}", "gate", f"{count} observations", "observed",
+                              "info", "read-only observation", detail, "", allowlist,
+                              source=source_id, action="observe"))
+
+    for source_id, path, extract in ledgers:
+        try:
+            count, detail = extract(_read_jsonl_tail(path))
+        except OSError:
+            count, detail = 0, ""
+        emit(source_id, path, count, detail)
+
+    # Explicitly local and env-only: no live CLI/network acquisition in the poll path.
+    declared = os.environ.get("REINS_BRANCH_RULESET_SNAPSHOT")
+    snapshot_path = Path(os.path.expanduser(declared)) if declared else None
+    count, detail = 0, ""
+    if snapshot_path is not None:
+        try:
+            count, detail = _ruleset_gate_counts(json.loads(snapshot_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    emit("branch_ruleset", snapshot_path, count, detail)
+    for source_id in ("consent_egress", "allowlist_gate"):
+        emit(source_id, None)  # producer-gated; never infer green from absence
+    return sources, rows
+
+
 def _gate_severity(gate_id: str, count: int) -> str:
     if count <= 0:
         return "ok"
@@ -3234,8 +3374,8 @@ def read_gate_summary(council_root: str, allowlist: list[str], cfg: dict | None 
             detail="coord projection task stage/no_go snapshot",
             age_bucket="live",
         ))
-    except Exception as e:
-        sources.append(_gate_source("task_projection", "dark", 0, allowlist, detail=str(e), age_bucket="dark"))
+    except Exception:
+        sources.append(_gate_source("task_projection", "dark", 0, allowlist, detail="ledger absent or unreadable", age_bucket="dark"))
 
     sessions: list[dict] = []
     session_path = Path(_session_state_path())
@@ -3275,23 +3415,22 @@ def read_gate_summary(council_root: str, allowlist: list[str], cfg: dict | None 
             age_bucket=_path_age_bucket(binding_path),
             path=str(binding_path),
         ))
-    except Exception as e:
+    except Exception:
         sources.append(_gate_source(
             "session_state",
             "dark",
             0,
             allowlist,
-            detail=str(e),
-            age_bucket=_path_age_bucket(session_path),
-            path=str(session_path),
+            detail="ledger absent or unreadable",
+            age_bucket="dark",
         ))
 
     events: list[dict] = []
     try:
         events = _raw_tail(council_root, 200)
         sources.append(_gate_source("event_log", "observed", len(events), allowlist, detail="recent coord events", age_bucket="live"))
-    except Exception as e:
-        sources.append(_gate_source("event_log", "dark", 0, allowlist, detail=str(e), age_bucket="dark"))
+    except Exception:
+        sources.append(_gate_source("event_log", "dark", 0, allowlist, detail="ledger absent or unreadable", age_bucket="dark"))
 
     false_by_gate: dict[str, list[dict]] = {}
     missing_authority: list[dict] = []
@@ -3456,6 +3595,10 @@ def read_gate_summary(council_root: str, allowlist: list[str], cfg: dict | None 
             source="command_registry",
             action=action,
         ))
+
+    ledger_sources, ledger_rows = _gate_ledger_rows(cfg, allowlist)
+    sources.extend(ledger_sources)
+    rows.extend(ledger_rows)
 
     blocked = sum(1 for row in rows if row.get("state") in {"blocked", "missing", "dark"})
     preview = sum(1 for row in rows if row.get("state") in {"preview-only", "preview_only"})
