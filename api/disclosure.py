@@ -30,8 +30,8 @@ incident that motivated this module, for two structural reasons:
 2. **It gates FILE WRITES, not DESTINATIONS.** Every write was to a legitimate file. The harm came
    from where those files were then *published*.
 
-Recorded plainly because it is the whole reason this exists: operator-personal material — a health
-diagnosis, family content, mortality planning — was pushed to a PUBLIC repository. Nothing in the
+Recorded plainly because it is the whole reason this exists: operator-personal material was pushed
+to a PUBLIC repository. Nothing in the
 estate objected. The content was correct, the file was correct, the branch was correct; the
 DESTINATION was not, and destination was the one thing no guard modelled.
 

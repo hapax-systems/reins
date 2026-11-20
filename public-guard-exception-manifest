@@ -1,0 +1,20 @@
+# Public guard exceptions: exact bytes at an exact path (REINS_PUBLIC_GUARD_EXCEPTIONS).
+# Each line is "<blob sha256> <path>". A listed path is exempt only while its whole blob hashes
+# to this value; any edit to the file voids its line until a reviewed update. The guard itself
+# is unchanged. Every entry below was read and classified as a synthetic test fixture or a name
+# that is public by definition; no entry is a real leak (row
+# reins-public-guard-19-already-public-hits-reconciled-20261119).
+
+# The repository-name token that test asserts the API never emits (estate_identifier, 1 hit).
+1546efb11021e78537869bc091f677cdd093ce4780992ca7faaff20b7e55ad6b api/conftest.py
+# Synthetic home-directory paths whose usernames are one to four letters (home_path, 8 hits).
+1ee7d6b88375845967d434a8d2bd299ba4a408f27083684a8e78377eca672838 api/test_reins_ledger.py
+b263a3b351cc461c07c9614255bf5e536b81574f032f15fb0c6253ddfd598f74 api/test_reins_serve.py
+489560d7cad3074f475bd512a16f66d61b939d63a503c76a2c495b778200e65f internal/model/air_guard_test.go
+a62a6d3857d0fd8a748048e463b89e72a44a750e05d3b9bab0090a6caf91a578 internal/model/commands_lens_test.go
+f061d1214c156052d25eaecb39e50f08be36ea94fc8bf84f59bfb898cf5c9a49 internal/model/config_notice_test.go
+# Synthetic home paths plus a synthetic sensitive filename the redaction tests must hide (3 + 3).
+08bef7f97a4cd5c78a15ba0134f9ab0c6d626072ccda94f52c2ef8e9aa5a7c92 internal/files/files_test.go
+# The same synthetic sensitive filename, in the send-gate test and the redaction comment (3).
+f4c78e638f31d6d22befb1232a1c8b667a77d732a6292ae94113fdcc3eb8513d internal/model/sendgate_test.go
+b7011f6454515919bd4623eaa15434140c0266429bd34cb69a2e521afe6339ac internal/model/view.go

@@ -23,7 +23,7 @@ from disclosure import (
 #: ESTATE DATA, supplied by the caller — the kernel ships none. These are invented for the test.
 FULL = PatternSet(
     patterns={
-        Sensitivity.OPERATOR_PII: (r"\bADHD\b", r"\bautis(m|tic)\b", r"\bmortality\b"),
+        Sensitivity.OPERATOR_PII: (r"\bmarker-alpha\b", r"\bmarker-bet(a|o)\b", r"\bmarker-gamma\b"),
         Sensitivity.HOST_FINGERPRINT: (r"\bexample-host-\w+\b",),
         # (?m) INLINE, not a global re.MULTILINE. `scan` passes only IGNORECASE, so a bare `^`
         # anchors to the START OF THE PAYLOAD — the class would report as covered while missing
@@ -35,7 +35,7 @@ FULL = PatternSet(
 )
 
 BENIGN = "A document about scheduling and build systems.\n"
-PERSONAL = "Operator telos: family, ADHD and autism, mortality planning.\n"
+PERSONAL = "Operator note (invented): marker-alpha, marker-beta and marker-gamma.\n"
 #: A DECOY, not a secret. It must have credential SHAPE or it cannot exercise the scanner, which
 #: means the estate's own gitleaks job correctly flags it (generic-api-key, entropy 3.91) — a true
 #: positive on a fixture whose whole job is to look like the thing being detected. The inline
@@ -49,8 +49,8 @@ CREDENTIAL = "token: sk-NOTAREALKEY-testfixture-0000\n"  # gitleaks:allow
 def test_the_incident_is_refused() -> None:
     """THE CASE THIS EXISTS FOR.
 
-    On 2026-08-04 a document containing operator health and mortality content was pushed to a
-    PUBLIC repository. Every file write was legitimate; the destination was not. Nothing in the
+    On 2026-08-04 a document containing operator-personal content was pushed to a PUBLIC
+    repository. Every file write was legitimate; the destination was not. Nothing in the
     estate objected, because nothing modelled the destination.
     """
     with pytest.raises(DisclosureError) as exc:
@@ -90,7 +90,7 @@ def test_an_unscanned_class_is_not_a_clean_one() -> None:
     any destination wider than that class's ceiling, that is refused — 'we found nothing' and 'we
     did not look' are different answers.
     """
-    partial = PatternSet(patterns={Sensitivity.OPERATOR_PII: (r"\bADHD\b",)})
+    partial = PatternSet(patterns={Sensitivity.OPERATOR_PII: (r"\bmarker-alpha\b",)})
     with pytest.raises(DisclosureError) as exc:
         assert_transmittable(
             BENIGN, patterns=partial, destination=Disclosure.PUBLIC, destination_name="public repo"
